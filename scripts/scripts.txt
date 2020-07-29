@@ -1,0 +1,7 @@
+# fetch Binance and bitfinex ticker data for all assets
+while :; do \
+  NOW_TIMESTAMP=`date +%Y-%m-%d-%H-%M-%S`
+  curl https://api.binance.com/api/v3/ticker/bookTicker > binance-bookTicker-`echo $NOW_TIMESTAMP`.json; \
+  curl https://api-pub.bitfinex.com/v2/tickers?symbols=ALL > bitfinex-tickers-`echo $NOW_TIMESTAMP`.json; \
+  sleep 5; \
+done
