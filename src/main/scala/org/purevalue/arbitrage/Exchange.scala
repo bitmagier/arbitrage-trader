@@ -13,7 +13,6 @@ abstract class Exchange extends Actor {
   // static
   def name:String
   def assets:Set[String]
-  private val orderBookInitTimeout = java.time.Duration.ofSeconds(15)
   def fee:Fee
   // dynamic
   var tradePairs: Set[TradePair] = _
@@ -28,14 +27,14 @@ abstract class Exchange extends Actor {
     orderBookInitPending = tradePairs
     orderBooks = Map[TradePair, ActorRef]()
     for (p <- tradePairs) {
-      orderBooks += (p -> context.actorOf(OrderBook.props(name, p, exchangeAdapter, self), s"$name.OrderBook-$p"))
+      orderBooks += (p -> context.actorOf(OrderBook.props(name, p, exchangeAdapter, self), s"$name.OrderBook-${p.symbol}"))
     }
   }
 
   override def receive: Receive = {
     case TradePairs(t) =>
       tradePairs = t
-      log.info(s"$name TradePairs initialized")
+      log.info(s"$name: ${tradePairs.size} TradePairs initialized")
       initOrderBooks()
 
     case OrderBook.Initialized(t) =>

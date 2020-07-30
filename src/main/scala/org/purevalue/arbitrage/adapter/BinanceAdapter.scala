@@ -3,14 +3,13 @@ package org.purevalue.arbitrage.adapter
 import akka.actor.{Actor, ActorRef, ActorSystem}
 import akka.event.Logging
 import akka.http.scaladsl.Http
-import akka.http.scaladsl.model.{HttpMethods, HttpProtocols, HttpRequest}
+import akka.http.scaladsl.model.{ContentTypes, HttpMethods, HttpProtocols, HttpRequest}
 import org.purevalue.arbitrage.adapter.ExchangeQueryAdapter.{GetTradePairs, OrderBookStreamRequest, TradePairs}
 import org.purevalue.arbitrage.{Main, TradePair}
 import spray.json._
 
 import scala.concurrent.duration._
-import scala.concurrent.{ExecutionContextExecutor, Future}
-import scala.util.{Failure, Success}
+import scala.concurrent.{Await, ExecutionContextExecutor, Future}
 
 object ExchangeQueryAdapter {
   case class GetTradePairs()
@@ -70,27 +69,25 @@ class BinanceAdapter extends ExchangeQueryAdapter {
   private var orderBookStreamer:List[ActorRef] = List()
   def tradePairs:Set[TradePair] = exchangeInfo.symbols.map(s => TradePair(s.symbol, s.baseAsset, s.quoteAsset)).toSet
 
-
-  private def queryExchangeInfo():Future[BinanceExchangeInformation] = {
+  private def queryExchangeInfo():BinanceExchangeInformation = {
     import BinanceJsonProtocol._
     log.info(s"refreshing $name ExchangeInfo ...")
     val responseFuture = Http().singleRequest(
       HttpRequest(
         method = HttpMethods.GET,
-        uri = s"$baseEndpoint/api/v3/exchangeInfo",
-        protocol = HttpProtocols.`HTTP/2.0`
+        uri = s"$baseEndpoint/api/v3/exchangeInfo"
       ))
-    responseFuture
-      .flatMap(_.entity.toStrict(2.seconds))
-      .map { e => JsonParser(e.data.utf8String).convertTo[BinanceExchangeInformation] }
+    val httpResponse = Await.result(responseFuture.flatMap(_.entity.toStrict(2.seconds)), 5.seconds)
+    httpResponse.contentType match {
+      case ContentTypes.`application/json` => JsonParser(httpResponse.data.utf8String).convertTo[BinanceExchangeInformation]
+      case _ =>
+        throw new Exception(s"Failed to parse ExchangeInfo query response:\n${httpResponse.data.utf8String}")
+    }
   }
 
   override def preStart(): Unit = {
     super.preStart()
-    queryExchangeInfo().onComplete {
-      case Success(result) => exchangeInfo = result
-      case Failure(e) => e.printStackTrace()
-    }
+    exchangeInfo = queryExchangeInfo()
   }
 
   override def postStop(): Unit = {
@@ -99,6 +96,6 @@ class BinanceAdapter extends ExchangeQueryAdapter {
   }
 
   override def startStreamingOrderBook(tradePair:TradePair, receipient:ActorRef): Unit = {
-    orderBookStreamer :+ context.actorOf(BinanceOrderBookStreamer.props(tradePair, receipient), s"BinanceOrderBookStreamer-$tradePair")
+    orderBookStreamer = orderBookStreamer :+ context.actorOf(BinanceOrderBookStreamer.props(tradePair, receipient), s"BinanceOrderBookStreamer-${tradePair.symbol}")
   }
 }
