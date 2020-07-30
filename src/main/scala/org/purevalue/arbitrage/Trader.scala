@@ -12,19 +12,17 @@ object Trader {
 class Trader extends Actor {
   private val log = Logging(context.system, this)
 
-  var workingExchanges:Set[String] = Set[String]()
-  lazy val allExchanges: Map[String, actor.ActorRef] = Map(
-    "binance" -> context.actorOf(Binance.props(StaticConfig.exchange("binance")), "binance")
-  )
+  var allExchanges: Map[String, actor.ActorRef] = _
 
   override def preStart():Unit = {
+    allExchanges = Map(
+      "binance" -> context.actorOf(Binance.
+        props(StaticConfig.exchange("binance")), "binance")
+    )
     log.info(s"Initializing exchanges: ${allExchanges.keys}")
-    allExchanges.values.foreach(_ ! Exchange.Init)
   }
 
   def receive: Receive = {
-    case Exchange.Initialized(e) =>
-      workingExchanges += e
-      log.info(s"Working exchanges: $workingExchanges")
+    case _ =>
   }
 }

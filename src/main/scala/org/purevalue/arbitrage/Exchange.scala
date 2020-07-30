@@ -1,27 +1,12 @@
 package org.purevalue.arbitrage
-import java.time.Instant
-import java.util.concurrent.TimeUnit
-
 import akka.actor.{Actor, ActorRef, Props}
 import akka.event.Logging
-import akka.pattern.ask
-import akka.util.Timeout
-import org.purevalue.arbitrage.Exchange.{Init, Initialized, TradePairs}
+import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.adapter.BinanceAdapter
-import org.purevalue.arbitrage.adapter.ExchangeQueryAdapter.GetTradePairs
-
-import scala.collection.mutable
-import scala.concurrent.Await
-import scala.concurrent.duration.Duration
+import org.purevalue.arbitrage.adapter.ExchangeQueryAdapter.{GetTradePairs, TradePairs}
 
 case class TradePair(symbol:String, baseAsset:String, quoteAsset:String)
 case class Fee(makerFee:Double, takerFee:Double)
-
-object Exchange {
-  case class Init()
-  case class Initialized(name:String)
-  case class TradePairs(pairs: Seq[TradePair])
-}
 
 abstract class Exchange extends Actor {
   private val log = Logging(context.system, this)
@@ -32,47 +17,37 @@ abstract class Exchange extends Actor {
   def fee:Fee
   // dynamic
   var tradePairs: Set[TradePair] = _
-  var orderBooks: mutable.Map[TradePair, ActorRef] = _
+  var orderBooks: Map[TradePair, ActorRef] = _
   var orderBookInitPending:Set[TradePair] = _
+  private var _initialized: Boolean = false
+  def initialized: Boolean = _initialized
 
   def exchangeAdapter:ActorRef
 
   def initOrderBooks(): Unit = {
-    orderBooks = mutable.Map[TradePair, ActorRef]()
+    orderBookInitPending = tradePairs
+    orderBooks = Map[TradePair, ActorRef]()
     for (p <- tradePairs) {
-      orderBooks += (p -> context.actorOf(OrderBook.props(name, p, exchangeAdapter), s"$name.OrderBook-$p"))
+      orderBooks += (p -> context.actorOf(OrderBook.props(name, p, exchangeAdapter, self), s"$name.OrderBook-$p"))
     }
-    orderBookInitPending = orderBooks.keySet.toSet
-    orderBooks.values.foreach(b => b ! OrderBook.Init)
-    val orderBookInitStartTime = Instant.now()
-    while (orderBookInitPending.nonEmpty
-      && orderBookInitStartTime.plus(orderBookInitTimeout).isAfter(Instant.now())) {
-      Thread.sleep(100)
-    }
-    if (orderBookInitPending.nonEmpty) throw new Exception(s"Timeout while waiting for $name OrderBooks[$orderBookInitPending] initialization")
   }
-
-  def initTradePairs():Unit = {
-    implicit val timeout: Timeout = Timeout(10, TimeUnit.SECONDS)
-    val awaitTimeout:Duration = Duration(1, TimeUnit.SECONDS)
-    tradePairs = Await.result((exchangeAdapter ? GetTradePairs()).mapTo[TradePairs], awaitTimeout).pairs.toSet
-  }
-
-  def initDynamicParts(): Unit = {
-    initTradePairs()
-    initOrderBooks()
-  }
-
-  def initialized: Boolean = tradePairs != null
 
   override def receive: Receive = {
-    case Init =>
-      log.info(s"Initializing exchange $name")
-      initDynamicParts()
-      sender() ! Initialized(name)
+    case TradePairs(t) =>
+      tradePairs = t
+      log.info(s"$name TradePairs initialized")
+      initOrderBooks()
 
     case OrderBook.Initialized(t) =>
       orderBookInitPending -= t
+      if (orderBookInitPending.isEmpty) {
+        _initialized = true
+      }
+  }
+
+  override def postStop(): Unit = {
+    super.postStop()
+    orderBooks.values.foreach(e => actorSystem.stop(e))
   }
 }
 
@@ -85,5 +60,18 @@ class Binance(val config:ExchangeConfig) extends Exchange {
   val name = "binance"
   val assets: Set[String] = config.assets
   val fee: Fee = Fee(config.makerFee, config.takerFee)
-  val exchangeAdapter: ActorRef = context.actorOf(Props[BinanceAdapter], "BinanceAdapter")
+
+  var exchangeAdapter: ActorRef = _
+
+  override def preStart(): Unit = {
+    super.preStart()
+    log.info(s"Initializing exchange $name")
+    exchangeAdapter = context.actorOf(Props[BinanceAdapter], "BinanceAdapter")
+    exchangeAdapter ! GetTradePairs
+  }
+
+  override def postStop(): Unit = {
+    super.postStop()
+    actorSystem.stop(exchangeAdapter)
+  }
 }

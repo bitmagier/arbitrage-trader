@@ -6,38 +6,36 @@ import java.time.LocalDateTime
 import akka.actor.{Actor, ActorRef, Props}
 import akka.event.Logging
 import org.purevalue.arbitrage.OrderBook._
-import org.purevalue.arbitrage.adapter.ExchangeQueryAdapter.OrderBookInitRequest
+import org.purevalue.arbitrage.adapter.ExchangeQueryAdapter.OrderBookStreamRequest
 
 
 object OrderBook {
-  case class Init()
   case class Initialized(tradePair:TradePair)
   case class BidUpdate(price:Float, qantity:Float)
   case class AskUpdate(price:Float, qantity:Float)
   case class InitialData(bids: Seq[BidUpdate], asks: Seq[AskUpdate])
   final case class Update(bids: Seq[BidUpdate], asks: Seq[AskUpdate])
 
-  def props(exchange:String, tradePair:TradePair, exchangeQueryAdapter:ActorRef): Props = Props(new OrderBook(exchange, tradePair, exchangeQueryAdapter))
+  def props(exchange:String, tradePair:TradePair, exchangeQueryAdapter:ActorRef, parentActor:ActorRef): Props = Props(new OrderBook(exchange, tradePair, exchangeQueryAdapter, parentActor))
 }
 
-class OrderBook(val exchange:String, val tradePair:TradePair, exchangeQueryAdapter:ActorRef) extends Actor {
+class OrderBook(val exchange:String, val tradePair:TradePair, exchangeQueryAdapter:ActorRef, parentActor:ActorRef) extends Actor {
   private val log = Logging(context.system, this)
   var lastUpdated: LocalDateTime = _
   var bids:List[BidUpdate] = _
   var asks:List[AskUpdate] = _
 
-  private var initRequester:ActorRef = _
+  override def preStart(): Unit = {
+    super.preStart()
+    exchangeQueryAdapter ! OrderBookStreamRequest(tradePair)
+  }
 
   def receive: Receive = {
-    case Init =>
-      exchangeQueryAdapter ! OrderBookInitRequest()
-      initRequester = sender()
-
     case i:InitialData =>
       bids = i.bids.sortBy(_.price).toList
       asks = i.asks.sortBy(_.price).toList
       lastUpdated = LocalDateTime.now()
-      initRequester ! Initialized(tradePair)
+      parentActor ! OrderBook.Initialized(tradePair)
 
     case u:Update =>
       val newBids = u.bids.map(_.price).toSet

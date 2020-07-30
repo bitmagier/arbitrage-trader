@@ -1,29 +1,33 @@
 package org.purevalue.arbitrage.adapter
 
-import akka.actor.{Actor, ActorSystem}
+import akka.actor.{Actor, ActorRef, ActorSystem}
 import akka.event.Logging
 import akka.http.scaladsl.Http
-import akka.http.scaladsl.model.{HttpMethods, HttpRequest}
-import org.purevalue.arbitrage.adapter.ExchangeQueryAdapter.GetTradePairs
+import akka.http.scaladsl.model.{HttpMethods, HttpProtocols, HttpRequest}
+import org.purevalue.arbitrage.adapter.ExchangeQueryAdapter.{GetTradePairs, OrderBookStreamRequest, TradePairs}
 import org.purevalue.arbitrage.{Main, TradePair}
 import spray.json._
 
 import scala.concurrent.duration._
-import scala.concurrent.{Await, ExecutionContextExecutor, Future}
+import scala.concurrent.{ExecutionContextExecutor, Future}
 import scala.util.{Failure, Success}
 
 object ExchangeQueryAdapter {
   case class GetTradePairs()
-  case class OrderBookInitRequest()
+  case class TradePairs(value:Set[TradePair])
+  case class OrderBookStreamRequest(tradePair: TradePair)
 }
 
 abstract class ExchangeQueryAdapter extends Actor {
+  private val log = Logging(context.system, this)
   def name: String
-  def queryTradePairs(): Seq[TradePair]
+  def tradePairs: Set[TradePair]
+
+  def startStreamingOrderBook(tradePair:TradePair, receipient:ActorRef):Unit
 
   override def receive: Receive = {
-    case GetTradePairs =>
-      sender() ! queryTradePairs()
+    case GetTradePairs => sender() ! TradePairs(tradePairs)
+    case OrderBookStreamRequest(tradePair) => startStreamingOrderBook(tradePair, sender())
   }
 }
 
@@ -62,37 +66,39 @@ class BinanceAdapter extends ExchangeQueryAdapter {
   val name: String = "BinanceAdapter"
   private val baseEndpoint = "https://api.binance.com"
 
-  private var _exchangeInfo:Future[BinanceExchangeInformation] = _
+  private var exchangeInfo:BinanceExchangeInformation = _
+  private var orderBookStreamer:List[ActorRef] = List()
+  def tradePairs:Set[TradePair] = exchangeInfo.symbols.map(s => TradePair(s.symbol, s.baseAsset, s.quoteAsset)).toSet
 
-  def exchangeInfo:Future[BinanceExchangeInformation] = {
+
+  private def queryExchangeInfo():Future[BinanceExchangeInformation] = {
     import BinanceJsonProtocol._
-    if (_exchangeInfo == null) {
-      log.info(s"refreshing $name ExchangeInfo ...")
-      val responseFuture = Http().singleRequest(
-        HttpRequest(
-          method = HttpMethods.GET,
-          uri = s"$baseEndpoint/api/v3/exchangeInfo"
-          //protocol = HttpProtocols.`HTTP/2.0`
-        ))
-      _exchangeInfo = responseFuture.flatMap(_.entity.toStrict(2.seconds)).map { e =>
-        JsonParser(e.data.utf8String).convertTo[BinanceExchangeInformation]
-      }
-      log.info(s"refreshed $name ExchangeInfo")
-    }
-    _exchangeInfo
+    log.info(s"refreshing $name ExchangeInfo ...")
+    val responseFuture = Http().singleRequest(
+      HttpRequest(
+        method = HttpMethods.GET,
+        uri = s"$baseEndpoint/api/v3/exchangeInfo",
+        protocol = HttpProtocols.`HTTP/2.0`
+      ))
+    responseFuture
+      .flatMap(_.entity.toStrict(2.seconds))
+      .map { e => JsonParser(e.data.utf8String).convertTo[BinanceExchangeInformation] }
   }
 
-  def queryTradePairs(): Seq[TradePair] = {
-    log.debug("queryTradePairs")
-    val info = Await.ready(exchangeInfo, 10.seconds)
-    var result: Seq[TradePair] = null
-    info.onComplete {
-      case Success(value) => result = value.symbols.map(s => TradePair(s.symbol, s.baseAsset, s.quoteAsset))
-      case Failure(exception) =>
-        log.error(exception, "queryTradePairs failed")
-        throw exception
-        // TODO what to do with the expected actor reply?
+  override def preStart(): Unit = {
+    super.preStart()
+    queryExchangeInfo().onComplete {
+      case Success(result) => exchangeInfo = result
+      case Failure(e) => e.printStackTrace()
     }
-    result
+  }
+
+  override def postStop(): Unit = {
+    super.postStop()
+    orderBookStreamer.foreach(e => actorSystem.stop(e))
+  }
+
+  override def startStreamingOrderBook(tradePair:TradePair, receipient:ActorRef): Unit = {
+    orderBookStreamer :+ context.actorOf(BinanceOrderBookStreamer.props(tradePair, receipient), s"BinanceOrderBookStreamer-$tradePair")
   }
 }
