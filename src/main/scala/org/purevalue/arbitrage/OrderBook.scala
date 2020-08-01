@@ -4,7 +4,7 @@ import java.time.LocalDateTime
 
 import akka.actor.{Actor, ActorRef, Props}
 import org.purevalue.arbitrage.OrderBook.{AskUpdate, BidUpdate, InitialData, Update}
-import org.purevalue.arbitrage.adapter.ExchangeQueryAdapter.OrderBookStreamRequest
+import org.purevalue.arbitrage.adapter.ExchangeAdapterProxy.OrderBookStreamRequest
 import org.slf4j.LoggerFactory
 
 
@@ -15,7 +15,8 @@ object OrderBook {
   case class InitialData(bids: Seq[BidUpdate], asks: Seq[AskUpdate])
   final case class Update(bids: Seq[BidUpdate], asks: Seq[AskUpdate])
 
-  def props(exchange:String, tradePair:TradePair, exchangeQueryAdapter:ActorRef, parentActor:ActorRef): Props = Props(new OrderBook(exchange, tradePair, exchangeQueryAdapter, parentActor))
+  def props(exchange:String, tradePair:TradePair, exchangeQueryAdapter:ActorRef, parentActor:ActorRef): Props =
+    Props(new OrderBook(exchange, tradePair, exchangeQueryAdapter, parentActor))
 }
 
 case class OrderBook(exchange:String, tradePair:TradePair, exchangeQueryAdapter:ActorRef, parentActor:ActorRef) extends Actor {
@@ -25,7 +26,6 @@ case class OrderBook(exchange:String, tradePair:TradePair, exchangeQueryAdapter:
   var asks:List[AskUpdate] = _
 
   override def preStart(): Unit = {
-    super.preStart()
     exchangeQueryAdapter ! OrderBookStreamRequest(tradePair)
   }
 
@@ -34,8 +34,8 @@ case class OrderBook(exchange:String, tradePair:TradePair, exchangeQueryAdapter:
       bids = i.bids.sortBy(_.price).toList
       asks = i.asks.sortBy(_.price).toList
       lastUpdated = LocalDateTime.now()
+      log.trace(s"OrderBook $tradePair received initial data")
       parentActor ! OrderBook.Initialized(tradePair)
-      log.debug(s"OrderBook $tradePair received initial data")
 
     case u:Update =>
       val newBids = u.bids.map(_.price).toSet
@@ -43,6 +43,6 @@ case class OrderBook(exchange:String, tradePair:TradePair, exchangeQueryAdapter:
       bids = (bids.filterNot(e => newBids.contains(e.price)) ++ u.bids).filter(_.qantity != 0.0d).sortBy(_.price)
       asks = (asks.filterNot(e => newAsks.contains(e.price)) ++ u.asks).filter(_.qantity != 0.0d).sortBy(_.price)
       lastUpdated = LocalDateTime.now()
-      log.debug(s"OrderBook $tradePair received update")
+      log.trace(s"OrderBook $tradePair received update")
   }
 }

@@ -15,7 +15,6 @@ class Trader extends Actor {
   var allExchanges: Map[String, actor.ActorRef] = _
 
   override def preStart(): Unit = {
-    log.debug("checking debug logging")
     allExchanges = Map(
       "binance" -> context.actorOf(Exchange.props("binance",
         StaticConfig.exchange("binance"),
@@ -29,3 +28,4 @@ class Trader extends Actor {
     case null =>
   }
 }
+// TODO shudown app in case of exception from any actor

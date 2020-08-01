@@ -1,11 +1,10 @@
 package org.purevalue.arbitrage.adapter
 
-import akka.actor.{Actor, ActorRef, ActorSystem, Props}
+import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model._
 import akka.pattern.pipe
 import org.purevalue.arbitrage.OrderBook.{AskUpdate, BidUpdate, InitialData, Update}
-import org.purevalue.arbitrage.adapter.BinanceOrderBookStreamer.GetOrderBookSnapshot
 import org.purevalue.arbitrage.{ExchangeConfig, Main, TradePair}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsonParser, RootJsonFormat}
@@ -14,25 +13,24 @@ import scala.collection.mutable.ListBuffer
 import scala.concurrent.Future
 
 object BinanceOrderBookStreamer {
-  case class GetOrderBookSnapshot(tradePair: TradePair)
-
-  def props(config:ExchangeConfig, tradePair: TradePair, receipient: ActorRef): Props = Props(new BinanceOrderBookStreamer(config, tradePair, receipient))
+  def props(config: ExchangeConfig, tradePair: TradePair, receipient: ActorRef): Props = Props(new BinanceOrderBookStreamer(config, tradePair, receipient))
 }
 
-class BinanceOrderBookStreamer(config:ExchangeConfig, tradePair: TradePair, receipient: ActorRef) extends Actor {
+class BinanceOrderBookStreamer(config: ExchangeConfig, tradePair: TradePair, receipient: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BinanceOrderBookStreamer])
 
-  implicit val system:ActorSystem = Main.actorSystem
+  implicit val system: ActorSystem = Main.actorSystem
+
   import system.dispatcher
 
-  private var orderBookWebSocketFlow:ActorRef = _
+  private var orderBookWebSocketFlow: ActorRef = _
   private var bufferingPhase: Boolean = true
   private val buffer = ListBuffer[RawOrderBookUpdate]()
   private var lastUpdateEvent: RawOrderBookUpdate = _
 
 
   private def cleanupBufferEventsAndSend(snapshotLastUpdateId: Long): Unit = {
-    bufferingPhase = false;
+    bufferingPhase = false
     val postInitEvents = buffer.filter(_.u > snapshotLastUpdateId)
     if (postInitEvents.nonEmpty) {
       if (!(postInitEvents.head.U <= snapshotLastUpdateId + 1 && postInitEvents.head.u >= snapshotLastUpdateId + 1)) {
@@ -44,7 +42,7 @@ class BinanceOrderBookStreamer(config:ExchangeConfig, tradePair: TradePair, rece
   }
 
   private def initOrderBook(snapshot: RawOrderBookSnapshot): Unit = {
-    log.info("Initializing OrderBook with received snapshot")
+    log.debug("Initializing OrderBook with received snapshot")
     receipient ! toInitialData(snapshot)
     cleanupBufferEventsAndSend(snapshot.lastUpdateId)
   }
@@ -68,15 +66,15 @@ class BinanceOrderBookStreamer(config:ExchangeConfig, tradePair: TradePair, rece
 
   private def toInitialData(r: RawOrderBookSnapshot): InitialData = {
     InitialData(
-      r.bids.map(e => toBidUpdate(e.entry)),
-      r.asks.map(e => toAskUpdate(e.entry))
+      r.bids.map(e => toBidUpdate(e)),
+      r.asks.map(e => toAskUpdate(e))
     )
   }
 
   private def toUpdate(r: RawOrderBookUpdate): Update = {
     Update(
-      r.b.map(e => toBidUpdate(e.entry)),
-      r.a.map(e => toAskUpdate(e.entry))
+      r.b.map(e => toBidUpdate(e)),
+      r.a.map(e => toAskUpdate(e))
     )
   }
 
@@ -94,44 +92,49 @@ class BinanceOrderBookStreamer(config:ExchangeConfig, tradePair: TradePair, rece
 
   def queryOrderBookSnapshot(): Future[RawOrderBookSnapshot] = {
     import RawOrderBookStreamJsonProtokoll._
-    log.info(s"Binance: Get OrderBookSnapshot for $tradePair")
+    log.debug(s"Binance: Get OrderBookSnapshot for $tradePair")
 
     val responseFuture = Http().singleRequest(
       HttpRequest(
         method = HttpMethods.GET,
-        uri = s"${BinanceAdapter.baseEndpoint}/api/v1/depth?symbol=${tradePair}&limit=1000"
+        uri = s"${BinanceAdapter.baseEndpoint}/api/v3/depth?symbol=${tradePair.symbol}&limit=1000"
       ))
     responseFuture
       .flatMap(_.entity.toStrict(config.httpTimeout))
       .map(r => r.contentType match {
-        case ContentTypes.`application/json` => JsonParser(r.data.utf8String).convertTo[RawOrderBookSnapshot]
+        case ContentTypes.`application/json` =>
+          try {
+            JsonParser(r.data.utf8String).convertTo[RawOrderBookSnapshot]
+          } catch {
+            case e: Exception => throw new RuntimeException(s"Failed to parse RawOrderBookSnapshot from this json:\n${r.data.utf8String}", e)
+          }
         case _ =>
-          throw new Exception(s"Failed to parse RawOrderBookSnapshot query response:\n${r.data.utf8String}")
+          throw new Exception(s"RawOrderBookSnapshot query response is not a json:\n${r.data.utf8String}")
       })
   }
 
   override def preStart() {
-    log.info(s"Initializing BinanceOrderBookStreamer for $tradePair")
+    log.debug(s"BinanceOrderBookStreamer($tradePair) initializing...")
     orderBookWebSocketFlow = context.actorOf(BinanceOrderBookWebSocketFlow.props(tradePair, self))
   }
 
   override def receive: Receive = {
-    case GetOrderBookSnapshot =>
-      queryOrderBookSnapshot() pipeTo self
 
     case snapshot: RawOrderBookSnapshot =>
       initOrderBook(snapshot)
+      log.debug(s"BinanceOrderBookStreamer($tradePair) initialized")
 
     case update: RawOrderBookUpdate =>
       handleIncoming(update)
-      self ! GetOrderBookSnapshot(tradePair)
+      if (bufferingPhase) {
+        queryOrderBookSnapshot() pipeTo self
+      }
+    case Status.Failure(cause) => log.error("received failure", cause)
   }
 }
 
-case class RawOrderBookEntry(entry: Seq[String])
-case class RawOrderBookSnapshot(lastUpdateId: Long, bids: Seq[RawOrderBookEntry], asks: Seq[RawOrderBookEntry])
+case class RawOrderBookSnapshot(lastUpdateId: Long, bids: Seq[Seq[String]], asks: Seq[Seq[String]])
 
 object RawOrderBookStreamJsonProtokoll extends DefaultJsonProtocol {
-  implicit val entryUpdate: RootJsonFormat[RawOrderBookEntry] = jsonFormat1(RawOrderBookEntry)
   implicit val orderBookSnapshot: RootJsonFormat[RawOrderBookSnapshot] = jsonFormat3(RawOrderBookSnapshot)
 }

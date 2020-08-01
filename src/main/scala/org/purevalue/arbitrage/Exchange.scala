@@ -1,9 +1,11 @@
 package org.purevalue.arbitrage
 import akka.actor.{Actor, ActorRef, Props}
-import org.purevalue.arbitrage.adapter.ExchangeQueryAdapter.{GetTradePairs, TradePairs}
+import org.purevalue.arbitrage.adapter.ExchangeAdapterProxy.{GetTradePairs, TradePairs}
 import org.slf4j.LoggerFactory
 
-case class TradePair(symbol:String, baseAsset:String, quoteAsset:String)
+case class TradePair(symbol:String, baseAsset:String, quoteAsset:String) {
+  override def toString: String = s"TradePair($symbol:$baseAsset-$quoteAsset)"
+}
 case class Fee(makerFee:Double, takerFee:Double)
 
 object Exchange {
@@ -41,6 +43,7 @@ case class Exchange(name:String, config:ExchangeConfig, exchangeAdapter:ActorRef
       initOrderBooks()
 
     case OrderBook.Initialized(t) =>
+      log.info(s"$name: OrderBook $t initialized")
       orderBookInitPending -= t
       if (orderBookInitPending.isEmpty) {
         _initialized = true

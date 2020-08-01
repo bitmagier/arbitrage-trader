@@ -1,31 +1,31 @@
 package org.purevalue.arbitrage.adapter
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Props}
-import akka.event.Logging
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.{ContentTypes, HttpMethods, HttpRequest}
 import org.purevalue.arbitrage.adapter.BinanceAdapter.baseEndpoint
-import org.purevalue.arbitrage.adapter.ExchangeQueryAdapter.{GetTradePairs, OrderBookStreamRequest, TradePairs}
+import org.purevalue.arbitrage.adapter.ExchangeAdapterProxy.{GetTradePairs, OrderBookStreamRequest, TradePairs}
 import org.purevalue.arbitrage.{ExchangeConfig, Main, TradePair}
+import org.slf4j.LoggerFactory
 import spray.json._
 
 import scala.concurrent.{Await, ExecutionContextExecutor, Future}
 
 
-object ExchangeQueryAdapter {
+object ExchangeAdapterProxy {
   case class GetTradePairs()
   case class TradePairs(value: Set[TradePair])
   case class OrderBookStreamRequest(tradePair: TradePair)
 }
 
-abstract class ExchangeQueryAdapter extends Actor {
+abstract class ExchangeAdapterProxy extends Actor {
   def name: String
   def tradePairs: Set[TradePair]
   def startStreamingOrderBook(tradePair: TradePair, receipient: ActorRef): Unit
 
   override def receive: Receive = {
     case GetTradePairs => sender() ! TradePairs(tradePairs)
-    case OrderBookStreamRequest(tradePair) => startStreamingOrderBook(tradePair, sender())
+    case OrderBookStreamRequest(tradePair) => startStreamingOrderBook(tradePair, sender()) // TODO migrate to incoming akka.stream
   }
 }
 
@@ -49,8 +49,8 @@ object BinanceAdapter {
   def props(config:ExchangeConfig): Props = Props(new BinanceAdapter(config))
 }
 
-class BinanceAdapter(config: ExchangeConfig) extends ExchangeQueryAdapter {
-  private val log = Logging(context.system, this)
+class BinanceAdapter(config: ExchangeConfig) extends ExchangeAdapterProxy {
+  private val log = LoggerFactory.getLogger(classOf[BinanceAdapter])
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
