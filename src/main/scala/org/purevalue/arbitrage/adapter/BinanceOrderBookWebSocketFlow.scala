@@ -4,19 +4,21 @@ import akka.Done
 import akka.actor.{Actor, ActorRef, ActorSystem, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model._
-import akka.http.scaladsl.model.ws._
+import akka.http.scaladsl.model.ws.{TextMessage, _}
 import akka.stream.scaladsl._
-import org.purevalue.arbitrage.{Main, TradePair}
+import org.purevalue.arbitrage.{ExchangeConfig, Main, TradePair, adapter}
 import org.slf4j.LoggerFactory
-import spray.json.{DefaultJsonProtocol, JsValue, JsonParser, RootJsonFormat, enrichAny}
+import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
+import akka.pattern.pipe
 
-import scala.concurrent.{Future, Promise}
+import scala.concurrent.duration.DurationInt
+import scala.concurrent.{Await, Future, Promise}
 
 object BinanceOrderBookWebSocketFlow {
-  def props(tradePair: TradePair, receiver: ActorRef): Props = Props(new BinanceOrderBookWebSocketFlow(tradePair, receiver))
+  def props(config: ExchangeConfig, tradePair: TradePair, receiver: ActorRef): Props = Props(new BinanceOrderBookWebSocketFlow(config, tradePair, receiver))
 }
 
-case class BinanceOrderBookWebSocketFlow(tradePair: TradePair, receiver: ActorRef) extends Actor {
+case class BinanceOrderBookWebSocketFlow(config: ExchangeConfig, tradePair: TradePair, receiver: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BinanceOrderBookWebSocketFlow])
   private val symbol = tradePair.symbol.toLowerCase()
   implicit val actorSystem: ActorSystem = Main.actorSystem
@@ -30,24 +32,28 @@ case class BinanceOrderBookWebSocketFlow(tradePair: TradePair, receiver: ActorRe
 
   private def handleDepthUpdate(u: RawOrderBookUpdate): Unit = {
     log.trace(s"received OrderBook update: $u")
-    if ((u.e != "depthUpdate") || (u.s != tradePair.symbol)) {
-      log.warn(s"OrderBookStream contained something else than a 'depthUpdate' for '$tradePair'. Here it is: $u")
-    } else {
-      receiver ! u
+    val forward = u match {
+      case x if (x.e == "depthUpdate" && x.s == tradePair.symbol) => x
+      case x@_ => throw new RuntimeException(s"RawOrderBookUpdate contained something else than a 'depthUpdate' for '$tradePair'. Here it is: $x")
     }
+    receiver ! forward
   }
 
   val sink: Sink[Message, Future[Done]] = Sink.foreach[Message] {
-    case TextMessage.Strict(text) =>
-      val json = JsonParser(text).asJsObject()
-      if (json.fields.contains("result")) {
-        handleSubscribeResponse(json.convertTo[SubscribeResponseMsg])
-      } else if (json.fields.contains("e") && json.fields("e").convertTo[String] == "depthUpdate") {
-        handleDepthUpdate(json.convertTo[RawOrderBookUpdate])
-      } else {
-        log.warn(s"Unknown message received: $text")
+    case msg:TextMessage =>
+      msg
+        .toStrict(config.httpTimeout)
+        .map(_.getStrictText)
+        .map(s => JsonParser(s).asJsObject())
+        .map {
+          case j if j.fields.contains("result") => j.convertTo[SubscribeResponseMsg]
+          case j if j.fields.contains("e") && j.fields("e").convertTo[String] == "depthUpdate" => j.convertTo[RawOrderBookUpdate]
+          case x:JsObject => throw new RuntimeException(s"Unknown json message received: $x")
+        }.map {
+        case m:SubscribeResponseMsg => handleSubscribeResponse(m)
+        case m:RawOrderBookUpdate => handleDepthUpdate(m)
       }
-    case _ => log.warn(s"Received non TextMessage.Strict")
+    case x@_ => log.warn(s"Received non TextMessage: $x")
   }
 
   // flow to us

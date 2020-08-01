@@ -47,7 +47,7 @@ case class Exchange(name:String, config:ExchangeConfig, exchangeAdapter:ActorRef
       orderBookInitPending -= t
       if (orderBookInitPending.isEmpty) {
         _initialized = true
-        log.info(s"$name: all OrderBooks initialized")
+        log.info(s"$name: all OrderBooks initialized and running")
       }
   }
 }

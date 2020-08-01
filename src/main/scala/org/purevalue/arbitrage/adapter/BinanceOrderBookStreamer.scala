@@ -42,7 +42,7 @@ class BinanceOrderBookStreamer(config: ExchangeConfig, tradePair: TradePair, rec
   }
 
   private def initOrderBook(snapshot: RawOrderBookSnapshot): Unit = {
-    log.debug("Initializing OrderBook with received snapshot")
+    log.debug(s"Initializing OrderBook($tradePair) with received snapshot")
     receipient ! toInitialData(snapshot)
     cleanupBufferEventsAndSend(snapshot.lastUpdateId)
   }
@@ -115,7 +115,7 @@ class BinanceOrderBookStreamer(config: ExchangeConfig, tradePair: TradePair, rec
 
   override def preStart() {
     log.debug(s"BinanceOrderBookStreamer($tradePair) initializing...")
-    orderBookWebSocketFlow = context.actorOf(BinanceOrderBookWebSocketFlow.props(tradePair, self))
+    orderBookWebSocketFlow = context.actorOf(BinanceOrderBookWebSocketFlow.props(config, tradePair, self))
   }
 
   override def receive: Receive = {

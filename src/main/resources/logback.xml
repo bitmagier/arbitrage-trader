@@ -10,7 +10,7 @@
     </layout>
   </appender>
 
-  <logger name="org.purevalue.arbitrage" level="TRACE"/>
+  <logger name="org.purevalue.arbitrage" level="INFO"/>
 
   <root level="info">
     <appender-ref ref="STDOUT" />
