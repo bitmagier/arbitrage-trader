@@ -51,6 +51,7 @@ class BinanceOrderBookStreamer(config: ExchangeConfig, tradePair: TradePair, rec
   private def toBidUpdate(e: Seq[String]): BidUpdate = {
     if (e.length != 2) throw new IllegalArgumentException(e.toString())
     BidUpdate(
+      e.head,
       e.head.toDouble, // Price level
       e(1).toDouble // Quantity
     )
@@ -59,6 +60,7 @@ class BinanceOrderBookStreamer(config: ExchangeConfig, tradePair: TradePair, rec
   private def toAskUpdate(e: Seq[String]): AskUpdate = {
     if (e.length != 2) throw new IllegalArgumentException(e.toString())
     AskUpdate(
+      e.head,
       e.head.toDouble, // Price level
       e(1).toDouble // Quantity
     )

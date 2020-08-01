@@ -6,13 +6,11 @@ import akka.http.scaladsl.Http
 import akka.http.scaladsl.model._
 import akka.http.scaladsl.model.ws.{TextMessage, _}
 import akka.stream.scaladsl._
-import org.purevalue.arbitrage.{ExchangeConfig, Main, TradePair, adapter}
+import org.purevalue.arbitrage.{ExchangeConfig, Main, TradePair}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
-import akka.pattern.pipe
 
-import scala.concurrent.duration.DurationInt
-import scala.concurrent.{Await, Future, Promise}
+import scala.concurrent.{Future, Promise}
 
 object BinanceOrderBookWebSocketFlow {
   def props(config: ExchangeConfig, tradePair: TradePair, receiver: ActorRef): Props = Props(new BinanceOrderBookWebSocketFlow(config, tradePair, receiver))
@@ -27,11 +25,11 @@ case class BinanceOrderBookWebSocketFlow(config: ExchangeConfig, tradePair: Trad
   import actorSystem.dispatcher
 
   private def handleSubscribeResponse(msg: SubscribeResponseMsg): Unit = {
-    log.trace(s"received SubscribeResponse message: $msg")
+    if (log.isTraceEnabled) log.trace(s"received SubscribeResponse message: $msg")
   }
 
   private def handleDepthUpdate(u: RawOrderBookUpdate): Unit = {
-    log.trace(s"received OrderBook update: $u")
+    if (log.isTraceEnabled) log.trace(s"received OrderBook update: $u")
     val forward = u match {
       case x if (x.e == "depthUpdate" && x.s == tradePair.symbol) => x
       case x@_ => throw new RuntimeException(s"RawOrderBookUpdate contained something else than a 'depthUpdate' for '$tradePair'. Here it is: $x")
@@ -40,18 +38,17 @@ case class BinanceOrderBookWebSocketFlow(config: ExchangeConfig, tradePair: Trad
   }
 
   val sink: Sink[Message, Future[Done]] = Sink.foreach[Message] {
-    case msg:TextMessage =>
-      msg
-        .toStrict(config.httpTimeout)
+    case msg: TextMessage =>
+      msg.toStrict(config.httpTimeout)
         .map(_.getStrictText)
         .map(s => JsonParser(s).asJsObject())
         .map {
           case j if j.fields.contains("result") => j.convertTo[SubscribeResponseMsg]
           case j if j.fields.contains("e") && j.fields("e").convertTo[String] == "depthUpdate" => j.convertTo[RawOrderBookUpdate]
-          case x:JsObject => throw new RuntimeException(s"Unknown json message received: $x")
-        }.map {
-        case m:SubscribeResponseMsg => handleSubscribeResponse(m)
-        case m:RawOrderBookUpdate => handleDepthUpdate(m)
+          case x: JsObject => throw new RuntimeException(s"Unknown json message received: $x")
+        } map {
+        case m: SubscribeResponseMsg => handleSubscribeResponse(m)
+        case m: RawOrderBookUpdate => handleDepthUpdate(m)
       }
     case x@_ => log.warn(s"Received non TextMessage: $x")
   }

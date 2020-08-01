@@ -11,6 +11,7 @@
   </appender>
 
   <logger name="org.purevalue.arbitrage" level="INFO"/>
+  <logger name="org.purevalue.arbitrage.OrderBook" level="TRACE"/>
 
   <root level="info">
     <appender-ref ref="STDOUT" />
