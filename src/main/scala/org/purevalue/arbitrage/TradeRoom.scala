@@ -6,12 +6,24 @@ import org.purevalue.arbitrage.adapter.binance.BinanceAdapter
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexAdapter
 import org.slf4j.LoggerFactory
 
-object Trader {
-  def props(): Props = Props(new Trader())
+
+
+trait TradeDirection
+case class Buy() extends TradeDirection
+case class Sell() extends TradeDirection
+
+case class TradeRequest(exchange:String, tradePair: TradePair, direction:TradeDirection, fee:Fee, amountBaseAsset:Double, amountQuoteAsset:Double, limit:Double)
+
+//case class ExecutedTrade(tradeRequest: TradeRequest, amountBaseAsset:Double, amountQuoteAsset:Double, rate:Double, fee:Fee)
+//case class ExecutedTradeRequest(request:TradeRequest, trades:Seq[ExecutedTrade])
+
+
+object TradeRoom {
+  def props(): Props = Props(new TradeRoom())
 }
 
-class Trader extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[Trader])
+class TradeRoom extends Actor {
+  private val log = LoggerFactory.getLogger(classOf[TradeRoom])
 
   var allExchanges: Map[String, actor.ActorRef] = _
 
@@ -34,3 +46,4 @@ class Trader extends Actor {
 }
 // TODO shudown app in case of exception from any actor
 // TODO add feature Exchange-PlatformStatus to cover Maintainance periods
+// TODO check order books of opposide trade direction - assure we have exactly one order book per exchange and 2 assets
