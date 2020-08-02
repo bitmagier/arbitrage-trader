@@ -22,13 +22,13 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
   var tradePairs: Set[TradePair] = _
   var orderBooks: Map[TradePair, ActorRef] = _
   var orderBookInitPending: Set[TradePair] = _
-  var wallets: Map[Asset, Wallet] = Map(
+  var wallets: Map[Asset, Wallet] = Map( // TODO
     Asset("BTC") -> Wallet(Asset("BTC"), 0.5),
     Asset("USDT") -> Wallet(Asset("USDT"), 2000.0),
     Asset("ETH") -> Wallet(Asset("ETH"), 10.0),
     Asset("ADA") -> Wallet(Asset("ADA"), 0.0),
-    Asset("ERD") -> Wallet(Asset("ERD"), 100_000.0),
-    Asset("ALGO") -> Wallet(Asset("ALGO"), 50_000.0),
+    Asset("ERD") -> Wallet(Asset("ERD"), 100000.0),
+    Asset("ALGO") -> Wallet(Asset("ALGO"), 50000.0),
     Asset("BTG") -> Wallet(Asset("BTG"), 500.0)
   )
 
