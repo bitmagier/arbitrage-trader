@@ -12,8 +12,9 @@
 
   <logger name="org.purevalue.arbitrage" level="INFO"/>
   <logger name="org.purevalue.arbitrage.OrderBook" level="TRACE"/>
+<!--  <logger name="org.purevalue.arbitrage.adapter.bitfinex" level="TRACE"/>-->
 
-  <root level="info">
+  <root level="INFO">
     <appender-ref ref="STDOUT" />
   </root>
 </configuration>

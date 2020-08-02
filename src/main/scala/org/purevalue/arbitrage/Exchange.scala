@@ -1,11 +1,8 @@
 package org.purevalue.arbitrage
-import akka.actor.{Actor, ActorRef, Props}
+import akka.actor.{Actor, ActorRef, Props, Status}
 import org.purevalue.arbitrage.adapter.ExchangeAdapterProxy.{GetTradePairs, TradePairs}
 import org.slf4j.LoggerFactory
 
-case class TradePair(symbol:String, baseAsset:String, quoteAsset:String) {
-  override def toString: String = s"TradePair($symbol:$baseAsset-$quoteAsset)"
-}
 case class Fee(makerFee:Double, takerFee:Double)
 
 object Exchange {
@@ -15,7 +12,7 @@ object Exchange {
 case class Exchange(name:String, config:ExchangeConfig, exchangeAdapter:ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[Exchange])
 
-  val assets:Set[String] = config.assets
+  val assets:Set[Asset] = GlobalConfig.assets.filter(e => config.assets.contains(e.officialSymbol))
   val fee: Fee = Fee(config.makerFee, config.takerFee)
   // dynamic
   var tradePairs: Set[TradePair] = _
@@ -27,7 +24,7 @@ case class Exchange(name:String, config:ExchangeConfig, exchangeAdapter:ActorRef
     orderBookInitPending = tradePairs
     orderBooks = Map[TradePair, ActorRef]()
     for (p <- tradePairs) {
-      orderBooks += (p -> context.actorOf(OrderBook.props(name, p, exchangeAdapter, self), s"$name.OrderBook-${p.symbol}"))
+      orderBooks += (p -> context.actorOf(OrderBook.props(name, p, exchangeAdapter, self), s"$name.OrderBook-${p.baseAsset.officialSymbol}-${p.quoteAsset.officialSymbol}"))
     }
   }
 
@@ -49,5 +46,8 @@ case class Exchange(name:String, config:ExchangeConfig, exchangeAdapter:ActorRef
         _initialized = true
         log.info(s"$name: all OrderBooks initialized and running")
       }
+
+    case Status.Failure(cause) =>
+      log.error("received failure", cause)
   }
 }
