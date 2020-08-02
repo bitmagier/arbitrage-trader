@@ -13,29 +13,33 @@ import spray.json._
 import scala.concurrent.{Future, Promise}
 import scala.util.{Failure, Success}
 
+
+
 trait DecodedMessage
-case class JsonMessage(j:JsObject) extends DecodedMessage
+case class JsonMessage(j: JsObject) extends DecodedMessage
 case class SubscribeRequest(event: String = "subscribe", channel: String = "book", symbol: String, prec: String = "P0", freq: String = "F0")
 
-case class RawOrderBookEntry(price:Double, count:Int, amount:Double)
+case class Heartbeat() extends DecodedMessage
+
+case class RawOrderBookEntry(price: Double, count: Int, amount: Double)
 object RawOrderBookEntry {
-  def apply(v:Tuple3[Double,Int,Double]):RawOrderBookEntry = RawOrderBookEntry(v._1, v._2, v._3)
+  def apply(v: Tuple3[Double, Int, Double]): RawOrderBookEntry = RawOrderBookEntry(v._1, v._2, v._3)
 }
-case class RawOrderBookSnapshot(channelId:Int, values:List[RawOrderBookEntry]) extends DecodedMessage // [channelId, [[price, count, amount],...]]
+case class RawOrderBookSnapshot(channelId: Int, values: List[RawOrderBookEntry]) extends DecodedMessage // [channelId, [[price, count, amount],...]]
 object RawOrderBookSnapshot {
-  def apply(v:Tuple2[Int, List[RawOrderBookEntry]]): RawOrderBookSnapshot = RawOrderBookSnapshot(v._1, v._2)
+  def apply(v: Tuple2[Int, List[RawOrderBookEntry]]): RawOrderBookSnapshot = RawOrderBookSnapshot(v._1, v._2)
 }
-case class RawOrderBookUpdate(channelId:Int, value: RawOrderBookEntry) extends DecodedMessage // [channelId, [price, count, amount]]
+case class RawOrderBookUpdate(channelId: Int, value: RawOrderBookEntry) extends DecodedMessage // [channelId, [price, count, amount]]
 object RawOrderBookUpdate {
-  def apply(v:Tuple2[Int, RawOrderBookEntry]): RawOrderBookUpdate = RawOrderBookUpdate(v._1, v._2)
+  def apply(v: Tuple2[Int, RawOrderBookEntry]): RawOrderBookUpdate = RawOrderBookUpdate(v._1, v._2)
 }
 
 object WebSocketJsonProtocoll extends DefaultJsonProtocol {
   implicit val subscribeRequest: RootJsonFormat[SubscribeRequest] = jsonFormat5(SubscribeRequest)
 
   implicit object rawOrderBookEntryFormat extends RootJsonFormat[RawOrderBookEntry] {
-    def read(value:JsValue): RawOrderBookEntry = RawOrderBookEntry(value.convertTo[Tuple3[Double,Int,Double]])
-    def write(v:RawOrderBookEntry): JsValue = null
+    def read(value: JsValue): RawOrderBookEntry = RawOrderBookEntry(value.convertTo[Tuple3[Double, Int, Double]])
+    def write(v: RawOrderBookEntry): JsValue = null
   }
 
   implicit object rawOrderBookSnapshotFormat extends RootJsonFormat[RawOrderBookSnapshot] {
@@ -44,7 +48,7 @@ object WebSocketJsonProtocoll extends DefaultJsonProtocol {
   }
 
   implicit object rawOrderBookUpdate extends RootJsonFormat[RawOrderBookUpdate] {
-    def read(value:JsValue): RawOrderBookUpdate = RawOrderBookUpdate(value.convertTo[Tuple2[Int, RawOrderBookEntry]])
+    def read(value: JsValue): RawOrderBookUpdate = RawOrderBookUpdate(value.convertTo[Tuple2[Int, RawOrderBookEntry]])
     def write(v: RawOrderBookUpdate): JsValue = null
   }
 }
@@ -77,10 +81,15 @@ case class BitfinexOrderBookWebSocketFlow(config: ExchangeConfig, tradePair: Bit
   def decodeJson(s: String): DecodedMessage = JsonMessage(JsonParser(s).asJsObject)
 
   def decodeDataArray(s: String): DecodedMessage = {
-    val snapshotPattern = "^\\[\\d+\\s*,\\s*\\[\\s*\\[.*".r
-    snapshotPattern.findFirstIn(s) match {
-      case Some(_) => JsonParser(s).convertTo[RawOrderBookSnapshot]
-      case None => JsonParser(s).convertTo[RawOrderBookUpdate]
+    val heatBeatPattern = "^\\[\\s*\\d+,\\s*\"hb\"\\s*]".r
+    heatBeatPattern.findFirstIn(s) match {
+      case Some(_) => Heartbeat()
+      case None =>
+        val snapshotPattern = "^\\[\\d+\\s*,\\s*\\[\\s*\\[.*".r
+        snapshotPattern.findFirstIn(s) match {
+          case Some(_) => JsonParser(s).convertTo[RawOrderBookSnapshot]
+          case None => JsonParser(s).convertTo[RawOrderBookUpdate]
+        }
     }
   }
 
@@ -89,11 +98,12 @@ case class BitfinexOrderBookWebSocketFlow(config: ExchangeConfig, tradePair: Bit
       msg.toStrict(config.httpTimeout)
         .map(_.getStrictText)
         .map {
-          case s:String if s.startsWith("{") => decodeJson(s)
-          case s:String if s.startsWith("[") => decodeDataArray(s)
+          case s: String if s.startsWith("{") => decodeJson(s)
+          case s: String if s.startsWith("[") => decodeDataArray(s)
         }.onComplete {
         case Failure(exception) => log.error(s"Unable to decode expected Json message", exception)
         case Success(v) => v match {
+          case Heartbeat() => log.debug("heartbeat received")
           case j: JsonMessage if j.j.fields.contains("event") => handleEvent(j.j.fields("event").convertTo[String], j.j)
           case j: JsonMessage => log.warn(s"Unhandled JsonMessage received: $j")
           case d: RawOrderBookSnapshot => receiver ! d
@@ -137,4 +147,7 @@ case class BitfinexOrderBookWebSocketFlow(config: ExchangeConfig, tradePair: Bit
       log.error("received failure", cause)
   }
 }
+
+
+
 // TODO send unsubscribe message to bitfinex on shutdown event
