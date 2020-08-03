@@ -1,12 +1,12 @@
 package org.purevalue.arbitrage
 
 import java.time.ZonedDateTime
+import java.util.UUID
 
 import akka.actor.{Actor, ActorRef, Props, Status}
 import org.purevalue.arbitrage.TradeRoom.GetTradeblePairs
 import org.purevalue.arbitrage.adapter.binance.BinanceAdapter
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexAdapter
-import org.purevalue.arbitrage.trader.FooTrader
 import org.slf4j.LoggerFactory
 
 trait TradeDirection
@@ -23,16 +23,16 @@ case class SingleTradeRequest(exchange: String,
                               amountQuoteAsset: Double,
                               limit: Double)
 /** High level Trade Request from trader covering at least 2 SingleTradeRequests */
-case class TradeRequest(id: String, creationTime:ZonedDateTime, requests: List[SingleTradeRequest], calculatedEarning: CryptoValue)
+case class TradeRequestSet(id: UUID, creationTime:ZonedDateTime, requests: Set[SingleTradeRequest], calculatedEarning: CryptoValue)
 
 case class ExecutionDetails(executionTime:ZonedDateTime)
-case class ExecutedTrade(request:TradeRequest, executionDetails:ExecutionDetails)
+case class ExecutedTrade(request:TradeRequestSet, executionDetails:ExecutionDetails)
 
 object TradeRoom {
   case class GetTradeblePairs()
   case class TradeblePairs(tradePair: TradePair, orderBooksByExchange: Map[String, OrderBook])
-  case class TradeRequestFiled(request: TradeRequest)
-  case class TradeCompletelyExecuted(request: TradeRequest, executedTrades:List[ExecutedTrade], earning:CryptoValue)
+  case class TradeRequestFiled(request: TradeRequestSet)
+  case class TradeCompletelyExecuted(request: TradeRequestSet, executedTrades:List[ExecutedTrade], earning:CryptoValue)
 
   def props(): Props = Props(new TradeRoom())
 }
@@ -41,6 +41,7 @@ object TradeRoom {
  *  - handles open/partial trade execution
  *  - provides higher level view (per trade-request) of trades to traders
  */
+// TODO design in progress
 class TradeRoom extends Actor {
   private val log = LoggerFactory.getLogger(classOf[TradeRoom])
 
