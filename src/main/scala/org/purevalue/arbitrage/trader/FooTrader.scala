@@ -30,7 +30,6 @@ class FooTrader(config: Config, tradeRoom: ActorRef) extends Actor {
   val maxOpenOrderBundles: Int = config.getInt("max-open-order-bundles")
   var pendingOrderBundles: Map[UUID, OrderBundle] = Map()
   var activeOrderBundles: Map[UUID, OrderBundle] = Map()
-  // TODO var completedTradeRequest:
   val schedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(0.seconds, 1.second, self, Trigger())
 
   def findBestShot(t: TradableAssets): Option[OrderBundle] = ???

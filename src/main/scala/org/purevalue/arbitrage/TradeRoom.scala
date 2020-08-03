@@ -4,7 +4,7 @@ import java.time.ZonedDateTime
 import java.util.UUID
 
 import akka.actor.{Actor, ActorRef, Props, Status}
-import org.purevalue.arbitrage.TradeRoom.{GetTradableAssets, OrderBundle, OrderBundleCompleted, OrderBundlePlaced, OrderExecuted, OrderPlaced, PlaceOrder}
+import org.purevalue.arbitrage.TradeRoom._
 import org.purevalue.arbitrage.adapter.binance.BinanceAdapter
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexAdapter
 import org.slf4j.LoggerFactory
@@ -29,39 +29,42 @@ case class Order(id: UUID,
                  limit: Double) {
   var placed: Boolean = false
   var placementTime: ZonedDateTime = _
-  def setPlaced(ts:ZonedDateTime): Unit = {placed = true; placementTime = ts}
+
+  def setPlaced(ts: ZonedDateTime): Unit = {
+    placed = true; placementTime = ts
+  }
 }
 
 /** Trade: a successfully executed Order */
-case class Trade(id:UUID,
-                 orderId:UUID,
-                 exchange:String,
-                 tradePair:TradePair,
+case class Trade(id: UUID,
+                 orderId: UUID,
+                 exchange: String,
+                 tradePair: TradePair,
                  direction: TradeDirection,
                  fee: Fee,
                  amountBaseAsset: Double,
-                 amountQuoteAsset:Double,
-                 executionRate:Double,
-                 executionTime:ZonedDateTime)
+                 amountQuoteAsset: Double,
+                 executionRate: Double,
+                 executionTime: ZonedDateTime)
 
-case class CompletedOrderBundle(orderBundle: OrderBundle, executedAsInstructed:Boolean, supervisorComments:List[String], executedTrades:List[Trade], earnings:Set[CryptoValue])
+case class CompletedOrderBundle(orderBundle: OrderBundle, executedAsInstructed: Boolean, supervisorComments: List[String], executedTrades: List[Trade], earnings: Set[CryptoValue])
 
 object TradeRoom {
   // communication with trader INCOMING
   case class GetTradableAssets()
   /** High level order bundle, covering 2 or more trader orders */
-  case class OrderBundle(id: UUID, traderName:String, trader: ActorRef, creationTime:ZonedDateTime, orders: Set[Order], estimatedWin: CryptoValue, decisionInformation:String)
+  case class OrderBundle(id: UUID, traderName: String, trader: ActorRef, creationTime: ZonedDateTime, orders: Set[Order], estimatedWin: CryptoValue, decisionInformation: String)
   // communication with trader OUTGOING
   case class TradableAssets(tradable: Map[TradePair, Map[String, OrderBookManager]])
   case class OrderBundlePlaced(orderBundleId: UUID)
   case class OrderBundleCompleted(orderBundle: CompletedOrderBundle)
 
   // communication with exchange INCOMING
-  case class OrderPlaced(orderId:UUID, placementTime:ZonedDateTime)
-  case class OrderExecuted(orderId:UUID, trade:Trade)
-  case class OrderCancelled(orderId:UUID)
+  case class OrderPlaced(orderId: UUID, placementTime: ZonedDateTime)
+  case class OrderExecuted(orderId: UUID, trade: Trade)
+  case class OrderCancelled(orderId: UUID)
   // communication with exchange OUTGOING
-  case class PlaceOrder(order:Order)
+  case class PlaceOrder(order: Order)
   case class CancelOrder()
 
   def props(): Props = Props(new TradeRoom())
@@ -97,16 +100,16 @@ class TradeRoom extends Actor {
 
     log.info(s"Initializing exchanges: ${exchanges.keys}")
 
-//    traders += "foo" -> context.actorOf(FooTrader.props(StaticConfig.trader("foo")), "foo-trader")
+    //    traders += "foo" -> context.actorOf(FooTrader.props(StaticConfig.trader("foo")), "foo-trader")
   }
 
   def calculateEarnings(trades: List[Trade]): Set[CryptoValue] = ???
 
   def receive: Receive = {
     case GetTradableAssets() => ???
-      // TODO deliver TradeblePairs to sender
+    // TODO deliver TradeblePairs to sender
 
-    case t:OrderBundle =>
+    case t: OrderBundle =>
       tradesPerActiveOrderBundle += (t.id -> ListBuffer())
       for (order <- t.orders) {
         exchanges(order.exchange) ! PlaceOrder(order)
@@ -121,28 +124,28 @@ class TradeRoom extends Actor {
         sender ! OrderBundlePlaced(order.orderBundleId)
       }
 
-      case OrderExecuted(orderId, trade) =>
-        val order = activeOrders(orderId)
-        activeOrders -= orderId
-        val orderBundleId = order.orderBundleId
-        tradesPerActiveOrderBundle(orderBundleId) += trade
+    case OrderExecuted(orderId, trade) =>
+      val order = activeOrders(orderId)
+      activeOrders -= orderId
+      val orderBundleId = order.orderBundleId
+      tradesPerActiveOrderBundle(orderBundleId) += trade
 
-        val orderIds: Set[UUID] = activeOrderBundles(orderBundleId).orders.map(_.id)
-        if (orderIds.forall(orderId => !activeOrders.contains(orderId))) {
-          // collect trades and complete OrderBundle
-          val trades = tradesPerActiveOrderBundle(orderBundleId).toList
-          val completedOrderBundle = CompletedOrderBundle(
-            activeOrderBundles(orderBundleId),
-            executedAsInstructed = true,
-            List(),
-            trades,
-            calculateEarnings(trades)
-          )
-          completedOrderBundles += (orderBundleId -> completedOrderBundle)
-          tradesPerActiveOrderBundle -= orderBundleId
-          activeOrderBundles(orderBundleId).trader ! OrderBundleCompleted(completedOrderBundle)
-          activeOrderBundles -= orderBundleId
-        }
+      val orderIds: Set[UUID] = activeOrderBundles(orderBundleId).orders.map(_.id)
+      if (orderIds.forall(orderId => !activeOrders.contains(orderId))) {
+        // collect trades and complete OrderBundle
+        val trades = tradesPerActiveOrderBundle(orderBundleId).toList
+        val completedOrderBundle = CompletedOrderBundle(
+          activeOrderBundles(orderBundleId),
+          executedAsInstructed = true,
+          List(),
+          trades,
+          calculateEarnings(trades)
+        )
+        completedOrderBundles += (orderBundleId -> completedOrderBundle)
+        tradesPerActiveOrderBundle -= orderBundleId
+        activeOrderBundles(orderBundleId).trader ! OrderBundleCompleted(completedOrderBundle)
+        activeOrderBundles -= orderBundleId
+      }
 
     case Status.Failure(cause) =>
       log.error("received failure", cause)
