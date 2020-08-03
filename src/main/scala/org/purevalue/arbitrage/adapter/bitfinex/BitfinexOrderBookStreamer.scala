@@ -1,7 +1,7 @@
 package org.purevalue.arbitrage.adapter.bitfinex
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
-import org.purevalue.arbitrage.OrderBook.{AskUpdate, BidUpdate, OrderBookInitialData, OrderBookUpdate}
+import org.purevalue.arbitrage.OrderBookManager.{AskPosition, BidPosition, OrderBookInitialData, OrderBookUpdate}
 import org.purevalue.arbitrage.{ExchangeConfig, Main}
 import org.slf4j.LoggerFactory
 
@@ -20,11 +20,11 @@ class BitfinexOrderBookStreamer(config: ExchangeConfig, tradePair: BitfinexTrade
     val bids = snapshot.values
       .filter(_.count > 0)
       .filter(_.amount > 0)
-      .map(e => BidUpdate(e.price, e.amount))
+      .map(e => BidPosition(e.price, e.amount))
     val asks = snapshot.values
       .filter(_.count > 0)
       .filter(_.amount < 0)
-      .map(e => AskUpdate(e.price, -e.amount))
+      .map(e => AskPosition(e.price, -e.amount))
     OrderBookInitialData(
       bids, asks
     )
@@ -45,18 +45,18 @@ class BitfinexOrderBookStreamer(config: ExchangeConfig, tradePair: BitfinexTrade
   private def toOrderBookUpdate(update: RawOrderBookUpdate): OrderBookUpdate = {
     if (update.value.count > 0) {
       if (update.value.amount > 0)
-        OrderBookUpdate(List(BidUpdate(update.value.price, update.value.amount)), List())
+        OrderBookUpdate(List(BidPosition(update.value.price, update.value.amount)), List())
       else if (update.value.amount < 0)
-        OrderBookUpdate(List(), List(AskUpdate(update.value.price, -update.value.amount)))
+        OrderBookUpdate(List(), List(AskPosition(update.value.price, -update.value.amount)))
       else {
         log.warn(s"undefined update case: $update")
         OrderBookUpdate(List(), List())
       }
     } else if (update.value.count == 0) {
       if (update.value.amount == 1.0d)
-        OrderBookUpdate(List(BidUpdate(update.value.price, 0.0d)), List())
+        OrderBookUpdate(List(BidPosition(update.value.price, 0.0d)), List())
       else if (update.value.amount == -1.0d)
-        OrderBookUpdate(List(), List(AskUpdate(update.value.price, 0.0d)))
+        OrderBookUpdate(List(), List(AskPosition(update.value.price, 0.0d)))
       else {
         log.warn(s"undefined update case: $update")
         OrderBookUpdate(List(), List())

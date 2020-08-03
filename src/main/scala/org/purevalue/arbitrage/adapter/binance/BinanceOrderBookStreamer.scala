@@ -4,7 +4,7 @@ import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model._
 import akka.pattern.pipe
-import org.purevalue.arbitrage.OrderBook.{AskUpdate, BidUpdate, OrderBookInitialData, OrderBookUpdate}
+import org.purevalue.arbitrage.OrderBookManager.{AskPosition, BidPosition, OrderBookInitialData, OrderBookUpdate}
 import org.purevalue.arbitrage.adapter.binance.BinanceAdapter.GetOrderBookSnapshot
 import org.purevalue.arbitrage.{ExchangeConfig, Main}
 import org.slf4j.LoggerFactory
@@ -45,17 +45,17 @@ class BinanceOrderBookStreamer(config: ExchangeConfig, tradePair: BinanceTradePa
     cleanupBufferEventsAndSend(snapshot.lastUpdateId)
   }
 
-  private def toBidUpdate(e: Seq[String]): BidUpdate = {
+  private def toBidUpdate(e: Seq[String]): BidPosition = {
     if (e.length != 2) throw new IllegalArgumentException(e.toString())
-    BidUpdate(
+    BidPosition(
       e.head.toDouble, // Price level
       e(1).toDouble // Quantity
     )
   }
 
-  private def toAskUpdate(e: Seq[String]): AskUpdate = {
+  private def toAskUpdate(e: Seq[String]): AskPosition = {
     if (e.length != 2) throw new IllegalArgumentException(e.toString())
-    AskUpdate(
+    AskPosition(
       e.head.toDouble, // Price level
       e(1).toDouble // Quantity
     )

@@ -4,7 +4,7 @@ import java.time.ZonedDateTime
 import java.util.UUID
 
 import akka.actor.{Actor, ActorRef, Props, Status}
-import org.purevalue.arbitrage.TradeRoom.GetTradeblePairs
+import org.purevalue.arbitrage.TradeRoom.GetTradableAssets
 import org.purevalue.arbitrage.adapter.binance.BinanceAdapter
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexAdapter
 import org.slf4j.LoggerFactory
@@ -22,26 +22,31 @@ case class SingleTradeRequest(exchange: String,
                               amountBaseAsset: Double,
                               amountQuoteAsset: Double,
                               limit: Double)
-/** High level Trade Request from trader covering at least 2 SingleTradeRequests */
-case class TradeRequestSet(id: UUID, creationTime:ZonedDateTime, requests: Set[SingleTradeRequest], calculatedEarning: CryptoValue)
+
+/**
+ * High level Trade Request from trader covering at least 2 SingleTradeRequests
+ */
+case class TradeRequestBundle(id: UUID, traderName:String, creationTime:ZonedDateTime, requests: Set[SingleTradeRequest], estimatedEarning: CryptoValue)
 
 case class ExecutionDetails(executionTime:ZonedDateTime)
-case class ExecutedTrade(request:TradeRequestSet, executionDetails:ExecutionDetails)
+case class ExecutedTradeBundle(request:TradeRequestBundle, executionDetails:ExecutionDetails)
 
 object TradeRoom {
-  case class GetTradeblePairs()
-  case class TradeblePairs(tradePair: TradePair, orderBooksByExchange: Map[String, OrderBook])
-  case class TradeRequestFiled(request: TradeRequestSet)
-  case class TradeCompletelyExecuted(request: TradeRequestSet, executedTrades:List[ExecutedTrade], earning:CryptoValue)
+  case class GetTradableAssets()
+  case class TradableAssets(tradable: Map[TradePair, Map[String, OrderBookManager]])
+  case class TradeRequestBundleFiled(request: TradeRequestBundle)
+  case class TradeRequestBundleCompleted(request: TradeRequestBundle, executedAsInstructed:Boolean, supervisorComments:List[String], executedTrades:List[ExecutedTradeBundle], earning:Set[CryptoValue])
 
   def props(): Props = Props(new TradeRoom())
 }
+
+// TODO design in progress
 /**
  *  - brings exchanges and traders together
  *  - handles open/partial trade execution
  *  - provides higher level view (per trade-request) of trades to traders
+ *  - manages trade history
  */
-// TODO design in progress
 class TradeRoom extends Actor {
   private val log = LoggerFactory.getLogger(classOf[TradeRoom])
 
@@ -61,7 +66,8 @@ class TradeRoom extends Actor {
   }
 
   def receive: Receive = {
-    case GetTradeblePairs() => // TODO deliver TradeblePairs to sender
+    case GetTradableAssets() =>
+      // TODO deliver TradeblePairs to sender
 
     case Status.Failure(cause) =>
       log.error("received failure", cause)

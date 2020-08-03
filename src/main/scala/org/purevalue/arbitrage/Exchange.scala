@@ -39,7 +39,7 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
     orderBookInitPending = tradePairs
     orderBooks = Map[TradePair, ActorRef]()
     for (p <- tradePairs) {
-      orderBooks += (p -> context.actorOf(OrderBook.props(name, p, exchangeAdapter, self), s"$name.OrderBook-${p.baseAsset.officialSymbol}-${p.quoteAsset.officialSymbol}"))
+      orderBooks += (p -> context.actorOf(OrderBookManager.props(name, p, exchangeAdapter, self), s"$name.OrderBook-${p.baseAsset.officialSymbol}-${p.quoteAsset.officialSymbol}"))
     }
   }
 
@@ -54,7 +54,7 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
       log.info(s"$name: ${tradePairs.size} TradePairs received: $tradePairs")
       initOrderBooks()
 
-    case OrderBook.Initialized(t) =>
+    case OrderBookManager.Initialized(t) =>
       log.info(s"$name: OrderBook $t initialized")
       orderBookInitPending -= t
       if (orderBookInitPending.isEmpty) {
