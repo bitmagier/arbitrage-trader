@@ -41,8 +41,13 @@ case class OrderBookManager(exchange: String, tradePair: TradePair, exchangeQuer
   }
 
   def receive: Receive = {
+
+    // Messages from Exchange
+
     case GetOrderBook() =>
       sender() ! orderBook
+
+    // Messages from OrderBookStreamer
 
     case i: OrderBookInitialData =>
       orderBook = OrderBook(

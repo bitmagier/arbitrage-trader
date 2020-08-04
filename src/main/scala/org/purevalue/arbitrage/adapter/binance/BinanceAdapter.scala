@@ -53,6 +53,7 @@ class BinanceAdapter(config: ExchangeConfig) extends ExchangeAdapterProxy(config
     super.preStart()
     exchangeInfo = Await.result(queryJson[RawBinanceExchangeInformation](s"$baseEndpoint/api/v3/exchangeInfo"), config.httpTimeout)
     binanceTradePairs = exchangeInfo.symbols
+      .filter(s => s.status=="TRADING" && s.orderTypes.contains("LIMIT") /* && s.orderTypes.contains("LIMIT_MAKER")*/ && s.permissions.contains("SPOT"))
       .filter(s => config.assets.contains(s.baseAsset) && config.assets.contains(s.quoteAsset))
       .map(s => BinanceTradePair(Asset(s.baseAsset), Asset(s.quoteAsset), s.symbol))
       .toSet
@@ -68,6 +69,9 @@ class BinanceAdapter(config: ExchangeConfig) extends ExchangeAdapterProxy(config
   }
 
   override def receive: Receive = super.receive orElse {
+
+    // Messages from BinanceOrderBookStreamer
+
     case GetOrderBookSnapshot(tradePair) =>
       import BinanceJsonProtocol._
       log.debug(s"Binance: Get OrderBookSnapshot for $tradePair")

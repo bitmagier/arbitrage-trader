@@ -46,11 +46,11 @@ case class BinanceOrderBookWebSocketFlow(config: ExchangeConfig, tradePair: Bina
         .map {
           case j if j.fields.contains("result") => j.convertTo[SubscribeResponse]
           case j if j.fields.contains("e") && j.fields("e").convertTo[String] == "depthUpdate" => j.convertTo[RawOrderBookUpdate]
-          case x: JsObject => throw new RuntimeException(s"Unknown json message received: $x")
+          case x: JsObject => log.error(s"Unknown json message received: $x"); x
         } map {
         case m: SubscribeResponse => handleSubscribeResponse(m)
         case m: RawOrderBookUpdate => handleDepthUpdate(m)
-      }
+        }
     case x@_ => log.warn(s"Received non TextMessage: $x")
   }
 
@@ -107,3 +107,4 @@ object WebSocketJsonProtocoll extends DefaultJsonProtocol {
   implicit val bookUpdate: RootJsonFormat[RawOrderBookUpdate] = jsonFormat7(RawOrderBookUpdate)
 }
 
+// TODO handle temporary down trading pair - at init time - where no subscribe response is deliverd, as well as during trading time (event?)

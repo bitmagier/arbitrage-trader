@@ -38,7 +38,7 @@ case class Order(id: UUID,
   var placementTime: ZonedDateTime = _
 
   def setPlaced(ts: ZonedDateTime): Unit = {
-    placed = true;
+    placed = true
     placementTime = ts
   }
 }
@@ -197,13 +197,13 @@ class TradeRoom extends Actor {
 
   def receive: Receive = {
 
-    // messages from trader
+    // messages from Trader
 
     case GetTradableAssets() => collectTradableAssets().pipeTo(sender)
     case t: OrderBundle => placeOrderBundleOrders(t)
 
 
-    // messages from exchange
+    // messages from Exchange
 
     case OrderPlaced(orderId, placementTime) =>
       orderPlaced(orderId, placementTime) match {

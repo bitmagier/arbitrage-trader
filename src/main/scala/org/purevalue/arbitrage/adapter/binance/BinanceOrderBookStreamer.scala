@@ -9,7 +9,8 @@ import org.slf4j.LoggerFactory
 import scala.collection.mutable.ListBuffer
 
 object BinanceOrderBookStreamer {
-  def props(config: ExchangeConfig, tradePair: BinanceTradePair, binanceAdapter:ActorRef, receipient: ActorRef): Props = Props(new BinanceOrderBookStreamer(config, tradePair, binanceAdapter, receipient))
+  def props(config: ExchangeConfig, tradePair: BinanceTradePair, binanceAdapter:ActorRef, receipient: ActorRef): Props =
+    Props(new BinanceOrderBookStreamer(config, tradePair, binanceAdapter, receipient))
 }
 
 class BinanceOrderBookStreamer(config: ExchangeConfig, tradePair: BinanceTradePair, binanceAdapter:ActorRef, receipient: ActorRef) extends Actor {
@@ -18,6 +19,7 @@ class BinanceOrderBookStreamer(config: ExchangeConfig, tradePair: BinanceTradePa
 
   private var orderBookWebSocketFlow: ActorRef = _
   private var bufferingPhase: Boolean = true
+  private var orderBookSnapshotRequested: Boolean = false
   private val buffer = ListBuffer[RawOrderBookUpdate]()
   private var lastUpdateEvent: RawOrderBookUpdate = _
 
@@ -94,7 +96,8 @@ class BinanceOrderBookStreamer(config: ExchangeConfig, tradePair: BinanceTradePa
 
     case update: RawOrderBookUpdate =>
       handleIncoming(update)
-      if (bufferingPhase) {
+      if (bufferingPhase && !orderBookSnapshotRequested) {
+        orderBookSnapshotRequested = true
         binanceAdapter ! GetOrderBookSnapshot(tradePair) // when first update is received we ask for the snapshot
       }
     case Status.Failure(cause) =>

@@ -44,9 +44,6 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
     Asset("BTG") -> Wallet(Asset("BTG"), 500.0)
   )
 
-  private var _initialized: Boolean = false
-
-
   def initOrderBooks(): Unit = {
     orderBookInitPending = tradePairs
     orderBookManagers = Map[TradePair, ActorRef]()
@@ -61,24 +58,30 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
   }
 
   override def receive: Receive = {
+
+    // Messages from TradeRoom
+
     case GetOrderBooks() =>
-      implicit val timeout = Timeout(2.seconds) // configuration
+      implicit val timeout:Timeout = Timeout(2.seconds) // configuration
       var orderBooks = List[Future[OrderBook]]()
       for (obm <- orderBookManagers.values) {
         orderBooks = (obm ? GetOrderBook()).mapTo[OrderBook] :: orderBooks
       }
       Future.sequence(orderBooks).pipeTo(sender())
 
+    // Messages from ExchangeAdapter
+
     case TradePairs(t) =>
       tradePairs = t
       log.info(s"$name: ${tradePairs.size} TradePairs received: $tradePairs")
       initOrderBooks()
 
+    // Messages from OrderBookManager
+
     case OrderBookManager.Initialized(t) =>
-      log.info(s"$name: OrderBook $t initialized")
       orderBookInitPending -= t
+      log.info(s"$name: OrderBook $t initialized. Still pending: $orderBookInitPending")
       if (orderBookInitPending.isEmpty) {
-        _initialized = true
         log.info(s"$name: all OrderBooks initialized and running")
       }
 

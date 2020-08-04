@@ -28,8 +28,12 @@ abstract class ExchangeAdapterProxy(config: ExchangeConfig) extends Actor {
   def startStreamingOrderBook(tradePair: TradePair, receipient: ActorRef): Unit
 
   override def receive: Receive = {
+    // Messages from Exchange
+
     case GetTradePairs =>
       sender() ! TradePairs(tradePairs)
+
+    // Messages from OrderBookManager
 
     case OrderBookStreamRequest(tradePair) =>
       startStreamingOrderBook(tradePair, sender())
