@@ -65,7 +65,7 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
       implicit val timeout:Timeout = Timeout(2.seconds) // configuration
       var orderBooks = List[Future[OrderBook]]()
       for (obm <- orderBookManagers.values) {
-        orderBooks = (obm ? GetOrderBook()).mapTo[OrderBook] :: orderBooks
+        (obm ? GetOrderBook()).mapTo[OrderBook]
       }
       Future.sequence(orderBooks).pipeTo(sender())
 

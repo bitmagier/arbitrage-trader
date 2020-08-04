@@ -1,6 +1,6 @@
 package org.purevalue.arbitrage
 
-import java.time.ZonedDateTime
+import java.time.{Duration, LocalDateTime, ZonedDateTime}
 import java.util.UUID
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
@@ -77,7 +77,7 @@ object TradeRoom {
   case class PlaceOrder(order: Order)
   case class CancelOrder()
 
-  def props(): Props = Props(new TradeRoom())
+  def props(config:TradeRoomConfig): Props = Props(new TradeRoom(config))
 }
 
 /**
@@ -86,7 +86,7 @@ object TradeRoom {
  *  - provides higher level (aggregated per order bundle) interface to traders
  *  - manages trade history
  */
-class TradeRoom extends Actor {
+class TradeRoom(config: TradeRoomConfig) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[TradeRoom])
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
@@ -135,6 +135,10 @@ class TradeRoom extends Actor {
     invoiceAggregated.map(e => CryptoValue(e._1, e._2)).toSeq
   }
 
+  def isUpToDate(ob: OrderBook, now:LocalDateTime): Boolean = {
+    Duration.between(now, ob.lastUpdated).compareTo(config.maxOrderBookAge) < 0
+  }
+
   def collectTradableAssets(): Future[TradableAssets] = {
     implicit val timeout: Timeout = Timeout(2.seconds) // TODO configuration
     var orderBooks = List[Future[List[OrderBook]]]()
@@ -142,10 +146,13 @@ class TradeRoom extends Actor {
       orderBooks = (exchange ? GetOrderBooks()).mapTo[List[OrderBook]] :: orderBooks
     }
     val o1: Future[List[OrderBook]] = Future.sequence(orderBooks).map(_.flatten)
+    val now = LocalDateTime.now()
     o1.map { l =>
       var result = Map[TradePair, List[OrderBook]]()
       for (ob <- l) {
-        result = result + (ob.tradePair -> (ob :: result.getOrElse(ob.tradePair, List())))
+        if (isUpToDate(ob, now)) {
+          result = result + (ob.tradePair -> (ob :: result.getOrElse(ob.tradePair, List())))
+        }
       }
       result
     }.map(o3 => TradableAssets(o3))

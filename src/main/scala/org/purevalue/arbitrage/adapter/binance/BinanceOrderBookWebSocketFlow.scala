@@ -108,3 +108,4 @@ object WebSocketJsonProtocoll extends DefaultJsonProtocol {
 }
 
 // TODO handle temporary down trading pair - at init time - where no subscribe response is deliverd, as well as during trading time (event?)
+// TODO heartbeat

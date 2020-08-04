@@ -63,8 +63,8 @@ case class BitfinexOrderBookWebSocketFlow(config: ExchangeConfig, tradePair: Bit
   private val log = LoggerFactory.getLogger(classOf[BitfinexOrderBookWebSocketFlow])
   implicit val actorSystem: ActorSystem = Main.actorSystem
 
-  import actorSystem.dispatcher
   import WebSocketJsonProtocoll._
+  import actorSystem.dispatcher
 
   // TODO handle bitfinex Info codes:
   // 20051 : Stop/Restart Websocket Server (please reconnect)
@@ -103,7 +103,7 @@ case class BitfinexOrderBookWebSocketFlow(config: ExchangeConfig, tradePair: Bit
         }.onComplete {
         case Failure(exception) => log.error(s"Unable to decode expected Json message", exception)
         case Success(v) => v match {
-          case Heartbeat() => log.debug("heartbeat received")
+          case h: Heartbeat => receiver ! h
           case j: JsonMessage if j.j.fields.contains("event") => handleEvent(j.j.fields("event").convertTo[String], j.j)
           case j: JsonMessage => log.warn(s"Unhandled JsonMessage received: $j")
           case d: RawOrderBookSnapshot => receiver ! d

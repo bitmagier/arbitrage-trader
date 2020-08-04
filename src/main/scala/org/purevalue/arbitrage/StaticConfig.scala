@@ -1,5 +1,6 @@
 package org.purevalue.arbitrage
 
+import java.time.Duration
 import java.util.concurrent.TimeUnit
 
 import com.typesafe.config.{Config, ConfigFactory}
@@ -8,6 +9,7 @@ import scala.collection.JavaConverters._
 import scala.concurrent.duration.FiniteDuration
 
 case class ExchangeConfig(assets:Set[String], makerFee:Double, takerFee:Double, httpTimeout:FiniteDuration)
+case class TradeRoomConfig(maxOrderBookAge:Duration)
 
 object StaticConfig {
   private val config: Config = ConfigFactory.load()
@@ -22,5 +24,8 @@ object StaticConfig {
   def exchange(name:String):ExchangeConfig = exchangeConfig(config.getConfig(s"exchange.$name"))
 
   def trader(name:String):Config = config.getConfig(s"trader.$name")
+
+  val tradeRoom: TradeRoomConfig = TradeRoomConfig(
+    config.getDuration("trade-room.max-orderbook-age"))
 }
 

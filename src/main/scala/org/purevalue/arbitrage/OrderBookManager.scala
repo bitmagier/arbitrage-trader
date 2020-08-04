@@ -27,6 +27,7 @@ object OrderBookManager {
   case class AskPosition(price: Double, qantity: Double) // (likely aggregated) ask position(s) for a price level
   case class OrderBookInitialData(bids: Seq[BidPosition], asks: Seq[AskPosition])
   case class OrderBookUpdate(bids: Seq[BidPosition], asks: Seq[AskPosition])
+  case class OrderBookHeartbeat(ts:LocalDateTime)
 
   def props(exchange: String, tradePair: TradePair, exchangeQueryAdapter: ActorRef, parentActor: ActorRef): Props =
     Props(new OrderBookManager(exchange, tradePair, exchangeQueryAdapter, parentActor))
@@ -44,10 +45,16 @@ case class OrderBookManager(exchange: String, tradePair: TradePair, exchangeQuer
 
     // Messages from Exchange
 
-    case GetOrderBook() =>
-      sender() ! orderBook
+    case GetOrderBook() => sender() ! orderBook
 
     // Messages from OrderBookStreamer
+    case OrderBookHeartbeat(ts) =>
+      orderBook = OrderBook(
+        exchange,
+        tradePair,
+        orderBook.bids,
+        orderBook.asks,
+        ts)
 
     case i: OrderBookInitialData =>
       orderBook = OrderBook(
@@ -55,8 +62,7 @@ case class OrderBookManager(exchange: String, tradePair: TradePair, exchangeQuer
         tradePair,
         i.bids.map(e => Tuple2(e.price, e)).toMap,
         i.asks.map(e => Tuple2(e.price, e)).toMap,
-        LocalDateTime.now()
-      )
+        LocalDateTime.now())
       if (log.isTraceEnabled) log.trace(s"OrderBook $tradePair received initial data")
       parentActor ! OrderBookManager.Initialized(tradePair)
 
@@ -68,8 +74,7 @@ case class OrderBookManager(exchange: String, tradePair: TradePair, exchangeQuer
         tradePair,
         (orderBook.bids ++ newBids).filter(_._2.qantity != 0.0d),
         (orderBook.asks ++ newAsks).filter(_._2.qantity != 0.0d),
-        LocalDateTime.now()
-      )
+        LocalDateTime.now())
 
       if (log.isTraceEnabled) {
         log.trace(s"OrderBook $exchange:$tradePair received update. $status")
