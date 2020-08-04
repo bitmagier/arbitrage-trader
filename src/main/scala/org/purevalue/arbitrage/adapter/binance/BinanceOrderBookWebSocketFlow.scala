@@ -106,3 +106,4 @@ object WebSocketJsonProtocoll extends DefaultJsonProtocol {
   implicit val subscribeResponseMsg: RootJsonFormat[SubscribeResponse] = jsonFormat2(SubscribeResponse)
   implicit val bookUpdate: RootJsonFormat[RawOrderBookUpdate] = jsonFormat7(RawOrderBookUpdate)
 }
+

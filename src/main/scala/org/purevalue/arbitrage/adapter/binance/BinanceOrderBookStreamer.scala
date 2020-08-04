@@ -1,17 +1,12 @@
 package org.purevalue.arbitrage.adapter.binance
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
-import akka.http.scaladsl.Http
-import akka.http.scaladsl.model._
-import akka.pattern.pipe
 import org.purevalue.arbitrage.OrderBookManager.{AskPosition, BidPosition, OrderBookInitialData, OrderBookUpdate}
 import org.purevalue.arbitrage.adapter.binance.BinanceAdapter.GetOrderBookSnapshot
 import org.purevalue.arbitrage.{ExchangeConfig, Main}
 import org.slf4j.LoggerFactory
-import spray.json.{DefaultJsonProtocol, JsonParser, RootJsonFormat}
 
 import scala.collection.mutable.ListBuffer
-import scala.concurrent.Future
 
 object BinanceOrderBookStreamer {
   def props(config: ExchangeConfig, tradePair: BinanceTradePair, binanceAdapter:ActorRef, receipient: ActorRef): Props = Props(new BinanceOrderBookStreamer(config, tradePair, binanceAdapter, receipient))
@@ -32,7 +27,8 @@ class BinanceOrderBookStreamer(config: ExchangeConfig, tradePair: BinanceTradePa
     val postInitEvents = buffer.filter(_.u > snapshotLastUpdateId)
     if (postInitEvents.nonEmpty) {
       if (!(postInitEvents.head.U <= snapshotLastUpdateId + 1 && postInitEvents.head.u >= snapshotLastUpdateId + 1)) {
-        log.warn(s"First Update event after OrderBookSnapshot (${postInitEvents.head}) does not match criteria U <= ${snapshotLastUpdateId + 1} AND u >= ${snapshotLastUpdateId + 1}")
+        log.warn(s"First Update event after OrderBookSnapshot (${postInitEvents.head}) does not match criteria " +
+          s"U <= ${snapshotLastUpdateId + 1} AND u >= ${snapshotLastUpdateId + 1}")
       }
     }
     postInitEvents.foreach(e => receipient ! toUpdate(e))
@@ -105,3 +101,5 @@ class BinanceOrderBookStreamer(config: ExchangeConfig, tradePair: BinanceTradePa
       log.error("received failure", cause)
   }
 }
+
+// TODO limit order book to about 100 entries - currently we have 1000; Hint: there is a levels-parameter [5,10,20] for the partial book depth stream, but how does it work?

@@ -11,8 +11,8 @@
   </appender>
 
   <logger name="org.purevalue.arbitrage" level="INFO"/>
-  <logger name="org.purevalue.arbitrage.OrderBookManager" level="TRACE"/>
-<!--  <logger name="org.purevalue.arbitrage.adapter.bitfinex" level="TRACE"/>-->
+  <logger name="org.purevalue.arbitrage.TradeRoom" level="TRACE"/>
+  <logger name="org.purevalue.arbitrage.trader.FooTrader" level="TRACE"/>
 
   <root level="INFO">
     <appender-ref ref="STDOUT" />

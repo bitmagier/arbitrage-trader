@@ -1,8 +1,15 @@
 package org.purevalue.arbitrage
 
-import akka.actor.{Actor, ActorRef, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
+import akka.pattern.{ask, pipe}
+import akka.util.Timeout
+import org.purevalue.arbitrage.Exchange.GetOrderBooks
+import org.purevalue.arbitrage.OrderBookManager.GetOrderBook
 import org.purevalue.arbitrage.adapter.ExchangeAdapterProxy.{GetTradePairs, TradePairs}
 import org.slf4j.LoggerFactory
+
+import scala.concurrent.duration.DurationInt
+import scala.concurrent.{ExecutionContextExecutor, Future}
 
 
 case class Wallet(asset: Asset, amountAvailable: Double)
@@ -10,18 +17,23 @@ case class Fee(makerFee: Double, takerFee: Double)
 
 
 object Exchange {
+  case class GetOrderBooks()
+
   def props(name: String, config: ExchangeConfig, adapter: ActorRef): Props = Props(new Exchange(name, config, adapter))
 }
 
 case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[Exchange])
+  implicit val actorSystem: ActorSystem = Main.actorSystem
+  implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
   val assets: Set[Asset] = GlobalConfig.assets.filter(e => config.assets.contains(e.officialSymbol))
   val fee: Fee = Fee(config.makerFee, config.takerFee)
   // dynamic
   var tradePairs: Set[TradePair] = _
-  var orderBooks: Map[TradePair, ActorRef] = _
+  var orderBookManagers: Map[TradePair, ActorRef] = _
   var orderBookInitPending: Set[TradePair] = _
+
   var wallets: Map[Asset, Wallet] = Map( // TODO
     Asset("BTC") -> Wallet(Asset("BTC"), 0.5),
     Asset("USDT") -> Wallet(Asset("USDT"), 2000.0),
@@ -37,9 +49,9 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
 
   def initOrderBooks(): Unit = {
     orderBookInitPending = tradePairs
-    orderBooks = Map[TradePair, ActorRef]()
+    orderBookManagers = Map[TradePair, ActorRef]()
     for (p <- tradePairs) {
-      orderBooks += (p -> context.actorOf(OrderBookManager.props(name, p, exchangeAdapter, self), s"$name.OrderBook-${p.baseAsset.officialSymbol}-${p.quoteAsset.officialSymbol}"))
+      orderBookManagers += (p -> context.actorOf(OrderBookManager.props(name, p, exchangeAdapter, self), s"$name.OrderBook-${p.baseAsset.officialSymbol}-${p.quoteAsset.officialSymbol}"))
     }
   }
 
@@ -49,6 +61,14 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
   }
 
   override def receive: Receive = {
+    case GetOrderBooks() =>
+      implicit val timeout = Timeout(2.seconds) // configuration
+      var orderBooks = List[Future[OrderBook]]()
+      for (obm <- orderBookManagers.values) {
+        orderBooks = (obm ? GetOrderBook()).mapTo[OrderBook] :: orderBooks
+      }
+      Future.sequence(orderBooks).pipeTo(sender())
+
     case TradePairs(t) =>
       tradePairs = t
       log.info(s"$name: ${tradePairs.size} TradePairs received: $tradePairs")

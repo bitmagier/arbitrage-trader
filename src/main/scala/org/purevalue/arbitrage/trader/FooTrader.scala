@@ -1,6 +1,7 @@
 package org.purevalue.arbitrage.trader
 
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props, Status}
 import com.typesafe.config.Config
@@ -10,7 +11,7 @@ import org.purevalue.arbitrage.trader.FooTrader.Trigger
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.ExecutionContextExecutor
-import scala.concurrent.duration.DurationInt
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
 
 object FooTrader {
@@ -30,7 +31,10 @@ class FooTrader(config: Config, tradeRoom: ActorRef) extends Actor {
   val maxOpenOrderBundles: Int = config.getInt("max-open-order-bundles")
   var pendingOrderBundles: Map[UUID, OrderBundle] = Map()
   var activeOrderBundles: Map[UUID, OrderBundle] = Map()
-  val schedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(0.seconds, 1.second, self, Trigger())
+
+  val scheduleRate:FiniteDuration = FiniteDuration(config.getDuration("schedule-rate").toNanos, TimeUnit.NANOSECONDS)
+
+  val schedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(0.seconds, scheduleRate, self, Trigger())
 
   def findBestShot(t: TradableAssets): Option[OrderBundle] = ???
 
