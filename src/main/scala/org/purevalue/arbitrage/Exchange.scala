@@ -2,7 +2,8 @@ package org.purevalue.arbitrage
 
 import java.time.LocalDateTime
 
-import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
+import akka.actor.SupervisorStrategy.Restart
+import akka.actor.{Actor, ActorRef, ActorSystem, OneForOneStrategy, Props, Status}
 import akka.pattern.{ask, pipe}
 import akka.util.Timeout
 import org.purevalue.arbitrage.Exchange._
@@ -10,6 +11,7 @@ import org.purevalue.arbitrage.TradePairDataManager.{Ask, Bid}
 import org.purevalue.arbitrage.adapter.ExchangeAdapterProxy.{GetTradePairs, TradePairs}
 import org.slf4j.LoggerFactory
 
+import scala.concurrent.duration.DurationInt
 import scala.concurrent.{ExecutionContextExecutor, Future}
 
 case class Ticker(exchange: String,
@@ -93,6 +95,11 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
     }
   }
 
+  override val supervisorStrategy =
+    OneForOneStrategy(maxNrOfRetries = 10, withinTimeRange = 15.minutes) {
+      case _ => Restart
+    }
+
   override def preStart(): Unit = {
     log.info(s"Initializing exchange $name")
     exchangeAdapter ! GetTradePairs
@@ -150,14 +157,14 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
 
     case TradePairs(t) =>
       tradePairs = t
-      log.debug(s"$name: ${tradePairs.size} TradePairs received: $tradePairs")
+      log.info(s"$name: ${tradePairs.size} TradePairs: $tradePairs")
       initTradePairBasedData()
 
     // Messages from TradePairDataManager
 
     case TradePairDataManager.Initialized(t) =>
       tradePairDataInitPending -= t
-      log.debug(s"[$name]: [$t] initialized. Still pending: $tradePairDataInitPending")
+      log.info(s"[$name]: [$t] initialized. Still pending: $tradePairDataInitPending")
       if (tradePairDataInitPending.isEmpty) {
         log.info(s"${Emoji.Robot} [$name]: all TradePair data initialized and running")
       }

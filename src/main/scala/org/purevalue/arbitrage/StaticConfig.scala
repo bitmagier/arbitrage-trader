@@ -28,6 +28,7 @@ object StaticConfig {
   private val exchangesConfig: Config = tradeRoomConfig.getConfig("exchange")
 
   def activeExchanges: Seq[String] = exchangesConfig.getStringList("active").asScala
+  def dataManagerInitTimeout: Duration = exchangesConfig.getDuration("data-manager-init-timeout")
 
   private def exchangeConfig(name:String, c: Config) = ExchangeConfig(
     name,

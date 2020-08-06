@@ -1,6 +1,6 @@
 package org.purevalue.arbitrage.trader
 
-import java.time.LocalDateTime
+import java.time.{Duration, Instant, LocalDateTime}
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -33,10 +33,14 @@ class FooTrader(config: Config, tradeRoom: ActorRef) extends Actor {
   val maxOpenOrderBundles: Int = config.getInt("max-open-order-bundles")
   var pendingOrderBundles: Map[UUID, OrderBundle] = Map()
   var activeOrderBundles: Map[UUID, OrderBundle] = Map()
+  var numSearchesTotal: Int = 0
+  var numSearchesDiff: Int = 0
+  var numSingleSearchesDiff: Int = 0
+  var lastLifeSigh: Instant = Instant.now()
 
   val scheduleRate: FiniteDuration = FiniteDuration(config.getDuration("schedule-rate").toNanos, TimeUnit.NANOSECONDS)
 
-  val schedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(0.seconds, scheduleRate, self, Trigger())
+  val schedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(10.seconds, scheduleRate, self, Trigger())
 
   def newUUID(): UUID = UUID.randomUUID() // switch to Time based UUID when connecting a DB like cassandra
 
@@ -54,17 +58,17 @@ class FooTrader(config: Config, tradeRoom: ActorRef) extends Actor {
     CryptoValue(asset, amount).convertTo(Asset("USDT"), dc)
 
   def findBestShotBasedOnOrderBook(tradePair: TradePair, dc: TradeDecisionContext): Option[OrderBundle] = {
-    val minBalanceBeforeTradeInUSDT = config.getDouble("order-bundle.min-balance-before-trade-in-usdt")
-    val whatsSpendablePerExchange: Map[String, Set[Asset]] =
-      dc.walletPerExchange
-        .map(pair => (
-          pair._1,
-          pair._2.assets
-            .filter(a => {
-              val usdt = convertToUSDT(a._2, a._1, dc);
-              usdt.isDefined && usdt.get >= minBalanceBeforeTradeInUSDT
-            })
-            .keySet))
+//    val minBalanceBeforeTradeInUSDT = config.getDouble("order-bundle.min-balance-before-trade-in-usdt")
+//    val whatsSpendablePerExchange: Map[String, Set[Asset]] =
+//      dc.walletPerExchange
+//        .map(pair => (
+//          pair._1,
+//          pair._2.assets
+//            .filter(a => {
+//              val usdt = convertToUSDT(a._2, a._1, dc);
+//              usdt.isDefined && usdt.get >= minBalanceBeforeTradeInUSDT
+//            })
+//            .keySet))
 
 //    val books4Buy = dc.orderBooks(tradePair).values
 //      .filter(b => whatsSpendablePerExchange(b.exchange).contains(b.tradePair.quoteAsset))
@@ -110,6 +114,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef) extends Actor {
     val amountBaseAsset = CryptoValue(Asset("USDT"), tradeQuantityUSDT).convertTo(tradePair.baseAsset, dc)
     if (amountBaseAsset.isEmpty)
       return None // only want to have assets convertible to USDT here
+
     val ourBuyBaseAssetOrder = Order(
       newUUID(),
       orderBundleId,
@@ -124,6 +129,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef) extends Actor {
     val amountQuoteAsset = CryptoValue(Asset("USDT"), tradeQuantityUSDT).convertTo(tradePair.quoteAsset, dc)
     if (amountQuoteAsset.isEmpty)
       return None
+
     val ourSellBaseAssetOrder = Order(
       newUUID(),
       orderBundleId,
@@ -155,15 +161,30 @@ class FooTrader(config: Config, tradeRoom: ActorRef) extends Actor {
   def findBestShot(dc: TradeDecisionContext): Option[OrderBundle] = {
     var result: Option[OrderBundle] = None
     for (tradePair <- dc.orderBooks.keySet) {
-      findBestShotBasedOnOrderBook(tradePair, dc) match {
-        case Some(shot) => if (result.isEmpty || shot.estimatedWinUSDT > result.get.estimatedWinUSDT) {
-          result = Some(shot)
+      if (dc.orderBooks(tradePair).size > 1) {
+        numSingleSearchesDiff += 1
+        findBestShotBasedOnOrderBook(tradePair, dc) match {
+          case Some(shot) => if (result.isEmpty || shot.estimatedWinUSDT > result.get.estimatedWinUSDT) {
+            result = Some(shot)
+          }
+          case None =>
         }
-        case None =>
       }
     }
     result
   }
+
+  def lifeSign(): Unit = {
+    val minutes = Duration.between(lastLifeSigh, Instant.now()).toMinutes
+    if (minutes > 3) {
+      log.info(s"Life sign: $numSearchesDiff search runs ($numSingleSearchesDiff single searches) done in last $minutes minutes. Total search runs: $numSearchesTotal")
+      lastLifeSigh = Instant.now()
+      numSingleSearchesDiff = 0
+      numSearchesDiff = 0
+    }
+  }
+
+  log.info("FooTrader up and running ...")
 
   override def receive: Receive = {
     // from Scheduler
@@ -177,6 +198,9 @@ class FooTrader(config: Config, tradeRoom: ActorRef) extends Actor {
 
     case t: TradeDecisionContext =>
       log.debug(s"Using TradeDecisionContext: with Tickers for Tradepairs[${t.tickers.keys}], OrderBooks for TradePairs[${t.orderBooks.keys}], etc.")
+      lifeSign()
+      numSearchesDiff += 1
+      numSearchesTotal += 1
       findBestShot(t) match {
         case Some(orderBundle) =>
           // TODO pendingOrderBundles += (orderBundle.id -> orderBundle)

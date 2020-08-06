@@ -8,7 +8,7 @@ import akka.http.scaladsl.Http
 import akka.http.scaladsl.model._
 import akka.http.scaladsl.model.ws.{TextMessage, _}
 import akka.stream.scaladsl._
-import org.purevalue.arbitrage.{Emoji, ExchangeConfig, Main, Ticker, TradePair}
+import org.purevalue.arbitrage._
 import org.slf4j.LoggerFactory
 import spray.json._
 
@@ -17,6 +17,7 @@ import scala.util.{Failure, Success}
 
 
 trait DecodedMessage
+case class UnknownDataMessage(m: String) extends DecodedMessage
 case class JsonMessage(j: JsObject) extends DecodedMessage
 case class SubscribeRequest(event: String = "subscribe", channel: String, symbol: String)
 
@@ -47,7 +48,7 @@ case class RawTicker(bid: Double, // Price of last highest bid
                      volume: Double, // Daily volume
                      high: Double, // Daily high
                      low: Double) { // Daily low
-  def toTicker(exchange:String, tradePair:TradePair): Ticker =
+  def toTicker(exchange: String, tradePair: TradePair): Ticker =
     Ticker(exchange, tradePair, bid, None, ask, None, lastPrice, None, None, LocalDateTime.now)
 }
 object RawTicker {
@@ -67,27 +68,32 @@ object WebSocketJsonProtocoll extends DefaultJsonProtocol {
 
   implicit object rawOrderBookEntryFormat extends RootJsonFormat[RawOrderBookEntry] {
     def read(value: JsValue): RawOrderBookEntry = RawOrderBookEntry(value.convertTo[Tuple3[Double, Int, Double]])
+
     def write(v: RawOrderBookEntry): JsValue = ???
   }
 
   implicit object rawOrderBookSnapshotFormat extends RootJsonFormat[RawOrderBookSnapshotMessage] {
     def read(value: JsValue): RawOrderBookSnapshotMessage = RawOrderBookSnapshotMessage(value.convertTo[Tuple2[Int, List[RawOrderBookEntry]]])
+
     def write(v: RawOrderBookSnapshotMessage): JsValue = ???
   }
 
   implicit object rawOrderBookUpdateFormat extends RootJsonFormat[RawOrderBookUpdateMessage] {
     def read(value: JsValue): RawOrderBookUpdateMessage = RawOrderBookUpdateMessage(value.convertTo[Tuple2[Int, RawOrderBookEntry]])
+
     def write(v: RawOrderBookUpdateMessage): JsValue = ???
   }
 
   implicit object rawTickerFormar extends RootJsonFormat[RawTicker] {
     def read(value: JsValue): RawTicker = RawTicker(value.convertTo[Array[Double]])
+
     def write(v: RawTicker): JsValue = ???
   }
 
   implicit object rawTickerMessageFormat extends RootJsonFormat[RawTickerMessage] {
     def read(value: JsValue): RawTickerMessage = RawTickerMessage(value.convertTo[Tuple2[Int, RawTicker]])
-    def write(v:RawTickerMessage): JsValue = ???
+
+    def write(v: RawTickerMessage): JsValue = ???
   }
 }
 
@@ -101,6 +107,7 @@ case class BitfinexTradePairBasedWebSockets(config: ExchangeConfig, tradePair: B
   private val log = LoggerFactory.getLogger(classOf[BitfinexTradePairBasedWebSockets])
 
   implicit val actorSystem: ActorSystem = Main.actorSystem
+
   import WebSocketJsonProtocoll._
   import actorSystem.dispatcher
 
@@ -147,12 +154,12 @@ case class BitfinexTradePairBasedWebSockets(config: ExchangeConfig, tradePair: B
                   case Some(_) => JsonParser(s).convertTo[RawOrderBookSnapshotMessage]
                   case None => JsonParser(s).convertTo[RawOrderBookUpdateMessage]
                 }
-              case id@_ => throw new RuntimeException(s"${Emoji.SadAndConfused} bitfinex data message with unknown channelId $id received:\n$s")
+              case id@_ =>
+                log.error(s"${Emoji.SadAndConfused} bitfinex data message with unknown channelId $id received")
+                UnknownDataMessage(s)
             }
-
           case None => throw new RuntimeException(s"${Emoji.SadAndConfused} Unable to decode bifinex data message:\n$s")
         }
-
     }
   }
 
@@ -172,7 +179,7 @@ case class BitfinexTradePairBasedWebSockets(config: ExchangeConfig, tradePair: B
           case t: RawTickerMessage => tradePairDataStreamer ! t
           case d: RawOrderBookSnapshotMessage => tradePairDataStreamer ! d
           case d: RawOrderBookUpdateMessage => tradePairDataStreamer ! d
-          case x@_ => log.error(s"unhandled message: $x")
+          case x@_ => log.error(s"Unhandled message: $x")
         }
       }
     case msg: Message =>

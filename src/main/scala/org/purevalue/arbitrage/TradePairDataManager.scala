@@ -1,14 +1,18 @@
 package org.purevalue.arbitrage
 
-import java.time.LocalDateTime
+import java.time.{Duration, Instant, LocalDateTime}
 
-import akka.actor.{Actor, ActorRef, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, PoisonPill, Props, Status}
 import org.purevalue.arbitrage.TradePairDataManager._
 import org.purevalue.arbitrage.adapter.ExchangeAdapterProxy
 import org.slf4j.LoggerFactory
 
+import scala.concurrent.ExecutionContextExecutor
+import scala.concurrent.duration.DurationInt
+
 
 object TradePairDataManager {
+  case class InitCheck()
   case class GetTicker()
   case class GetOrderBook()
   case class Initialized(tradePair: TradePair)
@@ -34,6 +38,12 @@ case class TradePairDataManager(exchange: String, tradePair: TradePair, exchange
   private var orderBookInitialized = false
   private var orderBook: OrderBook = OrderBook(exchange, tradePair, Map(), Map(), LocalDateTime.MIN)
   private var ticker: Option[Ticker] = None
+  private var initTime: Instant = _
+
+  implicit val actorSystem: ActorSystem = Main.actorSystem
+  implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
+
+  val initCheckSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(5.seconds, 2.seconds, self, InitCheck())
 
   def initialized: Boolean = orderBookInitialized && ticker.isDefined
 
@@ -45,12 +55,21 @@ case class TradePairDataManager(exchange: String, tradePair: TradePair, exchange
   }
 
   override def preStart(): Unit = {
+    initTime = Instant.now()
     exchangeQueryAdapter ! ExchangeAdapterProxy.TradePairDataStreamRequest(tradePair)
   }
 
   def receive: Receive = {
 
     // Messages from Exchange
+    case InitCheck() =>
+      if (initialized) initCheckSchedule.cancel()
+      else {
+        if (Duration.between(initTime, Instant.now()).compareTo(StaticConfig.dataManagerInitTimeout) > 0) {
+          log.info(s"Killing TradePairDataManager[$exchange:$tradePair]")
+          self ! Kill
+        }
+      }
 
     case GetTicker() =>
       if (initialized)
@@ -100,3 +119,4 @@ case class TradePairDataManager(exchange: String, tradePair: TradePair, exchange
     orderBook.toCondensedString
   }
 }
+// TODO restart self if not initialized after a timeout of 60s
