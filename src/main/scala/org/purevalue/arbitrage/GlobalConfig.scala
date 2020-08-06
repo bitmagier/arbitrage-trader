@@ -1,14 +1,18 @@
 package org.purevalue.arbitrage
 
+import akka.actor.Props
+import org.purevalue.arbitrage.adapter.binance.BinanceAdapter
+import org.purevalue.arbitrage.adapter.bitfinex.BitfinexAdapter
+
 // Crypto asset / coin.
 // It should NOT be created somewhere else. The way to get it is via Asset(officialSymbol)
 case class Asset(officialSymbol: String, name: String)
 object Asset {
   def apply(officialSymbol: String): Asset = {
-    if (!GlobalConfig.assets.contains(officialSymbol)) {
+    if (!GlobalConfig.AllAssets.contains(officialSymbol)) {
       throw new RuntimeException(s"Unknown asset with officialSymbol $officialSymbol")
     }
-    GlobalConfig.assets(officialSymbol)
+    GlobalConfig.AllAssets(officialSymbol)
   }
 }
 
@@ -26,9 +30,15 @@ object TradePair {
   }
 }
 
-// this is the reference to know exactly about which asset (or coin) we are talking at each Exchange
-object GlobalConfig { // a static list for now
-  val assets: Map[String, Asset] = Seq(
+object GlobalConfig {
+  // all exchanges - used for init routine
+  val AllExchanges:Map[String, Function0[Props]] = Map(
+    "binance" -> (() =>  BinanceAdapter.props(StaticConfig.exchange("binance"))),
+    "bitfinex" -> (() => BitfinexAdapter.props(StaticConfig.exchange("bitfinex")))
+  )
+
+  // this is the reference to know exactly about which asset (or coin) we are talking at each Exchange
+  val AllAssets: Map[String, Asset] = Seq(
     Asset("BTC", "Bitcoin"),
     Asset("ETH", "Ethereum"),
     Asset("XRP", "Ripple"),

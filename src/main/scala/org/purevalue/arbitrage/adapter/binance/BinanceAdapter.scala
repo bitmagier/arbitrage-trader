@@ -32,7 +32,6 @@ object BinanceAdapter {
   case class GetOrderBookSnapshot(tradePair: BinanceTradePair)
 
   val baseEndpoint = "https://api.binance.com"
-  val exchangeName = "binance"
 
   def props(config: ExchangeConfig): Props = Props(new BinanceAdapter(config))
 }
@@ -48,12 +47,12 @@ class BinanceAdapter(config: ExchangeConfig) extends ExchangeAdapterProxy(config
 
   override def tradePairs: Set[TradePair] = binanceTradePairs.asInstanceOf[Set[TradePair]]
 
-  override def startStreamingTradePairBasedData(tradePair: TradePair, receipient: ActorRef): Unit = {
+  override def startStreamingTradePairData(tradePair: TradePair, tradePairDataManager: ActorRef): Unit = {
     val binanceTradePair = binanceTradePairs
       .find(e => e.baseAsset == tradePair.baseAsset && e.quoteAsset == tradePair.quoteAsset)
       .getOrElse(throw new RuntimeException(s"No binance tradepair $tradePair available"))
     tradePairBasedDataStreamer = tradePairBasedDataStreamer :+
-      context.actorOf(BinanceTradePairBasedDataStreamer.props(config, binanceTradePair, self, receipient), s"BinanceOrderBookStreamer-$tradePair")
+      context.actorOf(BinanceTradePairDataStreamer.props(config, binanceTradePair, self, tradePairDataManager), s"BinanceTradePairDataStreamer-$tradePair")
   }
 
   override def preStart(): Unit = {

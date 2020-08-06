@@ -20,7 +20,7 @@ class BitfinexAdapter(config: ExchangeConfig) extends ExchangeAdapterProxy(confi
   val baseRestEndpointPublic = "https://api-pub.bitfinex.com"
   val name: String = "BitfinexAdapter"
 
-  var orderBookStreamer: List[ActorRef] = List()
+  var tradePairDataStreamer: List[ActorRef] = List()
 
   var bitfinexAssets: Set[BitfinexSymbol] = _
   var bitfinexTradePairs: Set[BitfinexTradePair] = _
@@ -49,7 +49,7 @@ class BitfinexAdapter(config: ExchangeConfig) extends ExchangeAdapterProxy(confi
 
     bitfinexAssets = currencies // apiSymbol, name
       .map(e => (e._1, apiSymbolToOfficialCurrencySymbolMapping.getOrElse(e._1, e._1))) // apiSymbol, officialSymbol
-      .filter(e => GlobalConfig.assets.keySet.contains(e._2)) // global crosscheck
+      .filter(e => GlobalConfig.AllAssets.keySet.contains(e._2)) // global crosscheck
       .filter(e => config.assets.contains(e._2)) // bitfinex config crosscheck
       .map(e => BitfinexSymbol(Asset(e._2), e._1))
       .toSet
@@ -68,8 +68,8 @@ class BitfinexAdapter(config: ExchangeConfig) extends ExchangeAdapterProxy(confi
         (apiSymbolToOfficialCurrencySymbolMapping.getOrElse(e._1, e._1), // resolve official currency symbols
           apiSymbolToOfficialCurrencySymbolMapping.getOrElse(e._2, e._2), e._3))
       .filter(e =>
-        GlobalConfig.assets.keySet.contains(e._1)
-          && GlobalConfig.assets.keySet.contains(e._2)) // crosscheck with global assets
+        GlobalConfig.AllAssets.keySet.contains(e._1)
+          && GlobalConfig.AllAssets.keySet.contains(e._2)) // crosscheck with global assets
       .filter(e =>
         bitfinexAssets.exists(_.currencySymbol.officialSymbol == e._1)
           && bitfinexAssets.exists(_.currencySymbol.officialSymbol == e._2)) // crosscheck with bitfinex (configured) assets
@@ -78,12 +78,12 @@ class BitfinexAdapter(config: ExchangeConfig) extends ExchangeAdapterProxy(confi
     if (log.isTraceEnabled) log.trace(s"bitfinexTradePairs: $bitfinexTradePairs")
   }
 
-  override def startStreamingTradePairBasedData(tradePair: TradePair, receipient: ActorRef): Unit = {
+  override def startStreamingTradePairData(tradePair: TradePair, tradePairDataManager: ActorRef): Unit = {
     val bitfinexTradePair = bitfinexTradePairs
       .find(e => e.baseAsset == tradePair.baseAsset && e.quoteAsset == tradePair.quoteAsset)
       .getOrElse(throw new RuntimeException(s"No corresponding bitfinex tradepair $tradePair available"))
-    orderBookStreamer = orderBookStreamer :+
-      context.actorOf(BitfinexOrderBookStreamer.props(config, bitfinexTradePair, receipient), s"BitfinexOrderBookStreamer-$tradePair")
+    tradePairDataStreamer = tradePairDataStreamer :+
+      context.actorOf(BitfinexTradePairDataStreamer.props(config, bitfinexTradePair, tradePairDataManager), s"BitfinexTradePairDataStreamer-$tradePair")
   }
 
   override def preStart(): Unit = {

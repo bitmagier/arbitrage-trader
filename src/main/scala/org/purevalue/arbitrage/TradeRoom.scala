@@ -1,19 +1,21 @@
 package org.purevalue.arbitrage
 
+import java.text.DecimalFormat
 import java.time.{Duration, Instant, LocalDateTime, ZonedDateTime}
 import java.util.UUID
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
 import akka.pattern.ask
 import akka.util.Timeout
+import org.purevalue.arbitrage.CryptoValue.formatPrice
 import org.purevalue.arbitrage.Exchange.{GetFee, GetOrderBooks, GetTickers, GetWallet}
 import org.purevalue.arbitrage.TradeRoom._
+import org.purevalue.arbitrage.adapter.ExchangeAdapterProxy
 import org.purevalue.arbitrage.adapter.binance.BinanceAdapter
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexAdapter
 import org.slf4j.LoggerFactory
 
 import scala.collection.mutable.{ArrayBuffer, ListBuffer}
-import scala.concurrent.duration.DurationInt
 import scala.concurrent.{ExecutionContextExecutor, Future}
 import scala.util.{Failure, Success}
 
@@ -31,6 +33,11 @@ case class CryptoValue(asset: Asset, amount: Double) {
       amount * dc.referenceTicker(TradePair.of(this.asset, asset)).lastPrice
     }
   }
+
+  override def toString: String = s"${formatPrice(amount)} ${asset.officialSymbol}"
+}
+object CryptoValue {
+  def formatPrice(d: Double): String = new DecimalFormat("#.##########").format(d)
 }
 
 /** Order: a single trade request before it's execution */
@@ -98,7 +105,7 @@ object TradeRoom {
                          trader: ActorRef,
                          creationTime: LocalDateTime,
                          orders: Seq[Order],
-                         estimatedWin: CryptoValue, // TODO converted to USDT
+                         estimatedWinUSDT: Double,
                          decisionComment: String)
   // communication with trader OUTGOING
   case class TradeDecisionContext(tickers: Map[TradePair, Map[String, Ticker]],
@@ -155,17 +162,6 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   // TODO buffer+persist completed order bundles to a database instead (cassandra?)
   var completedOrderBundles: Map[UUID, CompletedOrderBundle] = Map() // orderBundleID -> CompletedOrderBundle
 
-  override def preStart(): Unit = {
-    exchanges += "binance" -> context.actorOf(Exchange.props("binance", StaticConfig.exchange("binance"),
-      context.actorOf(BinanceAdapter.props(StaticConfig.exchange("binance")), "BinanceAdapter")), "binance")
-
-    exchanges += "bitfinex" -> context.actorOf(Exchange.props("bitfinex", StaticConfig.exchange("bitfinex"),
-      context.actorOf(BitfinexAdapter.props(StaticConfig.exchange("bitfinex")), "BitfinexAdapter")), "bitfinex")
-
-    log.info(s"Initializing exchanges: ${exchanges.keys}")
-
-    //    traders += "FooTrader" -> context.actorOf(FooTrader.props(StaticConfig.trader("foo-trader")), "FooTrader")
-  }
 
   def calculateBill(trades: List[Trade]): Seq[CryptoValue] = { // TODO move calc function to Trade class
     val rawInvoice = ArrayBuffer[(Asset, Double)]()
@@ -197,8 +193,8 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     Duration.between(t.lastUpdated, now).compareTo(config.maxDataAge) <= 0
   }
 
-  def collectTradableAssets(): Future[TradeDecisionContext] = {
-    implicit val timeout: Timeout = Timeout(2.seconds) // TODO configuration
+  def collectTradeDecisionContext(): Future[TradeDecisionContext] = {
+    implicit val timeout: Timeout = config.internalCommunicationTimeout
     var tickerFutures = List[Future[List[Ticker]]]()
     var orderBookFutures = List[Future[List[OrderBook]]]()
     var walletFutures = List[Future[Wallet]]()
@@ -251,10 +247,11 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   }
 
   def placeOrderBundleOrders(t: OrderBundle): Unit = {
-    tradesPerActiveOrderBundle += (t.id -> ListBuffer())
-    for (order <- t.orders) {
-      exchanges(order.exchange) ! PlaceOrder(order)
-    }
+    log.debug(s"got order bundle to place: $t")
+//    tradesPerActiveOrderBundle += (t.id -> ListBuffer())
+//    for (order <- t.orders) {
+//      exchanges(order.exchange) ! PlaceOrder(order)
+//    }
   }
 
   def orderPlaced(orderId: UUID, placementTime: ZonedDateTime): Option[OrderBundlePlaced] = {
@@ -303,24 +300,87 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     answer
   }
 
-  def checkIfEnoughBalanceAvailable(t: OrderBundle): Boolean = true // TODO seriously
+  def checkIfEnoughBalanceAvailable(o: Order): Boolean = {
+    // a possibly (somewhat) aged DC is good enough here
+    val wallet: Wallet = dcCache.get.walletPerExchange(o.exchange)
+    val coinsToSpend: CryptoValue = if (o.direction == TradeDirection.Buy) {
+      CryptoValue(o.tradePair.quoteAsset, o.limit * (1.0d + o.fee.takerFee))
+    } else {
+      CryptoValue(o.tradePair.baseAsset, o.limit * (1.0d + o.fee.takerFee))
+    }
+    if (wallet.assets(coinsToSpend.asset) < coinsToSpend.amount) {
+      log.warn(s" Wallet balance for ${coinsToSpend.asset} on exchange ${wallet.exchange} is not sufficient to spend $coinsToSpend")
+      false
+    } else {
+      true
+    }
+  }
+
+  def pullFreshTradeDecisionContext(): Option[TradeDecisionContext] = {
+    if (dcCache.isDefined &&
+      Duration.between(dcCacheTimestamp, Instant.now()).toMillis > config.cachedDataLifetime.toMillis) {
+
+      collectTradeDecisionContext() onComplete {
+        case Success(dc) => dcCache = Some(dc); dcCacheTimestamp = Instant.now()
+        case Failure(exxeption) => log.warn(s"${Emoji.SadFace} collectTradableAssets failed", exxeption)
+      }
+    }
+
+    val dataAge = Duration.between(dcCacheTimestamp, Instant.now())
+    if (dataAge.toMillis > config.maxDataAge.toMillis) {
+      log.error(s"${Emoji.SadAndConfused} cannot deliver TradeDecisionContext because our snapshot is out-dated (age: $dataAge)")
+      None
+    } else {
+      dcCache
+    }
+  }
+
+  def checkBalanceSufficient(ob: OrderBundle): Boolean = {
+    if (!ob.orders.forall(o => checkIfEnoughBalanceAvailable(o))) {
+      log.warn(s"${Emoji.LookingDown} Cannot place order bundle because available balances are not sufficient")
+      false
+    } else true
+  }
+
+
+  def initExchange(name:String, exchangeAdapterProps:Function0[Props]): Unit = {
+    val camelName = name.substring(0, 1).toUpperCase + name.substring(1)
+    exchanges += name -> context.actorOf(
+      Exchange.props(
+        name,
+        StaticConfig.exchange(name),
+        context.actorOf(exchangeAdapterProps.apply(), s"${camelName}Adapter")
+      ), camelName)
+  }
+
+  def initExchanges(): Unit = {
+    for (name:String <- StaticConfig.activeExchanges) {
+      initExchange(name, GlobalConfig.AllExchanges(name))
+    }
+  }
+
+  def initTraders(): Unit = {
+    //    traders += "FooTrader" -> context.actorOf(FooTrader.props(StaticConfig.trader("foo-trader")), "FooTrader")
+  }
+
+  override def preStart(): Unit = {
+    initExchanges()
+    initTraders()
+  }
 
   def receive: Receive = {
 
     // messages from Trader
 
     case GetTradeDecisionContext() =>
-      if (dcCache.isDefined && Duration.between(dcCacheTimestamp, Instant.now()).toMillis > 500) { // TODO configure max cache age
-        collectTradableAssets() onComplete {
-          case Success(dc) => dcCache = Some(dc); dcCacheTimestamp = Instant.now()
-          case Failure(exxeption) => log.error("collectTradableAssets failed", exxeption)
-        }
+      pullFreshTradeDecisionContext() match {
+        case Some(dc) => sender() ! dc
+        case None =>
       }
-      sender() ! dcCache.get
 
-    case t: OrderBundle =>
-      if (checkIfEnoughBalanceAvailable(t)) { // this is the safety-check, the original check should have been done by trader already before
-        placeOrderBundleOrders(t)
+    case ob: OrderBundle =>
+      if (checkBalanceSufficient(ob)) { // this is the safety-check, the original check should have been done by trader already before
+        placeOrderBundleOrders(ob)
       }
 
     // messages from Exchange

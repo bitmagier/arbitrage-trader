@@ -54,7 +54,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef) extends Actor {
       dc.walletPerExchange
         .map(pair => (
           pair._1,
-          pair._2.values
+          pair._2.assets
             .filter(a => convertToUSDT(a._2, a._1, dc) >= minBalanceBeforeTradeInUSDT)
             .keySet))
 
@@ -71,55 +71,56 @@ class FooTrader(config: Config, tradeRoom: ActorRef) extends Actor {
 
     val tradeQuantityUSDT = config.getDouble("order-bundle.trade-amount-in-usdt")
 
-    val lowestBid: Tuple2[String, BidPosition] = // that's what we try to buy
+    val highestBid: Tuple2[String, BidPosition] = // that's what we try to buy
       books4Buy
-        .map(e => (e.exchange, e.lowestBid))
-        .minBy(_._2.price)
-    val highestAsk: Tuple2[String, AskPosition] = // that's what we try to sell
+        .map(e => (e.exchange, e.highestBid))
+        .maxBy(_._2.price)
+    val lowestAsk: Tuple2[String, AskPosition] = // that's what we try to sell
       books4Sell
-      .map(e => (e.exchange, e.highestAsk))
-      .maxBy(_._2.price)
+      .map(e => (e.exchange, e.lowestAsk))
+      .minBy(_._2.price)
 
-    if (lowestBid._1 == highestAsk._1) {
-      log.warn(s"${Emoji.SadAndConfused} found lowest bid $lowestBid and highest ask $highestAsk on the same exchange.")
+    if (highestBid._1 == lowestAsk._1) {
+      log.warn(s"${Emoji.SadAndConfused} found highest bid $highestBid and lowest ask $lowestAsk on the same exchange.")
       return None
     }
 
     val orderBundleId = newUUID()
     val orderLimitAdditionPct:Double = config.getDouble("order-bundle.order-limit-addition-percentage")
     val amountBaseAsset = CryptoValue(Asset("USDT"), tradeQuantityUSDT).convertTo(tradePair.baseAsset, dc)
-    val buyBaseAssetOrder = Order(
+    val ourBuyBaseAssetOrder = Order(
       newUUID(),
       orderBundleId,
-      lowestBid._1,
+      lowestAsk._1,
       tradePair,
       TradeDirection.Buy,
-      dc.feePerExchange(lowestBid._1),
+      dc.feePerExchange(lowestAsk._1),
       Some(amountBaseAsset),
       None,
-      lowestBid._2.price * (1.0d + orderLimitAdditionPct*0.01d))
+      lowestAsk._2.price * (1.0d + orderLimitAdditionPct*0.01d))
+
     val amountQuoteAsset = CryptoValue(Asset("USDT"), tradeQuantityUSDT).convertTo(tradePair.quoteAsset, dc)
-    val sellBaseAssetOrder = Order(
+    val ourSellBaseAssetOrder = Order(
       newUUID(),
       orderBundleId,
-      highestAsk._1,
+      highestBid._1,
       tradePair,
       TradeDirection.Sell,
-      dc.feePerExchange(highestAsk._1),
+      dc.feePerExchange(highestBid._1),
       None,
       Some(amountQuoteAsset),
-      highestAsk._2.price * (1.0d - orderLimitAdditionPct*0.01d)
+      highestBid._2.price * (1.0d - orderLimitAdditionPct*0.01d)
     )
 
-    val estimatedWinUSDT: Double = calculateWinUSDT(Seq(buyBaseAssetOrder, sellBaseAssetOrder), dc)
+    val estimatedWinUSDT: Double = calculateWinUSDT(Seq(ourBuyBaseAssetOrder, ourSellBaseAssetOrder), dc)
     if (estimatedWinUSDT >= config.getDouble("order-bundle.min-gain-in-usdt")) {
       Some(OrderBundle(
         orderBundleId,
         name,
         self,
         LocalDateTime.now(),
-        List(buyBaseAssetOrder, sellBaseAssetOrder),
-        CryptoValue(Asset("USDT"), estimatedWinUSDT),
+        List(ourBuyBaseAssetOrder, ourSellBaseAssetOrder),
+        estimatedWinUSDT,
         ""
       ))
     } else {
@@ -131,7 +132,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef) extends Actor {
     var result: Option[OrderBundle] = None
     for (tradePair <- dc.orderBooks.keySet) {
       findBestShot(tradePair, dc) match {
-        case Some(shot) => if (result.isEmpty || shot.estimatedWin.convertTo(Asset("USDT"), dc) > result.get.estimatedWin.convertTo(Asset("USDT"), dc)) {
+        case Some(shot) => if (result.isEmpty || shot.estimatedWinUSDT > result.get.estimatedWinUSDT) {
           result = Some(shot)
         }
         case None =>

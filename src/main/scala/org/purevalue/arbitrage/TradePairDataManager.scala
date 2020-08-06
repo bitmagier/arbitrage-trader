@@ -4,7 +4,7 @@ import java.time.LocalDateTime
 
 import akka.actor.{Actor, ActorRef, Props, Status}
 import org.purevalue.arbitrage.TradePairDataManager._
-import org.purevalue.arbitrage.adapter.ExchangeAdapterProxy.TradePairBasedDataStreamRequest
+import org.purevalue.arbitrage.adapter.ExchangeAdapterProxy.TradePairDataStreamRequest
 import org.slf4j.LoggerFactory
 
 
@@ -12,11 +12,10 @@ object TradePairDataManager {
   case class GetTicker()
   case class GetOrderBook()
   case class Initialized(tradePair: TradePair)
-  case class BidPosition(price: Double, qantity: Double) // (likely aggregated) bid position(s) for a price level
-  case class AskPosition(price: Double, qantity: Double) // (likely aggregated) ask position(s) for a price level
+  case class BidPosition(price: Double, qantity: Double) // A bid is an offer to buy an asset; (likely aggregated) bid position(s) for a price level
+  case class AskPosition(price: Double, qantity: Double) // An ask is an offer to sell an asset; (likely aggregated) ask position(s) for a price level
   case class OrderBookInitialData(bids: Seq[BidPosition], asks: Seq[AskPosition])
   case class OrderBookUpdate(bids: Seq[BidPosition], asks: Seq[AskPosition])
-  case class ExchangeHeartbeat(ts:LocalDateTime)
 
   def props(exchange: String, tradePair: TradePair, exchangeQueryAdapter: ActorRef, parentActor: ActorRef): Props =
     Props(new TradePairDataManager(exchange, tradePair, exchangeQueryAdapter, parentActor))
@@ -31,7 +30,7 @@ case class TradePairDataManager(exchange: String, tradePair: TradePair, exchange
   private var ticker: Ticker = _
 
   override def preStart(): Unit = {
-    exchangeQueryAdapter ! TradePairBasedDataStreamRequest(tradePair)
+    exchangeQueryAdapter ! TradePairDataStreamRequest(tradePair)
   }
 
   def receive: Receive = {

@@ -1,24 +1,22 @@
 package org.purevalue.arbitrage.adapter.bitfinex
 
-import java.time.LocalDateTime
-
 import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
 import org.purevalue.arbitrage.TradePairDataManager._
 import org.purevalue.arbitrage.{ExchangeConfig, Main}
 import org.slf4j.LoggerFactory
 
 
-object BitfinexOrderBookStreamer {
-  def props(config: ExchangeConfig, tradePair: BitfinexTradePair, receipient: ActorRef): Props =
-    Props(new BitfinexOrderBookStreamer(config, tradePair, receipient))
+object BitfinexTradePairDataStreamer {
+  def props(config: ExchangeConfig, tradePair: BitfinexTradePair, tradePairDataManager: ActorRef): Props =
+    Props(new BitfinexTradePairDataStreamer(config, tradePair, tradePairDataManager))
 }
-class BitfinexOrderBookStreamer(config: ExchangeConfig, tradePair: BitfinexTradePair, receipient: ActorRef) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[BitfinexOrderBookStreamer])
+class BitfinexTradePairDataStreamer(config: ExchangeConfig, tradePair: BitfinexTradePair, tradePairDataManager: ActorRef) extends Actor {
+  private val log = LoggerFactory.getLogger(classOf[BitfinexTradePairDataStreamer])
   implicit val system: ActorSystem = Main.actorSystem
 
   private var orderBookWebSocketFlow: ActorRef = _
 
-  private def toOrderBookInitialData(snapshot: RawOrderBookSnapshot) = {
+  private def toOrderBookInitialData(snapshot: RawOrderBookSnapshotMessage) = {
     val bids = snapshot.values
       .filter(_.count > 0)
       .filter(_.amount > 0)
@@ -44,7 +42,7 @@ class BitfinexOrderBookStreamer(config: ExchangeConfig, tradePair: BitfinexTrade
     4.1 if amount = 1 then remove from bids
     4.2 if amount = -1 then remove from asks
   */
-  private def toOrderBookUpdate(update: RawOrderBookUpdate): OrderBookUpdate = {
+  private def toOrderBookUpdate(update: RawOrderBookUpdateMessage): OrderBookUpdate = {
     if (update.value.count > 0) {
       if (update.value.amount > 0)
         OrderBookUpdate(List(BidPosition(update.value.price, update.value.amount)), List())
@@ -70,20 +68,21 @@ class BitfinexOrderBookStreamer(config: ExchangeConfig, tradePair: BitfinexTrade
   }
 
   override def preStart() {
-    log.debug(s"BitfinexBookStreamer($tradePair) initializing...")
+    log.debug(s"BitfinexTradePairDataStreamer($tradePair) initializing...")
     orderBookWebSocketFlow = context.actorOf(BitfinexTradePairBasedWebSockets.props(config, tradePair, self))
   }
 
   override def receive: Receive = {
-    case h: Heartbeat =>
-      receipient ! ExchangeHeartbeat(LocalDateTime.now())
 
-    case snapshot: RawOrderBookSnapshot =>
+    case s: RawOrderBookSnapshotMessage =>
       log.debug(s"Initializing OrderBook($tradePair) with received snapshot")
-      receipient ! toOrderBookInitialData(snapshot)
+      tradePairDataManager ! toOrderBookInitialData(s)
 
-    case update: RawOrderBookUpdate =>
-      receipient ! toOrderBookUpdate(update)
+    case u: RawOrderBookUpdateMessage =>
+      tradePairDataManager ! toOrderBookUpdate(u)
+
+    case t: RawTickerMessage =>
+      tradePairDataManager ! t.value.toTicker(config.exchangeName, tradePair)
 
     case Status.Failure(cause) =>
       log.error("Failure received", cause)

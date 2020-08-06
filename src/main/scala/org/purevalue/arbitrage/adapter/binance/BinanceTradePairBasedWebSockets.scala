@@ -15,11 +15,11 @@ import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonF
 import scala.concurrent.{Future, Promise}
 
 object BinanceTradePairBasedWebSockets {
-  def props(config: ExchangeConfig, tradePair: BinanceTradePair, receiver: ActorRef): Props =
-    Props(new BinanceTradePairBasedWebSockets(config, tradePair, receiver))
+  def props(config: ExchangeConfig, tradePair: BinanceTradePair, tradePairDataStreamer: ActorRef): Props =
+    Props(new BinanceTradePairBasedWebSockets(config, tradePair, tradePairDataStreamer))
 }
 
-case class BinanceTradePairBasedWebSockets(config: ExchangeConfig, tradePair: BinanceTradePair, receiver: ActorRef) extends Actor {
+case class BinanceTradePairBasedWebSockets(config: ExchangeConfig, tradePair: BinanceTradePair, tradePairDataStreamer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BinanceTradePairBasedWebSockets])
   private val symbol = tradePair.symbol.toLowerCase()
   implicit val actorSystem: ActorSystem = Main.actorSystem
@@ -34,7 +34,7 @@ case class BinanceTradePairBasedWebSockets(config: ExchangeConfig, tradePair: Bi
   private def handleDepthUpdate(u: RawOrderBookUpdate): Unit = {
     if (log.isTraceEnabled) log.trace(s"received OrderBook update: $u")
     u match {
-      case u if u.s == tradePair.symbol => receiver ! u
+      case u if u.s == tradePair.symbol => tradePairDataStreamer ! u
       case x@_ => log.warn(s"${Emoji.Confused} RawOrderBookUpdate contains wrong TradePair. Expected was '$tradePair'. Message was: $x")
     }
   }
@@ -42,7 +42,7 @@ case class BinanceTradePairBasedWebSockets(config: ExchangeConfig, tradePair: Bi
   private def handleMiniTicker(t: RawTicker): Unit = {
     if (log.isTraceEnabled) log.trace(s"received MiniTicker: $t")
     t match {
-      case t if t.s == tradePair.symbol => receiver ! t
+      case t if t.s == tradePair.symbol => tradePairDataStreamer ! t
       case x@_ => log.warn(s"${Emoji.Confused} RawMiniTicker contains wrong TradePair. Expected was '$tradePair'. Message was: $x`")
     }
   }
@@ -136,7 +136,7 @@ case class RawTicker(e: String, // e == "24hrTicker"
                      F: Long, // first trade ID
                      L: Long, // last trade ID
                      n: Long) { // total number of trades
-  def toTicker(exchange:String, tradePair:TradePair): Ticker = Ticker(exchange, tradePair, b, B, a, A, c, Q, w, LocalDateTime.now)
+  def toTicker(exchange:String, tradePair:TradePair): Ticker = Ticker(exchange, tradePair, b, Some(B), a, Some(A), c, Some(Q), Some(w), LocalDateTime.now)
 }
 
 object WebSocketJsonProtocoll extends DefaultJsonProtocol {

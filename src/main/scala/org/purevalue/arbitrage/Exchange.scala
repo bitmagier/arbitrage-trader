@@ -1,6 +1,5 @@
 package org.purevalue.arbitrage
 
-import java.text.DecimalFormat
 import java.time.LocalDateTime
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
@@ -11,18 +10,17 @@ import org.purevalue.arbitrage.TradePairDataManager.{AskPosition, BidPosition, G
 import org.purevalue.arbitrage.adapter.ExchangeAdapterProxy.{GetTradePairs, TradePairs}
 import org.slf4j.LoggerFactory
 
-import scala.concurrent.duration.DurationInt
 import scala.concurrent.{ExecutionContextExecutor, Future}
 
 case class Ticker(exchange:String,
                   tradePair: TradePair,
-                  bestBidPrice: Double,
-                  bestBidQuantity: Double,
-                  bestAskPrice: Double,
-                  bestAskQuantity: Double,
+                  highestBidPrice: Double,
+                  highestBidQuantity: Option[Double], // is not available at some exchanges (e.g. bitfinex)
+                  lowestAskPrice: Double,
+                  lowestAskQuantity: Option[Double], // is not available at some exchanges (e.g. bitfinex)
                   lastPrice: Double,
-                  lastQuantity: Double,
-                  weightedAveragePrice: Double,
+                  lastQuantity: Option[Double], // is not available at some exchanges (e.g. bitfinex)
+                  weightedAveragePrice: Option[Double], // is not available at some exchanges (e.g. bitfinex)
                   lastUpdated: LocalDateTime)
 
 case class OrderBook(exchange:String,
@@ -30,18 +28,20 @@ case class OrderBook(exchange:String,
                      bids: Map[Double, BidPosition], // price-level -> bid
                      asks: Map[Double, AskPosition], // price-level -> ask
                      lastUpdated: LocalDateTime) {
-  private def formatPrice(d: Double) = new DecimalFormat("#.##########").format(d)
 
-  def toCondensedString: String =
-    s"${bids.keySet.size} Bids(max price: ${formatPrice(bids.maxBy(_._2.price)._2.price)}) " +
-      s"${asks.keySet.size} Asks(min price: ${formatPrice(asks.minBy(_._2.price)._2.price)})"
+  def toCondensedString: String = {
+    val bestBid = highestBid
+    val bestAsk = lowestAsk
+    s"${bids.keySet.size} Bids (highest price: ${CryptoValue.formatPrice(bestBid.price)}, quantity: ${bestBid.qantity}) " +
+      s"${asks.keySet.size} Asks(lowest price: ${CryptoValue.formatPrice(bestAsk.price)}, quantity: ${bestAsk.qantity})"
+  }
 
-  def lowestBid:BidPosition = bids(bids.keySet.min)
-  def highestAsk:AskPosition = asks(asks.keySet.max)
+  def highestBid:BidPosition = bids(bids.keySet.max)
+  def lowestAsk:AskPosition = asks(asks.keySet.min)
 }
 
 case class Wallet(exchange: String,
-                  values: Map[Asset, Double])
+                  assets: Map[Asset, Double])
 
 case class Fee(exchange: String,
                makerFee: Double,
@@ -62,7 +62,7 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
-  val assets: Set[Asset] = GlobalConfig.assets.filter(e => config.assets.contains(e._2.officialSymbol)).values.toSet
+  val assets: Set[Asset] = GlobalConfig.AllAssets.filter(e => config.assets.contains(e._2.officialSymbol)).values.toSet
   val fee: Fee = Fee(name, config.makerFee, config.takerFee)
   // dynamic
   var tradePairs: Set[TradePair] = _
@@ -84,7 +84,8 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
     tradePairDataInitPending = tradePairs
     tradePairDataManagers = Map[TradePair, ActorRef]()
     for (p <- tradePairs) {
-      tradePairDataManagers += (p -> context.actorOf(TradePairDataManager.props(name, p, exchangeAdapter, self), s"$name.OrderBook-${p.baseAsset.officialSymbol}-${p.quoteAsset.officialSymbol}"))
+      tradePairDataManagers += (p -> context.actorOf(TradePairDataManager.props(name, p, exchangeAdapter, self),
+        s"$name.TradePairManager-${p.baseAsset.officialSymbol}-${p.quoteAsset.officialSymbol}"))
     }
   }
 
@@ -101,7 +102,7 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
       sender() ! wallet
 
     case GetOrderBooks() =>
-      implicit val timeout: Timeout = Timeout(2.seconds) // configuration
+      implicit val timeout: Timeout = StaticConfig.tradeRoom.internalCommunicationTimeout
       var orderBooks = List[Future[OrderBook]]()
       for (m <- tradePairDataManagers.values) {
         orderBooks = (m ? GetOrderBook()).mapTo[OrderBook] :: orderBooks
@@ -109,7 +110,7 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
       Future.sequence(orderBooks).pipeTo(sender())
 
     case GetTickers() =>
-      implicit val timeout: Timeout = Timeout(2.seconds)
+      implicit val timeout: Timeout = StaticConfig.tradeRoom.internalCommunicationTimeout
       var ticker = List[Future[Ticker]]()
       for (m <- tradePairDataManagers.values) {
         ticker = (m ? GetTickers()).mapTo[Ticker] :: ticker
@@ -126,13 +127,13 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
       log.info(s"$name: ${tradePairs.size} TradePairs received: $tradePairs")
       initTradePairBasedData()
 
-    // Messages from OrderBookManager
+    // Messages from TradePairDataManager
 
     case TradePairDataManager.Initialized(t) =>
       tradePairDataInitPending -= t
-      log.info(s"$name: OrderBook $t initialized. Still pending: $tradePairDataInitPending")
+      log.info(s"[$name]: [$t] initialized. Still pending: $tradePairDataInitPending")
       if (tradePairDataInitPending.isEmpty) {
-        log.info(s"$name: all OrderBooks initialized and running")
+        log.info(s"${Emoji.Robot} [$name]: all TradePair data initialized and running")
       }
 
     case Status.Failure(cause) =>
