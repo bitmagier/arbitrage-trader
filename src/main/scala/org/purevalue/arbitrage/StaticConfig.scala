@@ -5,7 +5,6 @@ import java.util.concurrent.TimeUnit
 
 import akka.util.Timeout
 import com.typesafe.config.{Config, ConfigFactory}
-import org.slf4j.LoggerFactory
 
 import scala.collection.JavaConverters._
 import scala.concurrent.duration.FiniteDuration

@@ -179,7 +179,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef) extends Actor {
       log.debug(s"Using TradeDecisionContext: with Tickers for Tradepairs[${t.tickers.keys}], OrderBooks for TradePairs[${t.orderBooks.keys}], etc.")
       findBestShot(t) match {
         case Some(orderBundle) =>
-          pendingOrderBundles += (orderBundle.id -> orderBundle)
+          // TODO pendingOrderBundles += (orderBundle.id -> orderBundle)
           tradeRoom ! orderBundle
         case None =>
       }
