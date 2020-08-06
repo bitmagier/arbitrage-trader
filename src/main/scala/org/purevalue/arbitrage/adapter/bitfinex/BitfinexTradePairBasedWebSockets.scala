@@ -54,13 +54,13 @@ object WebSocketJsonProtocoll extends DefaultJsonProtocol {
 }
 
 
-object BitfinexOrderBookWebSocketFlow {
+object BitfinexTradePairBasedWebSockets {
   def props(config: ExchangeConfig, tradePair: BitfinexTradePair, receiver: ActorRef): Props =
-    Props(new BitfinexOrderBookWebSocketFlow(config, tradePair, receiver))
+    Props(new BitfinexTradePairBasedWebSockets(config, tradePair, receiver))
 }
 
-case class BitfinexOrderBookWebSocketFlow(config: ExchangeConfig, tradePair: BitfinexTradePair, receiver: ActorRef) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[BitfinexOrderBookWebSocketFlow])
+case class BitfinexTradePairBasedWebSockets(config: ExchangeConfig, tradePair: BitfinexTradePair, receiver: ActorRef) extends Actor {
+  private val log = LoggerFactory.getLogger(classOf[BitfinexTradePairBasedWebSockets])
   implicit val actorSystem: ActorSystem = Main.actorSystem
 
   import WebSocketJsonProtocoll._

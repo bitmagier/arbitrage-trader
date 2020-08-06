@@ -3,7 +3,7 @@ package org.purevalue.arbitrage.adapter
 import akka.actor.{Actor, ActorRef, ActorSystem, Status}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.{ContentTypes, HttpEntity, HttpMethods, HttpRequest}
-import org.purevalue.arbitrage.adapter.ExchangeAdapterProxy.{GetTradePairs, OrderBookStreamRequest, TradePairs}
+import org.purevalue.arbitrage.adapter.ExchangeAdapterProxy.{GetTradePairs, TradePairBasedDataStreamRequest, TradePairs}
 import org.purevalue.arbitrage.{ExchangeConfig, Main, TradePair}
 import org.slf4j.LoggerFactory
 import spray.json.{DeserializationException, JsValue, JsonParser, JsonReader}
@@ -13,7 +13,7 @@ import scala.concurrent.{ExecutionContextExecutor, Future}
 object ExchangeAdapterProxy {
   case class GetTradePairs()
   case class TradePairs(value: Set[TradePair])
-  case class OrderBookStreamRequest(tradePair: TradePair)
+  case class TradePairBasedDataStreamRequest(tradePair: TradePair)
 }
 
 abstract class ExchangeAdapterProxy(config: ExchangeConfig) extends Actor {
@@ -25,7 +25,7 @@ abstract class ExchangeAdapterProxy(config: ExchangeConfig) extends Actor {
 
   def tradePairs: Set[TradePair]
 
-  def startStreamingOrderBook(tradePair: TradePair, receipient: ActorRef): Unit
+  def startStreamingTradePairBasedData(tradePair: TradePair, receipient: ActorRef): Unit
 
   override def receive: Receive = {
     // Messages from Exchange
@@ -35,8 +35,8 @@ abstract class ExchangeAdapterProxy(config: ExchangeConfig) extends Actor {
 
     // Messages from OrderBookManager
 
-    case OrderBookStreamRequest(tradePair) =>
-      startStreamingOrderBook(tradePair, sender())
+    case TradePairBasedDataStreamRequest(tradePair) =>
+      startStreamingTradePairBasedData(tradePair, sender())
 
     case Status.Failure(cause) =>
       log.error("received failure", cause)

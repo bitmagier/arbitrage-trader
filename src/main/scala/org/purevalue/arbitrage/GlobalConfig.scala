@@ -1,29 +1,34 @@
 package org.purevalue.arbitrage
 
-// Crypto asset or coin.
+// Crypto asset / coin.
 // It should NOT be created somewhere else. The way to get it is via Asset(officialSymbol)
 case class Asset(officialSymbol: String, name: String)
 object Asset {
-  def apply(officialSymbol: String): Asset =
-    GlobalConfig.assets.find(e => e.officialSymbol == officialSymbol)
-      .getOrElse(throw new RuntimeException(s"Unknown asset with officialSymbol $officialSymbol"))
+  def apply(officialSymbol: String): Asset = {
+    if (!GlobalConfig.assets.contains(officialSymbol)) {
+      throw new RuntimeException(s"Unknown asset with officialSymbol $officialSymbol")
+    }
+    GlobalConfig.assets(officialSymbol)
+  }
 }
 
 
 // a universal usable trade-pair
-trait TradePair {
-  def baseAsset: Asset
-  def quoteAsset: Asset
+abstract class TradePair {
+  val baseAsset: Asset
+  val quoteAsset: Asset
   override def toString: String = s"${baseAsset.officialSymbol}:${quoteAsset.officialSymbol}"
 }
-trait GlobalConfig {
-  def assets: Set[Asset]
-
-  def tradePairs: Set[TradePair]
+object TradePair {
+  def of(b: Asset, q:Asset): TradePair = new TradePair {
+    override val baseAsset: Asset = b
+    override val quoteAsset: Asset = q
+  }
 }
+
 // this is the reference to know exactly about which asset (or coin) we are talking at each Exchange
 object GlobalConfig { // a static list for now
-  val assets = Set(
+  val assets: Map[String, Asset] = Seq(
     Asset("BTC", "Bitcoin"),
     Asset("ETH", "Ethereum"),
     Asset("XRP", "Ripple"),
@@ -84,7 +89,7 @@ object GlobalConfig { // a static list for now
     Asset("LSK", "Lisk"),
     Asset("WAVES", "Waves"),
     Asset("SXP", "Swipe")
-  )
+  ).map(a => (a.officialSymbol, a)).toMap
 }
 
 // TODO later: automatically initialize this list from a reliable network source (coinmarketcap.com etc) and limit it by a minimum market-cap of $100.000.000

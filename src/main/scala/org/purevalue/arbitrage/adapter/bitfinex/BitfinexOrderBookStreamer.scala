@@ -3,7 +3,7 @@ package org.purevalue.arbitrage.adapter.bitfinex
 import java.time.LocalDateTime
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
-import org.purevalue.arbitrage.OrderBookManager._
+import org.purevalue.arbitrage.TradePairDataManager._
 import org.purevalue.arbitrage.{ExchangeConfig, Main}
 import org.slf4j.LoggerFactory
 
@@ -71,12 +71,12 @@ class BitfinexOrderBookStreamer(config: ExchangeConfig, tradePair: BitfinexTrade
 
   override def preStart() {
     log.debug(s"BitfinexBookStreamer($tradePair) initializing...")
-    orderBookWebSocketFlow = context.actorOf(BitfinexOrderBookWebSocketFlow.props(config, tradePair, self))
+    orderBookWebSocketFlow = context.actorOf(BitfinexTradePairBasedWebSockets.props(config, tradePair, self))
   }
 
   override def receive: Receive = {
     case h: Heartbeat =>
-      receipient ! OrderBookHeartbeat(LocalDateTime.now())
+      receipient ! ExchangeHeartbeat(LocalDateTime.now())
 
     case snapshot: RawOrderBookSnapshot =>
       log.debug(s"Initializing OrderBook($tradePair) with received snapshot")

@@ -32,6 +32,7 @@ object BinanceAdapter {
   case class GetOrderBookSnapshot(tradePair: BinanceTradePair)
 
   val baseEndpoint = "https://api.binance.com"
+  val exchangeName = "binance"
 
   def props(config: ExchangeConfig): Props = Props(new BinanceAdapter(config))
 }
@@ -42,11 +43,18 @@ class BinanceAdapter(config: ExchangeConfig) extends ExchangeAdapterProxy(config
   val name: String = "BinanceAdapter"
 
   private var exchangeInfo: RawBinanceExchangeInformation = _
-  private var orderBookStreamer: List[ActorRef] = List()
+  private var tradePairBasedDataStreamer: List[ActorRef] = List()
   private var binanceTradePairs: Set[BinanceTradePair] = _
 
   override def tradePairs: Set[TradePair] = binanceTradePairs.asInstanceOf[Set[TradePair]]
 
+  override def startStreamingTradePairBasedData(tradePair: TradePair, receipient: ActorRef): Unit = {
+    val binanceTradePair = binanceTradePairs
+      .find(e => e.baseAsset == tradePair.baseAsset && e.quoteAsset == tradePair.quoteAsset)
+      .getOrElse(throw new RuntimeException(s"No binance tradepair $tradePair available"))
+    tradePairBasedDataStreamer = tradePairBasedDataStreamer :+
+      context.actorOf(BinanceTradePairBasedDataStreamer.props(config, binanceTradePair, self, receipient), s"BinanceOrderBookStreamer-$tradePair")
+  }
 
   override def preStart(): Unit = {
     import BinanceJsonProtocol._
@@ -60,18 +68,9 @@ class BinanceAdapter(config: ExchangeConfig) extends ExchangeAdapterProxy(config
     log.debug("received ExchangeInfo")
   }
 
-  override def startStreamingOrderBook(tradePair: TradePair, receipient: ActorRef): Unit = {
-    val binanceTradePair = binanceTradePairs
-      .find(e => e.baseAsset == tradePair.baseAsset && e.quoteAsset == tradePair.quoteAsset)
-      .getOrElse(throw new RuntimeException(s"No binance tradepair $tradePair available"))
-    orderBookStreamer = orderBookStreamer :+
-      context.actorOf(BinanceOrderBookStreamer.props(config, binanceTradePair, self, receipient), s"BinanceOrderBookStreamer-$tradePair")
-  }
-
   override def receive: Receive = super.receive orElse {
 
-    // Messages from BinanceOrderBookStreamer
-
+    // Messages from BinanceTradePairBasedDataStreamer
     case GetOrderBookSnapshot(tradePair) =>
       import BinanceJsonProtocol._
       log.debug(s"Binance: Get OrderBookSnapshot for $tradePair")

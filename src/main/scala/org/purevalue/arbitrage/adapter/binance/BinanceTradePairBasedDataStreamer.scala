@@ -1,23 +1,23 @@
 package org.purevalue.arbitrage.adapter.binance
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
-import org.purevalue.arbitrage.OrderBookManager.{AskPosition, BidPosition, OrderBookInitialData, OrderBookUpdate}
+import org.purevalue.arbitrage.TradePairDataManager.{AskPosition, BidPosition, OrderBookInitialData, OrderBookUpdate}
 import org.purevalue.arbitrage.adapter.binance.BinanceAdapter.GetOrderBookSnapshot
 import org.purevalue.arbitrage.{ExchangeConfig, Main}
 import org.slf4j.LoggerFactory
 
 import scala.collection.mutable.ListBuffer
 
-object BinanceOrderBookStreamer {
+object BinanceTradePairBasedDataStreamer {
   def props(config: ExchangeConfig, tradePair: BinanceTradePair, binanceAdapter:ActorRef, receipient: ActorRef): Props =
-    Props(new BinanceOrderBookStreamer(config, tradePair, binanceAdapter, receipient))
+    Props(new BinanceTradePairBasedDataStreamer(config, tradePair, binanceAdapter, receipient))
 }
 
-class BinanceOrderBookStreamer(config: ExchangeConfig, tradePair: BinanceTradePair, binanceAdapter:ActorRef, receipient: ActorRef) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[BinanceOrderBookStreamer])
+class BinanceTradePairBasedDataStreamer(config: ExchangeConfig, tradePair: BinanceTradePair, binanceAdapter:ActorRef, receipient: ActorRef) extends Actor {
+  private val log = LoggerFactory.getLogger(classOf[BinanceTradePairBasedDataStreamer])
   implicit val system: ActorSystem = Main.actorSystem
 
-  private var orderBookWebSocketFlow: ActorRef = _
+  private var webSocketFlow: ActorRef = _
   private var bufferingPhase: Boolean = true
   private var orderBookSnapshotRequested: Boolean = false
   private val buffer = ListBuffer[RawOrderBookUpdate]()
@@ -33,7 +33,7 @@ class BinanceOrderBookStreamer(config: ExchangeConfig, tradePair: BinanceTradePa
           s"U <= ${snapshotLastUpdateId + 1} AND u >= ${snapshotLastUpdateId + 1}")
       }
     }
-    postInitEvents.foreach(e => receipient ! toUpdate(e))
+    postInitEvents.foreach(e => receipient ! toOrderBookUpdate(e))
     buffer.clear()
   }
 
@@ -66,7 +66,7 @@ class BinanceOrderBookStreamer(config: ExchangeConfig, tradePair: BinanceTradePa
     )
   }
 
-  private def toUpdate(r: RawOrderBookUpdate): OrderBookUpdate = {
+  private def toOrderBookUpdate(r: RawOrderBookUpdate): OrderBookUpdate = {
     OrderBookUpdate(
       r.b.map(e => toBidUpdate(e)),
       r.a.map(e => toAskUpdate(e))
@@ -80,26 +80,30 @@ class BinanceOrderBookStreamer(config: ExchangeConfig, tradePair: BinanceTradePa
     if (bufferingPhase) {
       buffer += update
     } else {
-      receipient ! toUpdate(update)
+      receipient ! toOrderBookUpdate(update)
     }
     lastUpdateEvent = update
   }
 
   override def preStart() {
     log.debug(s"BinanceOrderBookStreamer($tradePair) initializing...")
-    orderBookWebSocketFlow = context.actorOf(BinanceOrderBookWebSocketFlow.props(config, tradePair, self))
+    webSocketFlow = context.actorOf(BinanceTradePairBasedWebSockets.props(config, tradePair, self))
   }
 
   override def receive: Receive = {
-    case snapshot: RawOrderBookSnapshot =>
-      initOrderBook(snapshot)
+    case s: RawOrderBookSnapshot =>
+      initOrderBook(s)
 
-    case update: RawOrderBookUpdate =>
-      handleIncoming(update)
+    case u: RawOrderBookUpdate =>
+      handleIncoming(u)
       if (bufferingPhase && !orderBookSnapshotRequested) {
         orderBookSnapshotRequested = true
         binanceAdapter ! GetOrderBookSnapshot(tradePair) // when first update is received we ask for the snapshot
       }
+
+    case t:RawTicker =>
+      receipient ! t.toTicker(BinanceAdapter.exchangeName, tradePair)
+
     case Status.Failure(cause) =>
       log.error("received failure", cause)
   }

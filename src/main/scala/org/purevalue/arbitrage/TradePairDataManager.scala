@@ -1,60 +1,58 @@
 package org.purevalue.arbitrage
 
-import java.text.DecimalFormat
 import java.time.LocalDateTime
 
 import akka.actor.{Actor, ActorRef, Props, Status}
-import org.purevalue.arbitrage.OrderBookManager._
-import org.purevalue.arbitrage.adapter.ExchangeAdapterProxy.OrderBookStreamRequest
+import org.purevalue.arbitrage.TradePairDataManager._
+import org.purevalue.arbitrage.adapter.ExchangeAdapterProxy.TradePairBasedDataStreamRequest
 import org.slf4j.LoggerFactory
 
-case class OrderBook(exchange:String,
-                     tradePair: TradePair,
-                     bids: Map[Double, BidPosition],
-                     asks: Map[Double, AskPosition],
-                     lastUpdated: LocalDateTime) {
-  private def formatPrice(d: Double) = new DecimalFormat("#.##########").format(d)
 
-  def toCondensedString: String =
-    s"${bids.keySet.size} Bids(max price: ${formatPrice(bids.maxBy(_._2.price)._2.price)}) " +
-      s"${asks.keySet.size} Asks(min price: ${formatPrice(asks.minBy(_._2.price)._2.price)})"
-}
-
-object OrderBookManager {
+object TradePairDataManager {
+  case class GetTicker()
   case class GetOrderBook()
   case class Initialized(tradePair: TradePair)
   case class BidPosition(price: Double, qantity: Double) // (likely aggregated) bid position(s) for a price level
   case class AskPosition(price: Double, qantity: Double) // (likely aggregated) ask position(s) for a price level
   case class OrderBookInitialData(bids: Seq[BidPosition], asks: Seq[AskPosition])
   case class OrderBookUpdate(bids: Seq[BidPosition], asks: Seq[AskPosition])
-  case class OrderBookHeartbeat(ts:LocalDateTime)
+  case class ExchangeHeartbeat(ts:LocalDateTime)
 
   def props(exchange: String, tradePair: TradePair, exchangeQueryAdapter: ActorRef, parentActor: ActorRef): Props =
-    Props(new OrderBookManager(exchange, tradePair, exchangeQueryAdapter, parentActor))
+    Props(new TradePairDataManager(exchange, tradePair, exchangeQueryAdapter, parentActor))
 }
 
-case class OrderBookManager(exchange: String, tradePair: TradePair, exchangeQueryAdapter: ActorRef, parentActor: ActorRef) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[OrderBookManager])
+/**
+ * Manages all kind of data of one tradepair at one exchange
+ */
+case class TradePairDataManager(exchange: String, tradePair: TradePair, exchangeQueryAdapter: ActorRef, parentActor: ActorRef) extends Actor {
+  private val log = LoggerFactory.getLogger(classOf[TradePairDataManager])
   private var orderBook: OrderBook = OrderBook(exchange, tradePair, Map(), Map(), LocalDateTime.MIN)
+  private var ticker: Ticker = _
 
   override def preStart(): Unit = {
-    exchangeQueryAdapter ! OrderBookStreamRequest(tradePair)
+    exchangeQueryAdapter ! TradePairBasedDataStreamRequest(tradePair)
   }
 
   def receive: Receive = {
 
     // Messages from Exchange
 
+    case GetTicker() => sender() ! ticker
     case GetOrderBook() => sender() ! orderBook
 
-    // Messages from OrderBookStreamer
-    case OrderBookHeartbeat(ts) =>
-      orderBook = OrderBook(
-        exchange,
-        tradePair,
-        orderBook.bids,
-        orderBook.asks,
-        ts)
+
+    // Messages from TradePairBasedDataStreamer
+//    case ExchangeHeartbeat(ts) =>
+//      orderBook = OrderBook(
+//        exchange,
+//        tradePair,
+//        orderBook.bids,
+//        orderBook.asks,
+//        ts)
+
+    case t: Ticker =>
+      ticker = t
 
     case i: OrderBookInitialData =>
       orderBook = OrderBook(
@@ -64,7 +62,7 @@ case class OrderBookManager(exchange: String, tradePair: TradePair, exchangeQuer
         i.asks.map(e => Tuple2(e.price, e)).toMap,
         LocalDateTime.now())
       if (log.isTraceEnabled) log.trace(s"OrderBook $tradePair received initial data")
-      parentActor ! OrderBookManager.Initialized(tradePair)
+      parentActor ! TradePairDataManager.Initialized(tradePair)
 
     case u: OrderBookUpdate =>
       val newBids = u.bids.map(e => Tuple2(e.price, e)).toMap

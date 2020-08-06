@@ -1,12 +1,12 @@
 package org.purevalue.arbitrage
 
-import java.time.{Duration, LocalDateTime, ZonedDateTime}
+import java.time.{Duration, Instant, LocalDateTime, ZonedDateTime}
 import java.util.UUID
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
-import akka.pattern.{ask, pipe}
+import akka.pattern.ask
 import akka.util.Timeout
-import org.purevalue.arbitrage.Exchange.GetOrderBooks
+import org.purevalue.arbitrage.Exchange.{GetFee, GetOrderBooks, GetTickers, GetWallet}
 import org.purevalue.arbitrage.TradeRoom._
 import org.purevalue.arbitrage.adapter.binance.BinanceAdapter
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexAdapter
@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory
 import scala.collection.mutable.{ArrayBuffer, ListBuffer}
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{ExecutionContextExecutor, Future}
+import scala.util.{Failure, Success}
 
 sealed trait TradeDirection
 object TradeDirection extends TradeDirection {
@@ -22,7 +23,15 @@ object TradeDirection extends TradeDirection {
   case object Sell extends TradeDirection
 }
 
-case class CryptoValue(asset: Asset, amount: Double)
+case class CryptoValue(asset: Asset, amount: Double) {
+
+  def convertTo(asset: Asset, dc: TradeDecisionContext): Double = {
+    if (this.asset == asset) amount
+    else {
+      amount * dc.referenceTicker(TradePair.of(this.asset, asset)).lastPrice
+    }
+  }
+}
 
 /** Order: a single trade request before it's execution */
 case class Order(id: UUID,
@@ -31,8 +40,8 @@ case class Order(id: UUID,
                  tradePair: TradePair,
                  direction: TradeDirection,
                  fee: Fee,
-                 amountBaseAsset: Double,
-                 amountQuoteAsset: Double,
+                 amountBaseAsset: Option[Double], // is filled when buy baseAsset
+                 amountQuoteAsset: Option[Double], // is filled when sell baseAsset
                  limit: Double) {
   var placed: Boolean = false
   var placementTime: ZonedDateTime = _
@@ -40,6 +49,22 @@ case class Order(id: UUID,
   def setPlaced(ts: ZonedDateTime): Unit = {
     placed = true
     placementTime = ts
+  }
+
+  // costs & gains. positive value means we have a win, negative value means a loss
+  def bill: Seq[CryptoValue] = {
+    if (direction == TradeDirection.Buy)
+      Seq(
+        CryptoValue(tradePair.baseAsset, amountBaseAsset.get),
+        CryptoValue(tradePair.quoteAsset, -limit),
+        CryptoValue(tradePair.quoteAsset, -limit * fee.takerFee) // for now we just take the higher taker fee
+      )
+    else
+      Seq(
+        CryptoValue(tradePair.baseAsset, -limit),
+        CryptoValue(tradePair.baseAsset, -limit * fee.takerFee),
+        CryptoValue(tradePair.quoteAsset, amountQuoteAsset.get),
+      )
   }
 }
 
@@ -55,17 +80,44 @@ case class Trade(id: UUID,
                  executionRate: Double,
                  executionTime: ZonedDateTime,
                  wasMaker: Boolean,
-                 supervisorComments: Seq[String])
+                 supervisorComments: Seq[String]) // comments from TradeRoom "operator"
 
-case class CompletedOrderBundle(orderBundle: OrderBundle, executedAsInstructed: Boolean, executedTrades: Seq[Trade], earnings: Seq[CryptoValue])
+case class CompletedOrderBundle(orderBundle: OrderBundle,
+                                executedAsInstructed: Boolean,
+                                executedTrades: Seq[Trade],
+                                cancelledOrders: Seq[Order],
+                                bill: Seq[CryptoValue],
+                                earningUSDT: Double)
 
 object TradeRoom {
   // communication with trader INCOMING
-  case class GetTradableAssets()
+  case class GetTradeDecisionContext()
   /** High level order bundle, covering 2 or more trader orders */
-  case class OrderBundle(id: UUID, traderName: String, trader: ActorRef, creationTime: ZonedDateTime, orders: Set[Order], estimatedWin: CryptoValue, decisionInformation: String)
+  case class OrderBundle(id: UUID,
+                         traderName: String,
+                         trader: ActorRef,
+                         creationTime: LocalDateTime,
+                         orders: Seq[Order],
+                         estimatedWin: CryptoValue, // TODO converted to USDT
+                         decisionComment: String)
   // communication with trader OUTGOING
-  case class TradableAssets(tradable: Map[TradePair, Seq[OrderBook]])
+  case class TradeDecisionContext(tickers: Map[TradePair, Map[String, Ticker]],
+                                  orderBooks: Map[TradePair, Map[String, OrderBook]],
+                                  walletPerExchange: Map[String, Wallet],
+                                  feePerExchange: Map[String, Fee]) {
+    def referenceTicker(tradePair: TradePair): Ticker = {
+      var exchanges = StaticConfig.tradeRoom.referenceTickerExchanges
+      var ticker: Ticker = null
+      while (ticker == null) { // fallback implementation if primary ticker is not here because of exchange down or tiucker update too old
+        tickers(tradePair).get(exchanges.head) match {
+          case Some(t) => ticker = t
+          case None => exchanges = exchanges.tail
+        }
+      }
+      ticker
+    }
+  }
+
   case class OrderBundlePlaced(orderBundleId: UUID)
   case class OrderBundleCompleted(orderBundle: CompletedOrderBundle)
 
@@ -77,7 +129,7 @@ object TradeRoom {
   case class PlaceOrder(order: Order)
   case class CancelOrder()
 
-  def props(config:TradeRoomConfig): Props = Props(new TradeRoom(config))
+  def props(config: TradeRoomConfig): Props = Props(new TradeRoom(config))
 }
 
 /**
@@ -93,6 +145,8 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
   var exchanges: Map[String, ActorRef] = Map()
   var traders: Map[String, ActorRef] = Map()
+  var dcCache: Option[TradeDecisionContext] = None
+  var dcCacheTimestamp: Instant = _
 
   var activeOrders: Map[UUID, Order] = Map() // orderId -> Order; orders, belonging to activeOrderBundles & active at the corresponding exchange
   var tradesPerActiveOrderBundle: Map[UUID, ListBuffer[Trade]] = Map() // orderBundleId -> Trade; trades, belonging to activeOrderBundles & executed at an exchange
@@ -110,10 +164,10 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
     log.info(s"Initializing exchanges: ${exchanges.keys}")
 
-    //    traders += "foo" -> context.actorOf(FooTrader.props(StaticConfig.trader("foo")), "foo-trader")
+    //    traders += "FooTrader" -> context.actorOf(FooTrader.props(StaticConfig.trader("foo-trader")), "FooTrader")
   }
 
-  def calculateEarnings(trades: List[Trade]): Seq[CryptoValue] = {
+  def calculateBill(trades: List[Trade]): Seq[CryptoValue] = { // TODO move calc function to Trade class
     val rawInvoice = ArrayBuffer[(Asset, Double)]()
     for (trade <- trades) {
       val feeRate = if (trade.wasMaker) trade.fee.makerFee else trade.fee.takerFee
@@ -135,27 +189,65 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     invoiceAggregated.map(e => CryptoValue(e._1, e._2)).toSeq
   }
 
-  def isUpToDate(ob: OrderBook, now:LocalDateTime): Boolean = {
-    Duration.between(now, ob.lastUpdated).compareTo(config.maxOrderBookAge) < 0
+  def isUpToDate(ob: OrderBook, now: LocalDateTime): Boolean = {
+    Duration.between(ob.lastUpdated, now).compareTo(config.maxDataAge) <= 0
   }
 
-  def collectTradableAssets(): Future[TradableAssets] = {
+  def isUpToDate(t: Ticker, now: LocalDateTime): Boolean = {
+    Duration.between(t.lastUpdated, now).compareTo(config.maxDataAge) <= 0
+  }
+
+  def collectTradableAssets(): Future[TradeDecisionContext] = {
     implicit val timeout: Timeout = Timeout(2.seconds) // TODO configuration
-    var orderBooks = List[Future[List[OrderBook]]]()
+    var tickerFutures = List[Future[List[Ticker]]]()
+    var orderBookFutures = List[Future[List[OrderBook]]]()
+    var walletFutures = List[Future[Wallet]]()
+    var feeFutures = List[Future[Fee]]()
     for (exchange <- exchanges.values) {
-      orderBooks = (exchange ? GetOrderBooks()).mapTo[List[OrderBook]] :: orderBooks
+      tickerFutures = (exchange ? GetTickers()).mapTo[List[Ticker]] :: tickerFutures
+      orderBookFutures = (exchange ? GetOrderBooks()).mapTo[List[OrderBook]] :: orderBookFutures
+      walletFutures = (exchange ? GetWallet()).mapTo[Wallet] :: walletFutures
+      feeFutures = (exchange ? GetFee()).mapTo[Fee] :: feeFutures
     }
-    val o1: Future[List[OrderBook]] = Future.sequence(orderBooks).map(_.flatten)
     val now = LocalDateTime.now()
-    o1.map { l =>
-      var result = Map[TradePair, List[OrderBook]]()
-      for (ob <- l) {
-        if (isUpToDate(ob, now)) {
-          result = result + (ob.tradePair -> (ob :: result.getOrElse(ob.tradePair, List())))
+
+    val t1: Future[List[Ticker]] = Future.sequence(tickerFutures).map(_.flatten)
+    val futureTickers: Future[Map[TradePair, Map[String, Ticker]]] = t1.map { tickers =>
+      var result = Map[TradePair, Map[String, Ticker]]()
+      for (ticker <- tickers) {
+        if (isUpToDate(ticker, now)) {
+          result = result + (ticker.tradePair ->
+            (result.getOrElse(ticker.tradePair, Map()) + (ticker.exchange -> ticker)))
         }
       }
       result
-    }.map(o3 => TradableAssets(o3))
+    }
+
+    val o1: Future[List[OrderBook]] = Future.sequence(orderBookFutures).map(_.flatten)
+    val futureOrderBooks: Future[Map[TradePair, Map[String, OrderBook]]] = o1.map { books =>
+      var result = Map[TradePair, Map[String, OrderBook]]()
+      for (book <- books) {
+        if (isUpToDate(book, now)) {
+          result = result + (book.tradePair ->
+            (result.getOrElse(book.tradePair, Map()) + (book.exchange -> book)))
+        }
+      }
+      result
+    }
+    val futureWallets: Future[Map[String, Wallet]] =
+      Future.sequence(walletFutures)
+        .map(e => e.map(w => (w.exchange, w)).toMap)
+
+    val futureFees: Future[Map[String, Fee]] =
+      Future.sequence(feeFutures)
+        .map(e => e.map(f => (f.exchange, f)).toMap)
+
+    for {
+      orderBooks <- futureOrderBooks
+      wallets <- futureWallets
+      fees <- futureFees
+      tickers <- futureTickers
+    } yield TradeDecisionContext(tickers, orderBooks, wallets, fees)
   }
 
   def placeOrderBundleOrders(t: OrderBundle): Unit = {
@@ -177,6 +269,10 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     }
   }
 
+  def calculateEarningUSDT(bill: Seq[CryptoValue], dc: TradeDecisionContext): Double = {
+    bill.map(_.convertTo(Asset("USDT"), dc)).sum
+  }
+
   def orderExecuted(orderId: UUID, trade: Trade): Option[(ActorRef, OrderBundleCompleted)] = {
     var answer: Option[(ActorRef, OrderBundleCompleted)] = None
     val order = activeOrders(orderId)
@@ -184,16 +280,21 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     val orderBundleId = order.orderBundleId
     tradesPerActiveOrderBundle(orderBundleId) += trade
 
-    val orderIds: Set[UUID] = activeOrderBundles(orderBundleId).orders.map(_.id)
+    val orderIds: Seq[UUID] = activeOrderBundles(orderBundleId).orders.map(_.id)
     if (orderIds.forall(orderId => !activeOrders.contains(orderId))) {
       // collect trades and complete OrderBundle
       val trades = tradesPerActiveOrderBundle(orderBundleId).toList
+      val bill: Seq[CryptoValue] = calculateBill(trades)
+
       val completedOrderBundle = CompletedOrderBundle(
         activeOrderBundles(orderBundleId),
         executedAsInstructed = true,
         trades,
-        calculateEarnings(trades)
+        Seq(),
+        bill,
+        calculateEarningUSDT(bill, dcCache.get)
       )
+
       completedOrderBundles += (orderBundleId -> completedOrderBundle)
       tradesPerActiveOrderBundle -= orderBundleId
       answer = Some((activeOrderBundles(orderBundleId).trader, OrderBundleCompleted(completedOrderBundle)))
@@ -202,13 +303,25 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     answer
   }
 
+  def checkIfEnoughBalanceAvailable(t: OrderBundle): Boolean = true // TODO seriously
+
   def receive: Receive = {
 
     // messages from Trader
 
-    case GetTradableAssets() => collectTradableAssets().pipeTo(sender)
-    case t: OrderBundle => placeOrderBundleOrders(t)
+    case GetTradeDecisionContext() =>
+      if (dcCache.isDefined && Duration.between(dcCacheTimestamp, Instant.now()).toMillis > 500) { // TODO configure max cache age
+        collectTradableAssets() onComplete {
+          case Success(dc) => dcCache = Some(dc); dcCacheTimestamp = Instant.now()
+          case Failure(exxeption) => log.error("collectTradableAssets failed", exxeption)
+        }
+      }
+      sender() ! dcCache.get
 
+    case t: OrderBundle =>
+      if (checkIfEnoughBalanceAvailable(t)) { // this is the safety-check, the original check should have been done by trader already before
+        placeOrderBundleOrders(t)
+      }
 
     // messages from Exchange
 

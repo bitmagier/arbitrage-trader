@@ -1,24 +1,26 @@
 package org.purevalue.arbitrage.adapter.binance
 
+import java.time.LocalDateTime
+
 import akka.Done
 import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model._
 import akka.http.scaladsl.model.ws.{TextMessage, _}
 import akka.stream.scaladsl._
-import org.purevalue.arbitrage.{ExchangeConfig, Main}
+import org.purevalue.arbitrage._
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
 import scala.concurrent.{Future, Promise}
 
-object BinanceOrderBookWebSocketFlow {
+object BinanceTradePairBasedWebSockets {
   def props(config: ExchangeConfig, tradePair: BinanceTradePair, receiver: ActorRef): Props =
-    Props(new BinanceOrderBookWebSocketFlow(config, tradePair, receiver))
+    Props(new BinanceTradePairBasedWebSockets(config, tradePair, receiver))
 }
 
-case class BinanceOrderBookWebSocketFlow(config: ExchangeConfig, tradePair: BinanceTradePair, receiver: ActorRef) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[BinanceOrderBookWebSocketFlow])
+case class BinanceTradePairBasedWebSockets(config: ExchangeConfig, tradePair: BinanceTradePair, receiver: ActorRef) extends Actor {
+  private val log = LoggerFactory.getLogger(classOf[BinanceTradePairBasedWebSockets])
   private val symbol = tradePair.symbol.toLowerCase()
   implicit val actorSystem: ActorSystem = Main.actorSystem
 
@@ -31,11 +33,18 @@ case class BinanceOrderBookWebSocketFlow(config: ExchangeConfig, tradePair: Bina
 
   private def handleDepthUpdate(u: RawOrderBookUpdate): Unit = {
     if (log.isTraceEnabled) log.trace(s"received OrderBook update: $u")
-    val forward = u match {
-      case x if x.e == "depthUpdate" && x.s == tradePair.symbol => x
-      case x@_ => throw new RuntimeException(s"RawOrderBookUpdate contained something else than a 'depthUpdate' for '$tradePair'. Here it is: $x")
+    u match {
+      case u if u.s == tradePair.symbol => receiver ! u
+      case x@_ => log.warn(s"${Emoji.Confused} RawOrderBookUpdate contains wrong TradePair. Expected was '$tradePair'. Message was: $x")
     }
-    receiver ! forward
+  }
+
+  private def handleMiniTicker(t: RawTicker): Unit = {
+    if (log.isTraceEnabled) log.trace(s"received MiniTicker: $t")
+    t match {
+      case t if t.s == tradePair.symbol => receiver ! t
+      case x@_ => log.warn(s"${Emoji.Confused} RawMiniTicker contains wrong TradePair. Expected was '$tradePair'. Message was: $x`")
+    }
   }
 
   val sink: Sink[Message, Future[Done]] = Sink.foreach[Message] {
@@ -46,11 +55,13 @@ case class BinanceOrderBookWebSocketFlow(config: ExchangeConfig, tradePair: Bina
         .map {
           case j if j.fields.contains("result") => j.convertTo[SubscribeResponse]
           case j if j.fields.contains("e") && j.fields("e").convertTo[String] == "depthUpdate" => j.convertTo[RawOrderBookUpdate]
+          case j if j.fields.contains("e") && j.fields("e").convertTo[String] == "24hrMiniTicker" => j.convertTo[RawTicker]
           case x: JsObject => log.error(s"Unknown json message received: $x"); x
         } map {
         case m: SubscribeResponse => handleSubscribeResponse(m)
         case m: RawOrderBookUpdate => handleDepthUpdate(m)
-        }
+        case m: RawTicker => handleMiniTicker(m)
+      }
     case x@_ => log.warn(s"Received non TextMessage: $x")
   }
 
@@ -60,7 +71,8 @@ case class BinanceOrderBookWebSocketFlow(config: ExchangeConfig, tradePair: Bina
   Flow.fromSinkAndSourceCoupledMat(
     sink,
     Source(List(
-      TextMessage(StreamSubscribeRequest(params = Seq(s"$symbol@depth"), id = 1).toJson.compactPrint)
+      TextMessage(StreamSubscribeRequest(params = Seq(s"$symbol@depth"), id = 1).toJson.compactPrint),
+      TextMessage(StreamSubscribeRequest(params = Seq(s"$symbol@miniTicker"), id = 2).toJson.compactPrint)
     )).concatMat(Source.maybe[Message])(Keep.right))(Keep.right)
 
 
@@ -101,11 +113,37 @@ case class RawOrderBookUpdate(e: String /* depthUpdate */ , E: Long /* event tim
                               b: Seq[Seq[String]],
                               a: Seq[Seq[String]])
 
+case class RawTicker(e: String, // e == "24hrTicker"
+                     E: Long, // event time
+                     s: String, // symbol (e.g. BNBBTC)
+                     p: Double, // price change
+                     P: Double, // price change percent
+                     w: Double, // weighted average price
+//                     x: Double, // First trade(F)-1 price (first trade before the 24hr rolling window)
+                     c: Double, // last price
+                     Q: Double, // last quantity
+                     b: Double, // best bid price
+                     B: Double, // best bid quantity
+                     a: Double, // best ask price
+                     A: Double, // best ask quantity
+                     o: Double, // open price
+                     h: Double, // high price
+                     l: Double, // low price
+                     v: Double, // total traded base asset volume
+                     q: Double, // total traded quote asset volume
+                     O: Long, // statistics open time
+                     C: Long, // statistics close time
+                     F: Long, // first trade ID
+                     L: Long, // last trade ID
+                     n: Long) { // total number of trades
+  def toTicker(exchange:String, tradePair:TradePair): Ticker = Ticker(exchange, tradePair, b, B, a, A, c, Q, w, LocalDateTime.now)
+}
+
 object WebSocketJsonProtocoll extends DefaultJsonProtocol {
   implicit val subscribeMsg: RootJsonFormat[StreamSubscribeRequest] = jsonFormat3(StreamSubscribeRequest)
   implicit val subscribeResponseMsg: RootJsonFormat[SubscribeResponse] = jsonFormat2(SubscribeResponse)
   implicit val bookUpdate: RootJsonFormat[RawOrderBookUpdate] = jsonFormat7(RawOrderBookUpdate)
+  implicit val rawTicker: RootJsonFormat[RawTicker] = jsonFormat22(RawTicker)
 }
 
 // TODO handle temporary down trading pair - at init time - where no subscribe response is deliverd, as well as during trading time (event?)
-// TODO heartbeat
