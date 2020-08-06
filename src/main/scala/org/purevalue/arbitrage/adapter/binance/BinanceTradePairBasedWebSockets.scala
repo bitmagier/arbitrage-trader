@@ -55,10 +55,10 @@ case class BinanceTradePairBasedWebSockets(config: ExchangeConfig, tradePair: Bi
     case msg: TextMessage =>
       msg.toStrict(config.httpTimeout)
         .map(_.getStrictText)
-//        .map(s => {
-//          if (log.isTraceEnabled) log.trace(s)
-//          s
-//        })
+        //        .map(s => {
+        //          if (log.isTraceEnabled) log.trace(s)
+        //          s
+        //        })
         .map(s => JsonParser(s).asJsObject())
         .map {
           case j: JsObject if j.fields.contains("result") => j.convertTo[SubscribeResponse]
@@ -87,8 +87,8 @@ case class BinanceTradePairBasedWebSockets(config: ExchangeConfig, tradePair: Bi
   Flow.fromSinkAndSourceCoupledMat(
     sink,
     Source(List(
-      TextMessage(StreamSubscribeRequest(params = Seq(TickerStreamName), id = 1).toJson.compactPrint)
-      //      TextMessage(StreamSubscribeRequest(params = Seq(s"$symbol@depth"), id = 1).toJson.compactPrint),
+      TextMessage(StreamSubscribeRequest(params = Seq(TickerStreamName), id = 1).toJson.compactPrint),
+      TextMessage(StreamSubscribeRequest(params = Seq(OrderBookStreamName), id = 2).toJson.compactPrint)
     )).concatMat(Source.maybe[Message])(Keep.right))(Keep.right)
 
 

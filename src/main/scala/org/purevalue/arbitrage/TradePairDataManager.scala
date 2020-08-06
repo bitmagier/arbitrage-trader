@@ -4,7 +4,7 @@ import java.time.LocalDateTime
 
 import akka.actor.{Actor, ActorRef, Props, Status}
 import org.purevalue.arbitrage.TradePairDataManager._
-import org.purevalue.arbitrage.adapter.ExchangeAdapterProxy.TradePairDataStreamRequest
+import org.purevalue.arbitrage.adapter.ExchangeAdapterProxy
 import org.slf4j.LoggerFactory
 
 
@@ -31,7 +31,7 @@ case class TradePairDataManager(exchange: String, tradePair: TradePair, exchange
   private var orderBook: OrderBook = OrderBook(exchange, tradePair, Map(), Map(), LocalDateTime.MIN)
   private var ticker: Option[Ticker] = None
 
-  def initialized: Boolean = /*orderBookInitialized TODO && */ ticker.isDefined
+  def initialized: Boolean = orderBookInitialized && ticker.isDefined
 
   def eventuallyInitialized(): Unit = {
     if (!initializedMsgSend && initialized) {
@@ -41,7 +41,7 @@ case class TradePairDataManager(exchange: String, tradePair: TradePair, exchange
   }
 
   override def preStart(): Unit = {
-    exchangeQueryAdapter ! TradePairDataStreamRequest(tradePair)
+    exchangeQueryAdapter ! ExchangeAdapterProxy.TradePairDataStreamRequest(tradePair)
   }
 
   def receive: Receive = {

@@ -13,7 +13,6 @@ case class ExchangeConfig(exchangeName:String, assets: Set[String], makerFee: Do
 case class TradeRoomConfig(maxDataAge: Duration,
                            cachedDataLifetime: Duration,
                            referenceTickerExchanges: Seq[String],
-                           initTimeout: Timeout,
                            internalCommunicationTimeout: Timeout)
 
 object StaticConfig {
@@ -23,7 +22,6 @@ object StaticConfig {
       tradeRoomConfig.getDuration("max-data-age"),
       tradeRoomConfig.getDuration("cached-data-lifetime"),
       tradeRoomConfig.getStringList("reference-ticker-exchanges").asScala,
-      Timeout.create(tradeRoomConfig.getDuration("init-timeout")),
       Timeout.create(tradeRoomConfig.getDuration("internal-communication-timeout"))
     )
 

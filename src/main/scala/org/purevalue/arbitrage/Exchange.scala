@@ -105,7 +105,7 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
       if (!result) {
         log.debug(s"[$name] initialization pending: $tradePairDataInitPending")
       }
-      sender() ! IsInitializedResponse(initialized)
+      sender() ! Exchange.IsInitializedResponse(initialized)
 
     case GetWallet() =>
       if (initialized) {
@@ -114,17 +114,17 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
         log.debug(s"[$name] We have been asked to deliver the Wallet, but we are not yet fully initialized")
       }
 
-//    case GetOrderBooks() =>
-//      if (initialized) {
-//        implicit val timeout: Timeout = StaticConfig.tradeRoom.internalCommunicationTimeout
-//        var orderBooks = List[Future[OrderBook]]()
-//        for (m <- tradePairDataManagers.values) {
-//          orderBooks = (m ? GetOrderBook()).mapTo[OrderBook] :: orderBooks
-//        }
-//        Future.sequence(orderBooks).pipeTo(sender())
-//      } else {
-//        log.debug(s"[$name] We have been asked to deliver OrderBooks, but we are not yet fully initialized")
-//      }
+    case GetOrderBooks() =>
+      if (initialized) {
+        implicit val timeout: Timeout = StaticConfig.tradeRoom.internalCommunicationTimeout
+        var orderBooks = List[Future[OrderBook]]()
+        for (m <- tradePairDataManagers.values) {
+          orderBooks = (m ? TradePairDataManager.GetOrderBook()).mapTo[OrderBook] :: orderBooks
+        }
+        Future.sequence(orderBooks).pipeTo(sender())
+      } else {
+        log.debug(s"[$name] We have been asked to deliver OrderBooks, but we are not yet fully initialized")
+      }
 
     case GetTickers() =>
       if (initialized) {

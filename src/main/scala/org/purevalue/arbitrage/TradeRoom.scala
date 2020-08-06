@@ -110,7 +110,7 @@ object TradeRoom {
                          decisionComment: String)
   // communication with trader OUTGOING
   case class TradeDecisionContext(tickers: Map[TradePair, Map[String, Ticker]],
-//                                  orderBooks: Map[TradePair, Map[String, OrderBook]],
+                                  orderBooks: Map[TradePair, Map[String, OrderBook]],
                                   walletPerExchange: Map[String, Wallet],
                                   feePerExchange: Map[String, Fee]) {
     def referenceTicker(tradePair: TradePair): Ticker = {
@@ -197,13 +197,13 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   def collectTradeDecisionContext(): Future[TradeDecisionContext] = {
     implicit val timeout: Timeout = config.internalCommunicationTimeout
     var tickerFutures = List[Future[List[Ticker]]]()
-//    var orderBookFutures = List[Future[List[OrderBook]]]()
+    var orderBookFutures = List[Future[List[OrderBook]]]()
     var walletFutures = List[Future[Wallet]]()
     var feeFutures = List[Future[Fee]]()
     for (exchange <- exchanges.values) {
       if (Await.result((exchange ? IsInitialized()).mapTo[IsInitializedResponse], timeout.duration).initialized) {
         tickerFutures = (exchange ? GetTickers()).mapTo[List[Ticker]] :: tickerFutures
-//        orderBookFutures = (exchange ? GetOrderBooks()).mapTo[List[OrderBook]] :: orderBookFutures
+        orderBookFutures = (exchange ? GetOrderBooks()).mapTo[List[OrderBook]] :: orderBookFutures
         walletFutures = (exchange ? GetWallet()).mapTo[Wallet] :: walletFutures
         feeFutures = (exchange ? GetFee()).mapTo[Fee] :: feeFutures
       }
@@ -222,17 +222,17 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       result
     }
 
-//    val o1: Future[List[OrderBook]] = Future.sequence(orderBookFutures).map(_.flatten)
-//    val futureOrderBooks: Future[Map[TradePair, Map[String, OrderBook]]] = o1.map { books =>
-//      var result = Map[TradePair, Map[String, OrderBook]]()
-//      for (book <- books) {
-//        if (isUpToDate(book, now)) {
-//          result = result + (book.tradePair ->
-//            (result.getOrElse(book.tradePair, Map()) + (book.exchange -> book)))
-//        }
-//      }
-//      result
-//    }
+    val o1: Future[List[OrderBook]] = Future.sequence(orderBookFutures).map(_.flatten)
+    val futureOrderBooks: Future[Map[TradePair, Map[String, OrderBook]]] = o1.map { books =>
+      var result = Map[TradePair, Map[String, OrderBook]]()
+      for (book <- books) {
+        if (isUpToDate(book, now)) {
+          result = result + (book.tradePair ->
+            (result.getOrElse(book.tradePair, Map()) + (book.exchange -> book)))
+        }
+      }
+      result
+    }
     val futureWallets: Future[Map[String, Wallet]] =
       Future.sequence(walletFutures)
         .map(e => e.map(w => (w.exchange, w)).toMap)
@@ -242,11 +242,11 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
         .map(e => e.map(f => (f.exchange, f)).toMap)
 
     for {
-//      orderBooks <- futureOrderBooks
+      orderBooks <- futureOrderBooks
       wallets <- futureWallets
       fees <- futureFees
       tickers <- futureTickers
-    } yield TradeDecisionContext(tickers, wallets, fees)
+    } yield TradeDecisionContext(tickers, orderBooks, wallets, fees)
   }
 
   def placeOrderBundleOrders(t: OrderBundle): Unit = {
@@ -362,21 +362,25 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       ), camelName)
   }
 
-//  def waitUntilExchangesRunning(): Unit = {
-//    implicit val timeout: Timeout = config.initTimeout
-//    var in: Set[String] = null
-//    do {
-//      Thread.sleep(1000)
-//      in = Set()
-//      for (name <- exchanges.keys) {
-//        if (Await.result((exchanges(name) ? IsInitialized).mapTo[IsInitializedResponse], timeout.duration).initialized) {
-//          in += name
-//        }
-//      }
-//      log.info(s"Initialized exchanges: (${in.size}/${exchanges.keySet.size}) : succeded: $in")
-//    } while (in != exchanges.keySet)
-//    log.info(s"${Emoji.Satisfied} All exchanges initialized")
-//  }
+  def waitUntilExchangesRunning(): Unit = {
+    implicit val timeout: Timeout = config.internalCommunicationTimeout
+    var in: Set[String] = null
+    do {
+      Thread.sleep(1000)
+      in = Set()
+      for (name <- exchanges.keys) {
+        try {
+          if (Await.result((exchanges(name) ? IsInitialized).mapTo[IsInitializedResponse], timeout.duration).initialized) {
+            in += name
+          }
+        } catch {
+          case e: concurrent.TimeoutException => // ignore
+        }
+      }
+      log.info(s"Initialized exchanges: (${in.size}/${exchanges.keySet.size}) : succeded: $in")
+    } while (in != exchanges.keySet)
+    log.info(s"${Emoji.Satisfied} All exchanges initialized")
+  }
 
   def initExchanges(): Unit = {
     for (name:String <- StaticConfig.activeExchanges) {

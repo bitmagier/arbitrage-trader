@@ -73,7 +73,7 @@ class BinanceTradePairDataStreamer(config: ExchangeConfig, tradePair: BinanceTra
     )
   }
 
-  def handleIncoming(update: RawOrderBookUpdate): Unit = {
+  def handleIncomingOrderBookUpdate(update: RawOrderBookUpdate): Unit = {
     if (lastUpdateEvent != null && update.U != lastUpdateEvent.u + 1) {
       log.error(s"Update stream inconsistent: First UpdateId of this event ({$update.U}) is NOT last FinalUpdateId (${lastUpdateEvent.u})+1")
     }
@@ -96,7 +96,7 @@ class BinanceTradePairDataStreamer(config: ExchangeConfig, tradePair: BinanceTra
       initOrderBook(s)
 
     case u: RawOrderBookUpdate =>
-      handleIncoming(u)
+      handleIncomingOrderBookUpdate(u)
       if (orderBookBufferingPhase && !orderBookSnapshotRequested) {
         orderBookSnapshotRequested = true
         binanceAdapter ! GetOrderBookSnapshot(tradePair) // when first update is received we ask for the snapshot
