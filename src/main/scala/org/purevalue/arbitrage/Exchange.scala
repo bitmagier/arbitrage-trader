@@ -150,14 +150,14 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
 
     case TradePairs(t) =>
       tradePairs = t
-      log.info(s"$name: ${tradePairs.size} TradePairs received: $tradePairs")
+      log.debug(s"$name: ${tradePairs.size} TradePairs received: $tradePairs")
       initTradePairBasedData()
 
     // Messages from TradePairDataManager
 
     case TradePairDataManager.Initialized(t) =>
       tradePairDataInitPending -= t
-      log.info(s"[$name]: [$t] initialized. Still pending: $tradePairDataInitPending")
+      log.debug(s"[$name]: [$t] initialized. Still pending: $tradePairDataInitPending")
       if (tradePairDataInitPending.isEmpty) {
         log.info(s"${Emoji.Robot} [$name]: all TradePair data initialized and running")
       }
