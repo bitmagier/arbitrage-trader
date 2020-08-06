@@ -12,7 +12,7 @@ import org.slf4j.LoggerFactory
 
 import scala.concurrent.{ExecutionContextExecutor, Future}
 
-case class Ticker(exchange:String,
+case class Ticker(exchange: String,
                   tradePair: TradePair,
                   highestBidPrice: Double,
                   highestBidQuantity: Option[Double], // is not available at some exchanges (e.g. bitfinex)
@@ -23,7 +23,7 @@ case class Ticker(exchange:String,
                   weightedAveragePrice: Option[Double], // is not available at some exchanges (e.g. bitfinex)
                   lastUpdated: LocalDateTime)
 
-case class OrderBook(exchange:String,
+case class OrderBook(exchange: String,
                      tradePair: TradePair,
                      bids: Map[Double, Bid], // price-level -> bid
                      asks: Map[Double, Ask], // price-level -> ask
@@ -36,8 +36,9 @@ case class OrderBook(exchange:String,
       s"${asks.keySet.size} Asks(lowest price: ${CryptoValue.formatDecimal(bestAsk.price)}, quantity: ${bestAsk.quantity})"
   }
 
-  def highestBid:Bid = bids(bids.keySet.max)
-  def lowestAsk:Ask = asks(asks.keySet.min)
+  def highestBid: Bid = bids(bids.keySet.max)
+
+  def lowestAsk: Ask = asks(asks.keySet.min)
 }
 
 case class Wallet(exchange: String,
@@ -50,7 +51,7 @@ case class Fee(exchange: String,
 
 object Exchange {
   case class IsInitialized()
-  case class IsInitializedResponse(initialized:Boolean)
+  case class IsInitializedResponse(initialized: Boolean)
   case class GetWallet()
   case class GetTickers()
   case class GetOrderBooks()
@@ -78,10 +79,10 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
       Asset("BTC") -> 0.5d,
       Asset("USDT") -> 2000.0d,
       Asset("ETH") -> 10.0,
-      Asset("ADA") -> 0.0,
+      Asset("ADA") -> 100000.0,
       Asset("ERD") -> 100000.0d,
       Asset("ALGO") -> 50000.0d,
-      Asset("BTG") -> 500.0d)
+    )
   )
 
   def initTradePairBasedData(): Unit = {
@@ -101,7 +102,7 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
 
     // Messages from TradeRoom
     case IsInitialized() =>
-      val result:Boolean = initialized
+      val result: Boolean = initialized
       if (!result) {
         log.debug(s"[$name] initialization pending: $tradePairDataInitPending")
       }

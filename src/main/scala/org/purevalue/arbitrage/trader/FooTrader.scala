@@ -66,10 +66,15 @@ class FooTrader(config: Config, tradeRoom: ActorRef) extends Actor {
             })
             .keySet))
 
+//    val books4Buy = dc.orderBooks(tradePair).values
+//      .filter(b => whatsSpendablePerExchange(b.exchange).contains(b.tradePair.quoteAsset))
+//
+//    val books4Sell = dc.orderBooks(tradePair).values
+//      .filter(b => whatsSpendablePerExchange(b.exchange).contains(b.tradePair.baseAsset))
+
+    // ignore wallet for now
     val books4Buy = dc.orderBooks(tradePair).values
-      .filter(b => whatsSpendablePerExchange(b.exchange).contains(b.tradePair.quoteAsset))
     val books4Sell = dc.orderBooks(tradePair).values
-      .filter(b => whatsSpendablePerExchange(b.exchange).contains(b.tradePair.baseAsset))
 
     // safety check
     if (!books4Buy.forall(_.tradePair == tradePair)
