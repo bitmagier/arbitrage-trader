@@ -12,10 +12,14 @@ object TradePairDataManager {
   case class GetTicker()
   case class GetOrderBook()
   case class Initialized(tradePair: TradePair)
-  case class BidPosition(price: Double, qantity: Double) // A bid is an offer to buy an asset; (likely aggregated) bid position(s) for a price level
-  case class AskPosition(price: Double, qantity: Double) // An ask is an offer to sell an asset; (likely aggregated) ask position(s) for a price level
-  case class OrderBookInitialData(bids: Seq[BidPosition], asks: Seq[AskPosition])
-  case class OrderBookUpdate(bids: Seq[BidPosition], asks: Seq[AskPosition])
+  case class Bid(price: Double, quantity: Double) { // A bid is an offer to buy an asset; (likely aggregated) bid position(s) for a price level
+    override def toString: String = s"Bid(price=${CryptoValue.formatDecimal(price)}, amount=${CryptoValue.formatDecimal(quantity)})"
+  }
+  case class Ask(price: Double, quantity: Double) { // An ask is an offer to sell an asset; (likely aggregated) ask position(s) for a price level
+    override def toString: String = s"Ask(price=${CryptoValue.formatDecimal(price)}, amount=${CryptoValue.formatDecimal(quantity)})"
+  }
+  case class OrderBookInitialData(bids: Seq[Bid], asks: Seq[Ask])
+  case class OrderBookUpdate(bids: Seq[Bid], asks: Seq[Ask])
 
   def props(exchange: String, tradePair: TradePair, exchangeQueryAdapter: ActorRef, exchangeActor: ActorRef): Props =
     Props(new TradePairDataManager(exchange, tradePair, exchangeQueryAdapter, exchangeActor))
@@ -80,8 +84,8 @@ case class TradePairDataManager(exchange: String, tradePair: TradePair, exchange
       orderBook = OrderBook(
         exchange,
         tradePair,
-        (orderBook.bids ++ newBids).filter(_._2.qantity != 0.0d),
-        (orderBook.asks ++ newAsks).filter(_._2.qantity != 0.0d),
+        (orderBook.bids ++ newBids).filter(_._2.quantity != 0.0d),
+        (orderBook.asks ++ newAsks).filter(_._2.quantity != 0.0d),
         LocalDateTime.now())
 
       if (log.isTraceEnabled) {

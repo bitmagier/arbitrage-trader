@@ -7,7 +7,7 @@ import java.util.UUID
 import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
 import akka.pattern.ask
 import akka.util.Timeout
-import org.purevalue.arbitrage.CryptoValue.formatPrice
+import org.purevalue.arbitrage.CryptoValue.formatDecimal
 import org.purevalue.arbitrage.Exchange.{GetFee, GetOrderBooks, GetTickers, GetWallet, IsInitialized, IsInitializedResponse}
 import org.purevalue.arbitrage.TradeRoom._
 import org.purevalue.arbitrage.adapter.ExchangeAdapterProxy
@@ -28,17 +28,30 @@ object TradeDirection extends TradeDirection {
 
 case class CryptoValue(asset: Asset, amount: Double) {
 
-  def convertTo(asset: Asset, dc: TradeDecisionContext): Double = {
-    if (this.asset == asset) amount
+  def convertTo(targetAsset: Asset, dc: TradeDecisionContext): Option[Double] = {
+    if (this.asset == targetAsset) Some(amount)
     else {
-      amount * dc.referenceTicker(TradePair.of(this.asset, asset)).lastPrice
+      // try direct conversion first
+      dc.referenceTicker(TradePair.of(this.asset, targetAsset)) match {
+        case Some(ticker) =>
+            Some(amount * ticker.weightedAveragePrice.getOrElse(ticker.lastPrice))
+        case None => // convert to BTC first and then to targetAsset
+          val toBtcTicker = dc.referenceTicker(TradePair.of(this.asset, Asset("BTC")))
+          if (toBtcTicker.isEmpty) return None
+
+          val toBTCRate = toBtcTicker.get.weightedAveragePrice.getOrElse(toBtcTicker.get.lastPrice)
+          val btcToTargetTicker = dc.referenceTicker(TradePair.of(Asset("BTC"), targetAsset))
+          if (btcToTargetTicker.isEmpty) return None
+          val btcToTargetRate = btcToTargetTicker.get.weightedAveragePrice.getOrElse(btcToTargetTicker.get.lastPrice)
+          Some(amount * toBTCRate * btcToTargetRate)
+      }
     }
   }
 
-  override def toString: String = s"${formatPrice(amount)} ${asset.officialSymbol}"
+  override def toString: String = s"${formatDecimal(amount)} ${asset.officialSymbol}"
 }
 object CryptoValue {
-  def formatPrice(d: Double): String = new DecimalFormat("#.##########").format(d)
+  def formatDecimal(d: Double): String = new DecimalFormat("#.##########").format(d)
 }
 
 /** Order: a single trade request before it's execution */
@@ -95,7 +108,7 @@ case class CompletedOrderBundle(orderBundle: OrderBundle,
                                 executedTrades: Seq[Trade],
                                 cancelledOrders: Seq[Order],
                                 bill: Seq[CryptoValue],
-                                earningUSDT: Double)
+                                earningUSDT: Option[Double])
 
 object TradeRoom {
   // communication with trader INCOMING
@@ -113,16 +126,19 @@ object TradeRoom {
                                   orderBooks: Map[TradePair, Map[String, OrderBook]],
                                   walletPerExchange: Map[String, Wallet],
                                   feePerExchange: Map[String, Fee]) {
-    def referenceTicker(tradePair: TradePair): Ticker = {
+    def referenceTicker(tradePair: TradePair): Option[Ticker] = {
       var exchanges = StaticConfig.tradeRoom.referenceTickerExchanges
       var ticker: Ticker = null
-      while (ticker == null) { // fallback implementation if primary ticker is not here because of exchange down or tiucker update too old
-        tickers(tradePair).get(exchanges.head) match {
-          case Some(t) => ticker = t
-          case None => exchanges = exchanges.tail
+      while (ticker == null) { // fallback implementation if primary ticker is not here because of exchange down or ticker update too old
+        tickers.get(tradePair) match {
+          case Some(map) => map.get(exchanges.head) match {
+            case Some(t) => ticker = t
+            case None => exchanges = exchanges.tail
+          }
+          case None => return None // no ticker for that tradepair available
         }
       }
-      ticker
+      Some(ticker)
     }
   }
 
@@ -251,10 +267,10 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
   def placeOrderBundleOrders(t: OrderBundle): Unit = {
     log.debug(s"got order bundle to place: $t")
-//    tradesPerActiveOrderBundle += (t.id -> ListBuffer())
-//    for (order <- t.orders) {
-//      exchanges(order.exchange) ! PlaceOrder(order)
-//    }
+    //    tradesPerActiveOrderBundle += (t.id -> ListBuffer())
+    //    for (order <- t.orders) {
+    //      exchanges(order.exchange) ! PlaceOrder(order)
+    //    }
   }
 
   def orderPlaced(orderId: UUID, placementTime: ZonedDateTime): Option[OrderBundlePlaced] = {
@@ -269,8 +285,15 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     }
   }
 
-  def calculateEarningUSDT(bill: Seq[CryptoValue], dc: TradeDecisionContext): Double = {
-    bill.map(_.convertTo(Asset("USDT"), dc)).sum
+  def calculateEarningUSDT(bill: Seq[CryptoValue], dc: TradeDecisionContext): Option[Double] = {
+    val converted = bill.map(
+      _.convertTo(Asset("USDT"), dc)
+    )
+    if (converted.forall(_.isDefined)) {
+      Some(converted.map(_.get).sum)
+    } else {
+      None
+    }
   }
 
   def orderExecuted(orderId: UUID, trade: Trade): Option[(ActorRef, OrderBundleCompleted)] = {
@@ -352,7 +375,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   }
 
 
-  def initExchange(name:String, exchangeAdapterProps:Function0[Props]): Unit = {
+  def initExchange(name: String, exchangeAdapterProps: Function0[Props]): Unit = {
     val camelName = name.substring(0, 1).toUpperCase + name.substring(1)
     exchanges += name -> context.actorOf(
       Exchange.props(
@@ -383,7 +406,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   }
 
   def initExchanges(): Unit = {
-    for (name:String <- StaticConfig.activeExchanges) {
+    for (name: String <- StaticConfig.activeExchanges) {
       initExchange(name, GlobalConfig.AllExchanges(name))
     }
   }

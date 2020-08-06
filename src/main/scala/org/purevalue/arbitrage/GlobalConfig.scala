@@ -6,7 +6,14 @@ import org.purevalue.arbitrage.adapter.bitfinex.BitfinexAdapter
 
 // Crypto asset / coin.
 // It should NOT be created somewhere else. The way to get it is via Asset(officialSymbol)
-case class Asset(officialSymbol: String, name: String)
+case class Asset(officialSymbol: String, name: String) {
+  override def equals(obj: Any): Boolean = {
+    obj.isInstanceOf[Asset] &&
+      this.officialSymbol == obj.asInstanceOf[Asset].officialSymbol
+  }
+
+  override def hashCode(): Int = officialSymbol.hashCode
+}
 object Asset {
   def apply(officialSymbol: String): Asset = {
     if (!GlobalConfig.AllAssets.contains(officialSymbol)) {
@@ -22,6 +29,17 @@ abstract class TradePair {
   val baseAsset: Asset
   val quoteAsset: Asset
   override def toString: String = s"${baseAsset.officialSymbol}:${quoteAsset.officialSymbol}"
+
+  override def equals(obj: Any): Boolean = {
+    obj.isInstanceOf[TradePair] &&
+      this.baseAsset == obj.asInstanceOf[TradePair].baseAsset &&
+      this.quoteAsset == obj.asInstanceOf[TradePair].quoteAsset
+  }
+
+  override def hashCode(): Int = {
+    val state = Seq(baseAsset, quoteAsset)
+    state.map(_.hashCode()).foldLeft(0)((a, b) => 31 * a + b)
+  }
 }
 object TradePair {
   def of(b: Asset, q:Asset): TradePair = new TradePair {

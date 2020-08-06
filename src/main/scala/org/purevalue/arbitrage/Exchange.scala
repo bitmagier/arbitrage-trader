@@ -6,7 +6,7 @@ import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
 import akka.pattern.{ask, pipe}
 import akka.util.Timeout
 import org.purevalue.arbitrage.Exchange._
-import org.purevalue.arbitrage.TradePairDataManager.{AskPosition, BidPosition}
+import org.purevalue.arbitrage.TradePairDataManager.{Ask, Bid}
 import org.purevalue.arbitrage.adapter.ExchangeAdapterProxy.{GetTradePairs, TradePairs}
 import org.slf4j.LoggerFactory
 
@@ -25,19 +25,19 @@ case class Ticker(exchange:String,
 
 case class OrderBook(exchange:String,
                      tradePair: TradePair,
-                     bids: Map[Double, BidPosition], // price-level -> bid
-                     asks: Map[Double, AskPosition], // price-level -> ask
+                     bids: Map[Double, Bid], // price-level -> bid
+                     asks: Map[Double, Ask], // price-level -> ask
                      lastUpdated: LocalDateTime) {
 
   def toCondensedString: String = {
     val bestBid = highestBid
     val bestAsk = lowestAsk
-    s"${bids.keySet.size} Bids (highest price: ${CryptoValue.formatPrice(bestBid.price)}, quantity: ${bestBid.qantity}) " +
-      s"${asks.keySet.size} Asks(lowest price: ${CryptoValue.formatPrice(bestAsk.price)}, quantity: ${bestAsk.qantity})"
+    s"${bids.keySet.size} Bids (highest price: ${CryptoValue.formatDecimal(bestBid.price)}, quantity: ${bestBid.quantity}) " +
+      s"${asks.keySet.size} Asks(lowest price: ${CryptoValue.formatDecimal(bestAsk.price)}, quantity: ${bestAsk.quantity})"
   }
 
-  def highestBid:BidPosition = bids(bids.keySet.max)
-  def lowestAsk:AskPosition = asks(asks.keySet.min)
+  def highestBid:Bid = bids(bids.keySet.max)
+  def lowestAsk:Ask = asks(asks.keySet.min)
 }
 
 case class Wallet(exchange: String,
@@ -64,7 +64,7 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
-  val assets: Set[Asset] = GlobalConfig.AllAssets.filter(e => config.assets.contains(e._2.officialSymbol)).values.toSet
+  // val assets: Set[Asset] = GlobalConfig.AllAssets.filter(e => config.assets.contains(e._2.officialSymbol)).values.toSet
   val fee: Fee = Fee(name, config.makerFee, config.takerFee)
   // dynamic
   var tradePairs: Set[TradePair] = _

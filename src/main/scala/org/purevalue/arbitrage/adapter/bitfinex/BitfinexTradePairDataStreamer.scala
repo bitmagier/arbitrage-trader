@@ -20,11 +20,11 @@ class BitfinexTradePairDataStreamer(config: ExchangeConfig, tradePair: BitfinexT
     val bids = snapshot.values
       .filter(_.count > 0)
       .filter(_.amount > 0)
-      .map(e => BidPosition(e.price, e.amount))
+      .map(e => Bid(e.price, e.amount))
     val asks = snapshot.values
       .filter(_.count > 0)
       .filter(_.amount < 0)
-      .map(e => AskPosition(e.price, -e.amount))
+      .map(e => Ask(e.price, -e.amount))
     OrderBookInitialData(
       bids, asks
     )
@@ -45,18 +45,18 @@ class BitfinexTradePairDataStreamer(config: ExchangeConfig, tradePair: BitfinexT
   private def toOrderBookUpdate(update: RawOrderBookUpdateMessage): OrderBookUpdate = {
     if (update.value.count > 0) {
       if (update.value.amount > 0)
-        OrderBookUpdate(List(BidPosition(update.value.price, update.value.amount)), List())
+        OrderBookUpdate(List(Bid(update.value.price, update.value.amount)), List())
       else if (update.value.amount < 0)
-        OrderBookUpdate(List(), List(AskPosition(update.value.price, -update.value.amount)))
+        OrderBookUpdate(List(), List(Ask(update.value.price, -update.value.amount)))
       else {
         log.warn(s"undefined update case: $update")
         OrderBookUpdate(List(), List())
       }
     } else if (update.value.count == 0) {
       if (update.value.amount == 1.0d)
-        OrderBookUpdate(List(BidPosition(update.value.price, 0.0d)), List())
+        OrderBookUpdate(List(Bid(update.value.price, 0.0d)), List())
       else if (update.value.amount == -1.0d)
-        OrderBookUpdate(List(), List(AskPosition(update.value.price, 0.0d)))
+        OrderBookUpdate(List(), List(Ask(update.value.price, 0.0d)))
       else {
         log.warn(s"undefined update case: $update")
         OrderBookUpdate(List(), List())

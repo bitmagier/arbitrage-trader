@@ -1,7 +1,7 @@
 package org.purevalue.arbitrage.adapter.binance
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
-import org.purevalue.arbitrage.TradePairDataManager.{AskPosition, BidPosition, OrderBookInitialData, OrderBookUpdate}
+import org.purevalue.arbitrage.TradePairDataManager.{Ask, Bid, OrderBookInitialData, OrderBookUpdate}
 import org.purevalue.arbitrage.adapter.binance.BinanceAdapter.GetOrderBookSnapshot
 import org.purevalue.arbitrage.{ExchangeConfig, Main}
 import org.slf4j.LoggerFactory
@@ -43,17 +43,17 @@ class BinanceTradePairDataStreamer(config: ExchangeConfig, tradePair: BinanceTra
     cleanupBufferEventsAndSend(snapshot.lastUpdateId)
   }
 
-  private def toBidUpdate(e: Seq[String]): BidPosition = {
+  private def toBidUpdate(e: Seq[String]): Bid = {
     if (e.length != 2) throw new IllegalArgumentException(e.toString())
-    BidPosition(
+    Bid(
       e.head.toDouble, // Price level
       e(1).toDouble // Quantity
     )
   }
 
-  private def toAskUpdate(e: Seq[String]): AskPosition = {
+  private def toAskUpdate(e: Seq[String]): Ask = {
     if (e.length != 2) throw new IllegalArgumentException(e.toString())
-    AskPosition(
+    Ask(
       e.head.toDouble, // Price level
       e(1).toDouble // Quantity
     )

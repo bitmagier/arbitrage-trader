@@ -6,7 +6,7 @@ import java.util.concurrent.TimeUnit
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props, Status}
 import com.typesafe.config.Config
-import org.purevalue.arbitrage.TradePairDataManager.{AskPosition, BidPosition}
+import org.purevalue.arbitrage.TradePairDataManager.{Ask, Bid}
 import org.purevalue.arbitrage.TradeRoom._
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.trader.FooTrader.Trigger
@@ -40,12 +40,17 @@ class FooTrader(config: Config, tradeRoom: ActorRef) extends Actor {
 
   def newUUID(): UUID = UUID.randomUUID() // switch to Time based UUID when connecting a DB like cassandra
 
-  def calculateWinUSDT(orders: Seq[Order], dc:TradeDecisionContext): Double = {
+  def calculateWinUSDT(orders: Seq[Order], dc: TradeDecisionContext): Option[Double] = {
     val invoice: Seq[CryptoValue] = orders.flatMap(_.bill)
-    invoice.map(_.convertTo(Asset("USDT"), dc)).sum
+    val converted = invoice.map(_.convertTo(Asset("USDT"), dc))
+    if (converted.forall(_.isDefined)) {
+      Some(converted.map(_.get).sum)
+    } else {
+      None
+    }
   }
 
-  def convertToUSDT(amount:Double, asset:Asset, dc:TradeDecisionContext): Double =
+  def convertToUSDT(amount: Double, asset: Asset, dc: TradeDecisionContext): Option[Double] =
     CryptoValue(asset, amount).convertTo(Asset("USDT"), dc)
 
   def findBestShotBasedOnOrderBook(tradePair: TradePair, dc: TradeDecisionContext): Option[OrderBundle] = {
@@ -55,7 +60,10 @@ class FooTrader(config: Config, tradeRoom: ActorRef) extends Actor {
         .map(pair => (
           pair._1,
           pair._2.assets
-            .filter(a => convertToUSDT(a._2, a._1, dc) >= minBalanceBeforeTradeInUSDT)
+            .filter(a => {
+              val usdt = convertToUSDT(a._2, a._1, dc);
+              usdt.isDefined && usdt.get >= minBalanceBeforeTradeInUSDT
+            })
             .keySet))
 
     val books4Buy = dc.orderBooks(tradePair).values
@@ -65,29 +73,38 @@ class FooTrader(config: Config, tradeRoom: ActorRef) extends Actor {
 
     // safety check
     if (!books4Buy.forall(_.tradePair == tradePair)
-          || !books4Sell.forall(_.tradePair == tradePair)) {
+      || !books4Sell.forall(_.tradePair == tradePair)) {
       throw new RuntimeException("safety-check failed")
     }
 
+    if (books4Sell.isEmpty || books4Buy.isEmpty)
+      return None
+
     val tradeQuantityUSDT = config.getDouble("order-bundle.trade-amount-in-usdt")
 
-    val highestBid: Tuple2[String, BidPosition] = // that's what we try to buy
-      books4Buy
+    val highestBid: Tuple2[String, Bid] = // that's what we try to sell to
+      books4Sell
         .map(e => (e.exchange, e.highestBid))
         .maxBy(_._2.price)
-    val lowestAsk: Tuple2[String, AskPosition] = // that's what we try to sell
-      books4Sell
-      .map(e => (e.exchange, e.lowestAsk))
-      .minBy(_._2.price)
+    val lowestAsk: Tuple2[String, Ask] = // that's what we try to buy
+      books4Buy
+        .map(e => (e.exchange, e.lowestAsk))
+        .minBy(_._2.price)
+
+    if (highestBid._2.price <= lowestAsk._2.price) {
+      return None
+    }
 
     if (highestBid._1 == lowestAsk._1) {
-      log.warn(s"${Emoji.SadAndConfused} found highest bid $highestBid and lowest ask $lowestAsk on the same exchange.")
+      log.warn(s"${Emoji.SadAndConfused} [$tradePair] found highest bid $highestBid and lowest ask $lowestAsk on the same exchange.")
       return None
     }
 
     val orderBundleId = newUUID()
-    val orderLimitAdditionPct:Double = config.getDouble("order-bundle.order-limit-addition-percentage")
+    val orderLimitAdditionPct: Double = config.getDouble("order-bundle.order-limit-addition-percentage")
     val amountBaseAsset = CryptoValue(Asset("USDT"), tradeQuantityUSDT).convertTo(tradePair.baseAsset, dc)
+    if (amountBaseAsset.isEmpty)
+      return None // only want to have assets convertible to USDT here
     val ourBuyBaseAssetOrder = Order(
       newUUID(),
       orderBundleId,
@@ -95,11 +112,13 @@ class FooTrader(config: Config, tradeRoom: ActorRef) extends Actor {
       tradePair,
       TradeDirection.Buy,
       dc.feePerExchange(lowestAsk._1),
-      Some(amountBaseAsset),
+      amountBaseAsset,
       None,
-      lowestAsk._2.price * (1.0d + orderLimitAdditionPct*0.01d))
+      lowestAsk._2.price * (1.0d + orderLimitAdditionPct * 0.01d))
 
     val amountQuoteAsset = CryptoValue(Asset("USDT"), tradeQuantityUSDT).convertTo(tradePair.quoteAsset, dc)
+    if (amountQuoteAsset.isEmpty)
+      return None
     val ourSellBaseAssetOrder = Order(
       newUUID(),
       orderBundleId,
@@ -108,19 +127,19 @@ class FooTrader(config: Config, tradeRoom: ActorRef) extends Actor {
       TradeDirection.Sell,
       dc.feePerExchange(highestBid._1),
       None,
-      Some(amountQuoteAsset),
-      highestBid._2.price * (1.0d - orderLimitAdditionPct*0.01d)
+      amountQuoteAsset,
+      highestBid._2.price * (1.0d - orderLimitAdditionPct * 0.01d)
     )
 
-    val estimatedWinUSDT: Double = calculateWinUSDT(Seq(ourBuyBaseAssetOrder, ourSellBaseAssetOrder), dc)
-    if (estimatedWinUSDT >= config.getDouble("order-bundle.min-gain-in-usdt")) {
+    val estimatedWinUSDT: Option[Double] = calculateWinUSDT(Seq(ourBuyBaseAssetOrder, ourSellBaseAssetOrder), dc)
+    if (estimatedWinUSDT.isDefined && estimatedWinUSDT.get >= config.getDouble("order-bundle.min-gain-in-usdt")) {
       Some(OrderBundle(
         orderBundleId,
         name,
         self,
         LocalDateTime.now(),
         List(ourBuyBaseAssetOrder, ourSellBaseAssetOrder),
-        estimatedWinUSDT,
+        estimatedWinUSDT.get,
         ""
       ))
     } else {
@@ -152,7 +171,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef) extends Actor {
     // response from TradeRoom
 
     case t: TradeDecisionContext =>
-      log.debug(s"Got TradeDecisionContext: with Tickers for ${t.tickers.keySet.size} Tradepairs, OrderBooks for ${t.orderBooks.keySet.size} Tradepairs, etc.")
+      log.debug(s"Using TradeDecisionContext: with Tickers for Tradepairs[${t.tickers.keys}], OrderBooks for TradePairs[${t.orderBooks.keys}], etc.")
       findBestShot(t) match {
         case Some(orderBundle) =>
           pendingOrderBundles += (orderBundle.id -> orderBundle)
