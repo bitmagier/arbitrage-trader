@@ -13,6 +13,7 @@ import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
 import scala.concurrent.{Future, Promise}
+import scala.util.{Failure, Success}
 
 object BinanceTradePairBasedWebSockets {
   def props(config: ExchangeConfig, tradePair: BinanceTradePair, tradePairDataStreamer: ActorRef): Props =
@@ -23,6 +24,9 @@ case class BinanceTradePairBasedWebSockets(config: ExchangeConfig, tradePair: Bi
   private val log = LoggerFactory.getLogger(classOf[BinanceTradePairBasedWebSockets])
   private val symbol = tradePair.symbol.toLowerCase()
   implicit val actorSystem: ActorSystem = Main.actorSystem
+
+  val TickerStreamName: String = s"$symbol@ticker"
+  val OrderBookStreamName: String = s"$symbol@depth"
 
   import WebSocketJsonProtocoll._
   import actorSystem.dispatcher
@@ -39,11 +43,11 @@ case class BinanceTradePairBasedWebSockets(config: ExchangeConfig, tradePair: Bi
     }
   }
 
-  private def handleMiniTicker(t: RawTicker): Unit = {
-    if (log.isTraceEnabled) log.trace(s"received MiniTicker: $t")
-    t match {
-      case t if t.s == tradePair.symbol => tradePairDataStreamer ! t
-      case x@_ => log.warn(s"${Emoji.Confused} RawMiniTicker contains wrong TradePair. Expected was '$tradePair'. Message was: $x`")
+  private def handleTicker(t: RawTicker): Unit = {
+    if (log.isTraceEnabled) log.trace(s"received Ticker: $t")
+    t.s match {
+      case tradePair.symbol => tradePairDataStreamer ! t
+      case x@_ => log.warn(s"${Emoji.Confused} RawTicker contains wrong TradePair. Expected was '$tradePair'. Message was: $x`")
     }
   }
 
@@ -51,18 +55,30 @@ case class BinanceTradePairBasedWebSockets(config: ExchangeConfig, tradePair: Bi
     case msg: TextMessage =>
       msg.toStrict(config.httpTimeout)
         .map(_.getStrictText)
+//        .map(s => {
+//          if (log.isTraceEnabled) log.trace(s)
+//          s
+//        })
         .map(s => JsonParser(s).asJsObject())
         .map {
-          case j if j.fields.contains("result") => j.convertTo[SubscribeResponse]
-          case j if j.fields.contains("e") && j.fields("e").convertTo[String] == "depthUpdate" => j.convertTo[RawOrderBookUpdate]
-          case j if j.fields.contains("e") && j.fields("e").convertTo[String] == "24hrMiniTicker" => j.convertTo[RawTicker]
-          case x: JsObject => log.error(s"Unknown json message received: $x"); x
-        } map {
-        case m: SubscribeResponse => handleSubscribeResponse(m)
-        case m: RawOrderBookUpdate => handleDepthUpdate(m)
-        case m: RawTicker => handleMiniTicker(m)
+          case j: JsObject if j.fields.contains("result") => j.convertTo[SubscribeResponse]
+          case j: JsObject if j.fields.contains("stream") =>
+            j.fields("stream").convertTo[String] match {
+              case TickerStreamName => j.fields("data").asJsObject.convertTo[RawTicker]
+              case OrderBookStreamName => j.fields("data").asJsObject.convertTo[RawOrderBookUpdate]
+              case name: String => log.error(s"Unknown data stream '$name' received: $j")
+            }
+          case j: JsObject => log.error(s"Unknown json object received: $j")
+        } onComplete {
+        case Success(v) => v match {
+          case m: SubscribeResponse => handleSubscribeResponse(m)
+          case r: RawTicker => handleTicker(r)
+          case o: RawOrderBookUpdate => handleDepthUpdate(o)
+          case _ => log.error("Unhandled object")
+        }
+        case Failure(e) => log.error("Error while decoding message: ", e)
       }
-    case x@_ => log.warn(s"Received non TextMessage: $x")
+    case _ => log.warn(s"Received non TextMessage")
   }
 
   // flow to us
@@ -71,15 +87,15 @@ case class BinanceTradePairBasedWebSockets(config: ExchangeConfig, tradePair: Bi
   Flow.fromSinkAndSourceCoupledMat(
     sink,
     Source(List(
-      TextMessage(StreamSubscribeRequest(params = Seq(s"$symbol@depth"), id = 1).toJson.compactPrint),
-      TextMessage(StreamSubscribeRequest(params = Seq(s"$symbol@miniTicker"), id = 2).toJson.compactPrint)
+      TextMessage(StreamSubscribeRequest(params = Seq(TickerStreamName), id = 1).toJson.compactPrint)
+      //      TextMessage(StreamSubscribeRequest(params = Seq(s"$symbol@depth"), id = 1).toJson.compactPrint),
     )).concatMat(Source.maybe[Message])(Keep.right))(Keep.right)
 
 
   // the materialized value is a tuple with
   // upgradeResponse is a Future[WebSocketUpgradeResponse] that completes or fails when the connection succeeds or fails
   // and closed is a Future[Done] with the stream completion from the incoming sink
-  val WebSocketEndpoint: Uri = Uri(s"wss://stream.binance.com:9443/ws/$symbol@depth") // TODO add "@100ms" and solve akka.stream.BufferOverflowException: Exceeded configured max-open-requests value of [32]
+  val WebSocketEndpoint: Uri = Uri(s"wss://stream.binance.com:9443/stream") // TODO add "@100ms" and solve akka.stream.BufferOverflowException: Exceeded configured max-open-requests value of [32]
   val (upgradeResponse, promise) =
     Http().singleWebSocketRequest(
       WebSocketRequest(WebSocketEndpoint),
@@ -113,30 +129,34 @@ case class RawOrderBookUpdate(e: String /* depthUpdate */ , E: Long /* event tim
                               b: Seq[Seq[String]],
                               a: Seq[Seq[String]])
 
+// {"e":"24hrTicker","E":1596735092288,"s":"ADABTC","p":"-0.00000008","P":"-0.651","w":"0.00001214","x":"0.00001228","c":"0.00001220","Q":"5329.00000000",
+//  "b":"0.00001220","B":"10709.00000000","a":"0.00001221","A":"323762.00000000","o":"0.00001228","h":"0.00001239","l":"0.00001196","v":"147269686.00000000",
+//  "q":"1788.50464895","O":1596648691106,"C":1596735091106,"F":39864151,"L":39900689,"n":36539}
 case class RawTicker(e: String, // e == "24hrTicker"
                      E: Long, // event time
                      s: String, // symbol (e.g. BNBBTC)
-                     p: Double, // price change
-                     P: Double, // price change percent
-                     w: Double, // weighted average price
-//                     x: Double, // First trade(F)-1 price (first trade before the 24hr rolling window)
-                     c: Double, // last price
-                     Q: Double, // last quantity
-                     b: Double, // best bid price
-                     B: Double, // best bid quantity
-                     a: Double, // best ask price
-                     A: Double, // best ask quantity
-                     o: Double, // open price
-                     h: Double, // high price
-                     l: Double, // low price
-                     v: Double, // total traded base asset volume
-                     q: Double, // total traded quote asset volume
+                     p: String, // price change
+                     P: String, // price change percent
+                     w: String, // weighted average price
+                     //                     x: Double, // First trade(F)-1 price (first trade before the 24hr rolling window)
+                     c: String, // last price
+                     Q: String, // last quantity
+                     b: String, // best bid price
+                     B: String, // best bid quantity
+                     a: String, // best ask price
+                     A: String, // best ask quantity
+                     o: String, // open price
+                     h: String, // high price
+                     l: String, // low price
+                     v: String, // total traded base asset volume
+                     q: String, // total traded quote asset volume
                      O: Long, // statistics open time
                      C: Long, // statistics close time
                      F: Long, // first trade ID
                      L: Long, // last trade ID
                      n: Long) { // total number of trades
-  def toTicker(exchange:String, tradePair:TradePair): Ticker = Ticker(exchange, tradePair, b, Some(B), a, Some(A), c, Some(Q), Some(w), LocalDateTime.now)
+  def toTicker(exchange: String, tradePair: TradePair): Ticker =
+    Ticker(exchange, tradePair, b.toDouble, Some(B.toDouble), a.toDouble, Some(A.toDouble), c.toDouble, Some(Q.toDouble), Some(w.toDouble), LocalDateTime.now)
 }
 
 object WebSocketJsonProtocoll extends DefaultJsonProtocol {

@@ -17,17 +17,28 @@ object TradePairDataManager {
   case class OrderBookInitialData(bids: Seq[BidPosition], asks: Seq[AskPosition])
   case class OrderBookUpdate(bids: Seq[BidPosition], asks: Seq[AskPosition])
 
-  def props(exchange: String, tradePair: TradePair, exchangeQueryAdapter: ActorRef, parentActor: ActorRef): Props =
-    Props(new TradePairDataManager(exchange, tradePair, exchangeQueryAdapter, parentActor))
+  def props(exchange: String, tradePair: TradePair, exchangeQueryAdapter: ActorRef, exchangeActor: ActorRef): Props =
+    Props(new TradePairDataManager(exchange, tradePair, exchangeQueryAdapter, exchangeActor))
 }
 
 /**
  * Manages all kind of data of one tradepair at one exchange
  */
-case class TradePairDataManager(exchange: String, tradePair: TradePair, exchangeQueryAdapter: ActorRef, parentActor: ActorRef) extends Actor {
+case class TradePairDataManager(exchange: String, tradePair: TradePair, exchangeQueryAdapter: ActorRef, exchangeActor: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[TradePairDataManager])
+  private var initializedMsgSend = false
+  private var orderBookInitialized = false
   private var orderBook: OrderBook = OrderBook(exchange, tradePair, Map(), Map(), LocalDateTime.MIN)
-  private var ticker: Ticker = _
+  private var ticker: Option[Ticker] = None
+
+  def initialized: Boolean = /*orderBookInitialized TODO && */ ticker.isDefined
+
+  def eventuallyInitialized(): Unit = {
+    if (!initializedMsgSend && initialized) {
+      initializedMsgSend = true
+      exchangeActor ! Initialized(tradePair)
+    }
+  }
 
   override def preStart(): Unit = {
     exchangeQueryAdapter ! TradePairDataStreamRequest(tradePair)
@@ -37,21 +48,20 @@ case class TradePairDataManager(exchange: String, tradePair: TradePair, exchange
 
     // Messages from Exchange
 
-    case GetTicker() => sender() ! ticker
-    case GetOrderBook() => sender() ! orderBook
+    case GetTicker() =>
+      if (initialized)
+        sender() ! ticker.get
+
+    case GetOrderBook() =>
+      if (initialized)
+        sender() ! orderBook
 
 
     // Messages from TradePairBasedDataStreamer
-//    case ExchangeHeartbeat(ts) =>
-//      orderBook = OrderBook(
-//        exchange,
-//        tradePair,
-//        orderBook.bids,
-//        orderBook.asks,
-//        ts)
 
     case t: Ticker =>
-      ticker = t
+      ticker = Some(t)
+      eventuallyInitialized()
 
     case i: OrderBookInitialData =>
       orderBook = OrderBook(
@@ -61,7 +71,8 @@ case class TradePairDataManager(exchange: String, tradePair: TradePair, exchange
         i.asks.map(e => Tuple2(e.price, e)).toMap,
         LocalDateTime.now())
       if (log.isTraceEnabled) log.trace(s"OrderBook $tradePair received initial data")
-      parentActor ! TradePairDataManager.Initialized(tradePair)
+      orderBookInitialized = true
+      eventuallyInitialized()
 
     case u: OrderBookUpdate =>
       val newBids = u.bids.map(e => Tuple2(e.price, e)).toMap

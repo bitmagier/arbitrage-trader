@@ -18,15 +18,15 @@ class BinanceTradePairDataStreamer(config: ExchangeConfig, tradePair: BinanceTra
   implicit val system: ActorSystem = Main.actorSystem
 
   private var webSocketFlow: ActorRef = _
-  private var bufferingPhase: Boolean = true
+  private var orderBookBufferingPhase: Boolean = true
   private var orderBookSnapshotRequested: Boolean = false
-  private val buffer = ListBuffer[RawOrderBookUpdate]()
+  private val orderBookBuffer = ListBuffer[RawOrderBookUpdate]()
   private var lastUpdateEvent: RawOrderBookUpdate = _
 
 
   private def cleanupBufferEventsAndSend(snapshotLastUpdateId: Long): Unit = {
-    bufferingPhase = false
-    val postInitEvents = buffer.filter(_.u > snapshotLastUpdateId)
+    orderBookBufferingPhase = false
+    val postInitEvents = orderBookBuffer.filter(_.u > snapshotLastUpdateId)
     if (postInitEvents.nonEmpty) {
       if (!(postInitEvents.head.U <= snapshotLastUpdateId + 1 && postInitEvents.head.u >= snapshotLastUpdateId + 1)) {
         log.warn(s"First Update event after OrderBookSnapshot (${postInitEvents.head}) does not match criteria " +
@@ -34,7 +34,7 @@ class BinanceTradePairDataStreamer(config: ExchangeConfig, tradePair: BinanceTra
       }
     }
     postInitEvents.foreach(e => tradePairDataManager ! toOrderBookUpdate(e))
-    buffer.clear()
+    orderBookBuffer.clear()
   }
 
   private def initOrderBook(snapshot: RawOrderBookSnapshot): Unit = {
@@ -77,8 +77,8 @@ class BinanceTradePairDataStreamer(config: ExchangeConfig, tradePair: BinanceTra
     if (lastUpdateEvent != null && update.U != lastUpdateEvent.u + 1) {
       log.error(s"Update stream inconsistent: First UpdateId of this event ({$update.U}) is NOT last FinalUpdateId (${lastUpdateEvent.u})+1")
     }
-    if (bufferingPhase) {
-      buffer += update
+    if (orderBookBufferingPhase) {
+      orderBookBuffer += update
     } else {
       tradePairDataManager ! toOrderBookUpdate(update)
     }
@@ -97,7 +97,7 @@ class BinanceTradePairDataStreamer(config: ExchangeConfig, tradePair: BinanceTra
 
     case u: RawOrderBookUpdate =>
       handleIncoming(u)
-      if (bufferingPhase && !orderBookSnapshotRequested) {
+      if (orderBookBufferingPhase && !orderBookSnapshotRequested) {
         orderBookSnapshotRequested = true
         binanceAdapter ! GetOrderBookSnapshot(tradePair) // when first update is received we ask for the snapshot
       }

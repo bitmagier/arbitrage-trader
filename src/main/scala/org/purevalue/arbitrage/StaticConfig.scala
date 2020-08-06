@@ -10,7 +10,11 @@ import scala.collection.JavaConverters._
 import scala.concurrent.duration.FiniteDuration
 
 case class ExchangeConfig(exchangeName:String, assets: Set[String], makerFee: Double, takerFee: Double, httpTimeout: FiniteDuration)
-case class TradeRoomConfig(maxDataAge: Duration, cachedDataLifetime: Duration, referenceTickerExchanges: Seq[String], internalCommunicationTimeout: Timeout)
+case class TradeRoomConfig(maxDataAge: Duration,
+                           cachedDataLifetime: Duration,
+                           referenceTickerExchanges: Seq[String],
+                           initTimeout: Timeout,
+                           internalCommunicationTimeout: Timeout)
 
 object StaticConfig {
   private val tradeRoomConfig: Config = ConfigFactory.load().getConfig("trade-room")
@@ -19,6 +23,7 @@ object StaticConfig {
       tradeRoomConfig.getDuration("max-data-age"),
       tradeRoomConfig.getDuration("cached-data-lifetime"),
       tradeRoomConfig.getStringList("reference-ticker-exchanges").asScala,
+      Timeout.create(tradeRoomConfig.getDuration("init-timeout")),
       Timeout.create(tradeRoomConfig.getDuration("internal-communication-timeout"))
     )
 

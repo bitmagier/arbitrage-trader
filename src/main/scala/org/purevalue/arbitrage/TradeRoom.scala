@@ -8,15 +8,16 @@ import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
 import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage.CryptoValue.formatPrice
-import org.purevalue.arbitrage.Exchange.{GetFee, GetOrderBooks, GetTickers, GetWallet}
+import org.purevalue.arbitrage.Exchange.{GetFee, GetOrderBooks, GetTickers, GetWallet, IsInitialized, IsInitializedResponse}
 import org.purevalue.arbitrage.TradeRoom._
 import org.purevalue.arbitrage.adapter.ExchangeAdapterProxy
 import org.purevalue.arbitrage.adapter.binance.BinanceAdapter
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexAdapter
+import org.purevalue.arbitrage.trader.FooTrader
 import org.slf4j.LoggerFactory
 
 import scala.collection.mutable.{ArrayBuffer, ListBuffer}
-import scala.concurrent.{ExecutionContextExecutor, Future}
+import scala.concurrent.{Await, ExecutionContextExecutor, Future}
 import scala.util.{Failure, Success}
 
 sealed trait TradeDirection
@@ -109,7 +110,7 @@ object TradeRoom {
                          decisionComment: String)
   // communication with trader OUTGOING
   case class TradeDecisionContext(tickers: Map[TradePair, Map[String, Ticker]],
-                                  orderBooks: Map[TradePair, Map[String, OrderBook]],
+//                                  orderBooks: Map[TradePair, Map[String, OrderBook]],
                                   walletPerExchange: Map[String, Wallet],
                                   feePerExchange: Map[String, Fee]) {
     def referenceTicker(tradePair: TradePair): Ticker = {
@@ -196,14 +197,16 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   def collectTradeDecisionContext(): Future[TradeDecisionContext] = {
     implicit val timeout: Timeout = config.internalCommunicationTimeout
     var tickerFutures = List[Future[List[Ticker]]]()
-    var orderBookFutures = List[Future[List[OrderBook]]]()
+//    var orderBookFutures = List[Future[List[OrderBook]]]()
     var walletFutures = List[Future[Wallet]]()
     var feeFutures = List[Future[Fee]]()
     for (exchange <- exchanges.values) {
-      tickerFutures = (exchange ? GetTickers()).mapTo[List[Ticker]] :: tickerFutures
-      orderBookFutures = (exchange ? GetOrderBooks()).mapTo[List[OrderBook]] :: orderBookFutures
-      walletFutures = (exchange ? GetWallet()).mapTo[Wallet] :: walletFutures
-      feeFutures = (exchange ? GetFee()).mapTo[Fee] :: feeFutures
+      if (Await.result((exchange ? IsInitialized()).mapTo[IsInitializedResponse], timeout.duration).initialized) {
+        tickerFutures = (exchange ? GetTickers()).mapTo[List[Ticker]] :: tickerFutures
+//        orderBookFutures = (exchange ? GetOrderBooks()).mapTo[List[OrderBook]] :: orderBookFutures
+        walletFutures = (exchange ? GetWallet()).mapTo[Wallet] :: walletFutures
+        feeFutures = (exchange ? GetFee()).mapTo[Fee] :: feeFutures
+      }
     }
     val now = LocalDateTime.now()
 
@@ -219,17 +222,17 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       result
     }
 
-    val o1: Future[List[OrderBook]] = Future.sequence(orderBookFutures).map(_.flatten)
-    val futureOrderBooks: Future[Map[TradePair, Map[String, OrderBook]]] = o1.map { books =>
-      var result = Map[TradePair, Map[String, OrderBook]]()
-      for (book <- books) {
-        if (isUpToDate(book, now)) {
-          result = result + (book.tradePair ->
-            (result.getOrElse(book.tradePair, Map()) + (book.exchange -> book)))
-        }
-      }
-      result
-    }
+//    val o1: Future[List[OrderBook]] = Future.sequence(orderBookFutures).map(_.flatten)
+//    val futureOrderBooks: Future[Map[TradePair, Map[String, OrderBook]]] = o1.map { books =>
+//      var result = Map[TradePair, Map[String, OrderBook]]()
+//      for (book <- books) {
+//        if (isUpToDate(book, now)) {
+//          result = result + (book.tradePair ->
+//            (result.getOrElse(book.tradePair, Map()) + (book.exchange -> book)))
+//        }
+//      }
+//      result
+//    }
     val futureWallets: Future[Map[String, Wallet]] =
       Future.sequence(walletFutures)
         .map(e => e.map(w => (w.exchange, w)).toMap)
@@ -239,11 +242,11 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
         .map(e => e.map(f => (f.exchange, f)).toMap)
 
     for {
-      orderBooks <- futureOrderBooks
+//      orderBooks <- futureOrderBooks
       wallets <- futureWallets
       fees <- futureFees
       tickers <- futureTickers
-    } yield TradeDecisionContext(tickers, orderBooks, wallets, fees)
+    } yield TradeDecisionContext(tickers, wallets, fees)
   }
 
   def placeOrderBundleOrders(t: OrderBundle): Unit = {
@@ -317,21 +320,27 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   }
 
   def pullFreshTradeDecisionContext(): Option[TradeDecisionContext] = {
-    if (dcCache.isDefined &&
+    if (dcCache.isEmpty ||
       Duration.between(dcCacheTimestamp, Instant.now()).toMillis > config.cachedDataLifetime.toMillis) {
 
       collectTradeDecisionContext() onComplete {
-        case Success(dc) => dcCache = Some(dc); dcCacheTimestamp = Instant.now()
-        case Failure(exxeption) => log.warn(s"${Emoji.SadFace} collectTradableAssets failed", exxeption)
+        case Success(dc) =>
+          dcCache = Some(dc)
+          dcCacheTimestamp = Instant.now()
+        case Failure(e) =>
+          log.warn(s"${Emoji.SadFace} collectTradableAssets() failed", e)
       }
     }
-
-    val dataAge = Duration.between(dcCacheTimestamp, Instant.now())
-    if (dataAge.toMillis > config.maxDataAge.toMillis) {
-      log.error(s"${Emoji.SadAndConfused} cannot deliver TradeDecisionContext because our snapshot is out-dated (age: $dataAge)")
+    if (dcCache.isEmpty) {
       None
     } else {
-      dcCache
+      val dataAge = Duration.between(dcCacheTimestamp, Instant.now())
+      if (dataAge.toMillis > config.maxDataAge.toMillis) {
+        log.error(s"${Emoji.SadAndConfused} cannot deliver TradeDecisionContext because our snapshot is out-dated (age: $dataAge)")
+        None
+      } else {
+        dcCache
+      }
     }
   }
 
@@ -353,6 +362,22 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       ), camelName)
   }
 
+//  def waitUntilExchangesRunning(): Unit = {
+//    implicit val timeout: Timeout = config.initTimeout
+//    var in: Set[String] = null
+//    do {
+//      Thread.sleep(1000)
+//      in = Set()
+//      for (name <- exchanges.keys) {
+//        if (Await.result((exchanges(name) ? IsInitialized).mapTo[IsInitializedResponse], timeout.duration).initialized) {
+//          in += name
+//        }
+//      }
+//      log.info(s"Initialized exchanges: (${in.size}/${exchanges.keySet.size}) : succeded: $in")
+//    } while (in != exchanges.keySet)
+//    log.info(s"${Emoji.Satisfied} All exchanges initialized")
+//  }
+
   def initExchanges(): Unit = {
     for (name:String <- StaticConfig.activeExchanges) {
       initExchange(name, GlobalConfig.AllExchanges(name))
@@ -360,7 +385,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   }
 
   def initTraders(): Unit = {
-    //    traders += "FooTrader" -> context.actorOf(FooTrader.props(StaticConfig.trader("foo-trader")), "FooTrader")
+    traders += "FooTrader" -> context.actorOf(FooTrader.props(StaticConfig.trader("foo-trader"), self), "FooTrader")
   }
 
   override def preStart(): Unit = {
@@ -374,7 +399,8 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
     case GetTradeDecisionContext() =>
       pullFreshTradeDecisionContext() match {
-        case Some(dc) => sender() ! dc
+        case Some(dc) =>
+          sender() ! dc
         case None =>
       }
 
