@@ -8,11 +8,8 @@ import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
 import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage.CryptoValue.formatDecimal
-import org.purevalue.arbitrage.Exchange.{GetFee, GetOrderBooks, GetTickers, GetWallet, IsInitialized, IsInitializedResponse}
+import org.purevalue.arbitrage.Exchange._
 import org.purevalue.arbitrage.TradeRoom._
-import org.purevalue.arbitrage.adapter.ExchangeDataChannel
-import org.purevalue.arbitrage.adapter.binance.BinanceAdapter
-import org.purevalue.arbitrage.adapter.bitfinex.BitfinexAdapter
 import org.purevalue.arbitrage.trader.FooTrader
 import org.slf4j.LoggerFactory
 
@@ -127,7 +124,7 @@ object TradeRoom {
                                   walletPerExchange: Map[String, Wallet],
                                   feePerExchange: Map[String, Fee]) {
     def referenceTicker(tradePair: TradePair): Option[Ticker] = {
-      var exchanges = StaticConfig.tradeRoom.referenceTickerExchanges
+      var exchanges = AppConfig.tradeRoom.referenceTickerExchanges
       var ticker: Ticker = null
       while (ticker == null) { // fallback implementation if primary ticker is not here because of exchange down or ticker update too old
         tickers.get(tradePair) match {
@@ -375,13 +372,14 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   }
 
 
-  def initExchange(name: String, exchangeAdapterProps: Function0[Props]): Unit = {
+  def initExchange(name: String, exchangeInit:ExchangeInitStuff): Unit = {
     val camelName = name.substring(0, 1).toUpperCase + name.substring(1)
     exchanges += name -> context.actorOf(
       Exchange.props(
         name,
-        StaticConfig.exchange(name),
-        context.actorOf(exchangeAdapterProps.apply(), s"${camelName}Adapter")
+        AppConfig.exchange(name),
+        context.actorOf(exchangeInit.dataChannelProps.apply(), s"$camelName-Exchange"),
+        exchangeInit.tpDataChannelProps
       ), camelName)
   }
 
@@ -406,13 +404,13 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   }
 
   def initExchanges(): Unit = {
-    for (name: String <- StaticConfig.activeExchanges) {
+    for (name: String <- AppConfig.activeExchanges) {
       initExchange(name, GlobalConfig.AllExchanges(name))
     }
   }
 
   def initTraders(): Unit = {
-    traders += "FooTrader" -> context.actorOf(FooTrader.props(StaticConfig.trader("foo-trader"), self), "FooTrader")
+    traders += "FooTrader" -> context.actorOf(FooTrader.props(AppConfig.trader("foo-trader"), self), "FooTrader")
   }
 
   override def preStart(): Unit = {

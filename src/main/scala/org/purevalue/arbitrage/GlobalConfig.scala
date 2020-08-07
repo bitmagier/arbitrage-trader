@@ -1,8 +1,8 @@
 package org.purevalue.arbitrage
 
-import akka.actor.Props
-import org.purevalue.arbitrage.adapter.binance.BinanceAdapter
-import org.purevalue.arbitrage.adapter.bitfinex.BitfinexAdapter
+import akka.actor.{ActorRef, Props}
+import org.purevalue.arbitrage.adapter.binance.{BinanceDataChannel, BinanceTPDataChannel}
+import org.purevalue.arbitrage.adapter.bitfinex.{BitfinexDataChannel, BitfinexTPDataChannel}
 import org.slf4j.LoggerFactory
 
 // Crypto asset / coin.
@@ -29,6 +29,7 @@ object Asset {
 abstract class TradePair {
   val baseAsset: Asset
   val quoteAsset: Asset
+
   override def toString: String = s"${baseAsset.officialSymbol}:${quoteAsset.officialSymbol}"
 
   override def equals(obj: Any): Boolean = {
@@ -43,40 +44,49 @@ abstract class TradePair {
   }
 }
 object TradePair {
-  def of(b: Asset, q:Asset): TradePair = new TradePair {
+  def of(b: Asset, q: Asset): TradePair = new TradePair {
     override val baseAsset: Asset = b
     override val quoteAsset: Asset = q
   }
 }
 
+case class TPDataChannelPropsParams(tp: TradePair, exchangeDataChannel: ActorRef, tpDataManager: ActorRef)
+case class ExchangeInitStuff(dataChannelProps: Function0[Props], tpDataChannelProps: Function1[TPDataChannelPropsParams, Props])
+
 object GlobalConfig {
-  private val log = LoggerFactory.getLogger("StaticConfig")
+  private val log = LoggerFactory.getLogger("GlobalConfig")
 
   // all exchanges - used for init routine
-  val AllExchanges:Map[String, Function0[Props]] = Map(
-    "binance" -> (() =>  BinanceAdapter.props(StaticConfig.exchange("binance"))),
-    "bitfinex" -> (() => BitfinexAdapter.props(StaticConfig.exchange("bitfinex")))
+  val AllExchanges: Map[String, ExchangeInitStuff] = Map(
+    "binance" -> ExchangeInitStuff(
+      () => BinanceDataChannel.props(AppConfig.exchange("binance")),
+      (p: TPDataChannelPropsParams) =>
+        BinanceTPDataChannel.props(AppConfig.exchange("binance"), p.tp, p.exchangeDataChannel, p.tpDataManager)),
+    "bitfinex" -> ExchangeInitStuff(
+      () => BitfinexDataChannel.props(AppConfig.exchange("bitfinex")),
+      (p: TPDataChannelPropsParams) =>
+        BitfinexTPDataChannel.props(AppConfig.exchange("bitfinex"), p.tp, p.exchangeDataChannel, p.tpDataManager))
   )
 
   // this is the reference to know exactly about which asset (or coin) we are talking at each Exchange
   val AllAssets: Map[String, Asset] = Seq(
     Asset("BTC", "Bitcoin"),
     Asset("ETH", "Ethereum"),
-//    Asset("XRP", "Ripple"),
+    //    Asset("XRP", "Ripple"),
     Asset("USDT", "Tether"),
     Asset("BCH", "Bitcoin Cash"),
     Asset("BSV", "Bitcoin SV"),
     Asset("LTC", "Litecoin"),
     Asset("ADA", "Cardano"),
     Asset("CRO", "Crypto.com Coin"),
-//    Asset("BNB", "Binance Coin"),
+    //    Asset("BNB", "Binance Coin"),
     Asset("EOS", "EOS"),
     Asset("LINK", "Chainlink"),
     Asset("XTZ", "Tezos"),
     Asset("XLM", "Stellar"),
     Asset("XMR", "Monero"),
     Asset("TRX", "TRON"),
-//    Asset("USDC", "USD Coin"),
+    //    Asset("USDC", "USD Coin"),
     Asset("HT", "Huobi Token"),
     Asset("VET", "VeChain"),
     Asset("NEO", "Neo"),
@@ -105,21 +115,21 @@ object GlobalConfig {
     Asset("THETA", "THETA"),
     Asset("BTT", "BitTorrent"),
     Asset("ALGO", "Algorand")
-//    Asset("HYN", "Hyperion"),
-//    Asset("QTUM", "Qtum"),
-//    Asset("PAX", "Paxos Standard"),
-//    Asset("OMG", "OMG Network"),
-//    Asset("REP", "Augur"),
-//    Asset("HBAR", "Hedera Hashgraph"),
-//    Asset("TUSD", "TrueUSD"),
-//    Asset("ICX", "ICON"),
-//    Asset("ZIL", "Zilliqa"),
-//    Asset("DCR", "Decred"),
-//    Asset("BTG", "Bitcoin Gold"),
-//    Asset("BCD", "Bitcoin Diamond"),
-//    Asset("LSK", "Lisk"),
-//    Asset("WAVES", "Waves"),
-//    Asset("SXP", "Swipe")
+    //    Asset("HYN", "Hyperion"),
+    //    Asset("QTUM", "Qtum"),
+    //    Asset("PAX", "Paxos Standard"),
+    //    Asset("OMG", "OMG Network"),
+    //    Asset("REP", "Augur"),
+    //    Asset("HBAR", "Hedera Hashgraph"),
+    //    Asset("TUSD", "TrueUSD"),
+    //    Asset("ICX", "ICON"),
+    //    Asset("ZIL", "Zilliqa"),
+    //    Asset("DCR", "Decred"),
+    //    Asset("BTG", "Bitcoin Gold"),
+    //    Asset("BCD", "Bitcoin Diamond"),
+    //    Asset("LSK", "Lisk"),
+    //    Asset("WAVES", "Waves"),
+    //    Asset("SXP", "Swipe")
   ).map(a => (a.officialSymbol, a)).toMap
 
   log.info(s"Total available assets: ${AllAssets.keys}")

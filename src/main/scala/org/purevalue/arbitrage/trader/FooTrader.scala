@@ -6,7 +6,7 @@ import java.util.concurrent.TimeUnit
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props, Status}
 import com.typesafe.config.Config
-import org.purevalue.arbitrage.TradepairDataManager.{Ask, Bid}
+import org.purevalue.arbitrage.TPDataManager.{Ask, Bid}
 import org.purevalue.arbitrage.TradeRoom._
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.trader.FooTrader.Trigger
@@ -36,10 +36,9 @@ class FooTrader(config: Config, tradeRoom: ActorRef) extends Actor {
   var numSearchesTotal: Int = 0
   var numSearchesDiff: Int = 0
   var numSingleSearchesDiff: Int = 0
-  var lastLifeSigh: Instant = Instant.now()
+  var lastLifeSign: Instant = Instant.now()
 
   val scheduleRate: FiniteDuration = FiniteDuration(config.getDuration("schedule-rate").toNanos, TimeUnit.NANOSECONDS)
-
   val schedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(10.seconds, scheduleRate, self, Trigger())
 
   def newUUID(): UUID = UUID.randomUUID() // switch to Time based UUID when connecting a DB like cassandra
@@ -175,8 +174,8 @@ class FooTrader(config: Config, tradeRoom: ActorRef) extends Actor {
   }
 
   def lifeSign(dc: TradeDecisionContext): Unit = {
-    val minutes = Duration.between(lastLifeSigh, Instant.now()).toMinutes
-    if (minutes > 3) {
+    val duration = Duration.between(lastLifeSign, Instant.now())
+    if (duration.compareTo(config.getDuration("lifesign-interval")) > 0) {
       val numTradepairPerTickerAmount : Map[Int, Int] = dc.tickers
         .map(e => e._2.size)
         .foldLeft(Map[Int, Int]())((a,b) => a + (b -> a.getOrElse(b, 0)))
@@ -185,9 +184,9 @@ class FooTrader(config: Config, tradeRoom: ActorRef) extends Actor {
         .map(e => e._2.size)
         .foldLeft(Map[Int, Int]())((a,b) => a + (b -> a.getOrElse(b, 0)))
       val orderBookStats:String = numTradepairPerOrderBookAmount.foldLeft("")((a,b) => a + s"[${b._1} orderbooks: ${b._2}] ")
-      log.info(s"Life sign: $numSearchesDiff search runs ($numSingleSearchesDiff single searches) done in last $minutes minutes. Total search runs: $numSearchesTotal")
+      log.info(s"Life sign: $numSearchesDiff search runs ($numSingleSearchesDiff single searches) done since $duration. Total search runs: $numSearchesTotal")
       log.info(s"DecisionContext: Ticker stats: $tickerStats, Orderbook stats: $orderBookStats")
-      lastLifeSigh = Instant.now()
+      lastLifeSign = Instant.now()
       numSingleSearchesDiff = 0
       numSearchesDiff = 0
     }

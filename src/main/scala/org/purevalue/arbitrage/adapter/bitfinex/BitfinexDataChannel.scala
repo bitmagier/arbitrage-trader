@@ -1,90 +1,89 @@
 package org.purevalue.arbitrage.adapter.bitfinex
 
-import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
-import org.purevalue.arbitrage.TradepairDataManager._
-import org.purevalue.arbitrage.{ExchangeConfig, Main}
+import akka.actor.{ActorRef, Props}
+import org.purevalue.arbitrage.adapter.ExchangeDataChannel
+import org.purevalue.arbitrage.adapter.bitfinex.BitfinexDataChannel.GetBitfinexTradePair
+import org.purevalue.arbitrage.{Asset, ExchangeConfig, GlobalConfig, TradePair}
 import org.slf4j.LoggerFactory
+import spray.json._
 
+import scala.concurrent.Await
+
+case class BitfinexSymbol(currencySymbol: Asset, apiSymbol: String)
+case class BitfinexTradePair(baseAsset: Asset, quoteAsset: Asset, apiSymbol: String) extends TradePair
 
 object BitfinexDataChannel {
-  def props(config: ExchangeConfig, tradePair: BitfinexTradePair, tradePairDataManager: ActorRef): Props =
-    Props(new BitfinexDataChannel(config, tradePair, tradePairDataManager))
+  case class GetBitfinexTradePair(tp:TradePair)
+
+  def props(config: ExchangeConfig): Props = Props(new BitfinexDataChannel(config))
 }
-class BitfinexDataChannel(config: ExchangeConfig, tradePair: BitfinexTradePair, tradePairDataManager: ActorRef) extends Actor {
+class BitfinexDataChannel(config: ExchangeConfig) extends ExchangeDataChannel(config) {
   private val log = LoggerFactory.getLogger(classOf[BitfinexDataChannel])
-  implicit val system: ActorSystem = Main.actorSystem
 
-  private var orderBookWebSocketFlow: ActorRef = _
+  val baseRestEndpointPublic = "https://api-pub.bitfinex.com"
 
-  private def toOrderBookInitialData(snapshot: RawOrderBookSnapshotMessage) = {
-    val bids = snapshot.values
-      .filter(_.count > 0)
-      .filter(_.amount > 0)
-      .map(e => Bid(e.price, e.amount))
-    val asks = snapshot.values
-      .filter(_.count > 0)
-      .filter(_.amount < 0)
-      .map(e => Ask(e.price, -e.amount))
-    OrderBookInitialData(
-      bids, asks
-    )
+  var bitfinexAssets: Set[BitfinexSymbol] = _
+  var bitfinexTradePairs: Set[BitfinexTradePair] = _
+
+  def tradePairs: Set[TradePair] = bitfinexTradePairs.asInstanceOf[Set[TradePair]]
+
+  def initTradePairs(): Unit = {
+    import DefaultJsonProtocol._
+
+    val apiSymbolToOfficialCurrencySymbolMapping: Map[String, String] = Await.result(
+      queryJson[List[List[Tuple2[String, String]]]](s"$baseRestEndpointPublic/v2/conf/pub:map:currency:sym"),
+      config.httpTimeout)
+      .head
+      .map(e => (e._1, e._2.toUpperCase))
+      .toMap
+    if (log.isTraceEnabled) log.trace(s"currency mappings received: $apiSymbolToOfficialCurrencySymbolMapping")
+
+    // currency->name
+    val currencies: Map[String, String] = Await.result(
+      queryJson[List[List[Tuple2[String, String]]]](s"$baseRestEndpointPublic/v2/conf/pub:map:currency:label"),
+      config.httpTimeout)
+      .head
+      .map(e => (e._1, e._2))
+      .toMap
+    if (log.isTraceEnabled) log.trace(s"currencies received: $currencies")
+
+    bitfinexAssets = currencies // apiSymbol, name
+      .map(e => (e._1, apiSymbolToOfficialCurrencySymbolMapping.getOrElse(e._1, e._1))) // apiSymbol, officialSymbol
+      .filter(e => GlobalConfig.AllAssets.keySet.contains(e._2)) // global crosscheck
+      .filter(e => config.assets.contains(e._2)) // bitfinex config crosscheck
+      .map(e => BitfinexSymbol(Asset(e._2), e._1))
+      .toSet
+    if (log.isTraceEnabled) log.trace(s"bitfinexAssets: $bitfinexAssets")
+
+    val tradePairs: List[String] = Await.result(
+      queryJson[List[List[String]]](s"$baseRestEndpointPublic/v2/conf/pub:list:pair:exchange"),
+      config.httpTimeout)
+      .head
+    if (log.isTraceEnabled) log.trace(s"tradepairs: $tradePairs")
+
+    bitfinexTradePairs = tradePairs
+      .filter(_.length == 6)
+      .map(e => (e.substring(0, 3), e.substring(3, 6), e)) // currency1-apiSymbol, currency2-apiSymbol, tradePair
+      .map(e =>
+        (apiSymbolToOfficialCurrencySymbolMapping.getOrElse(e._1, e._1), // resolve official currency symbols
+          apiSymbolToOfficialCurrencySymbolMapping.getOrElse(e._2, e._2), e._3))
+      .filter(e =>
+        GlobalConfig.AllAssets.keySet.contains(e._1)
+          && GlobalConfig.AllAssets.keySet.contains(e._2)) // crosscheck with global assets
+      .filter(e =>
+        bitfinexAssets.exists(_.currencySymbol.officialSymbol == e._1)
+          && bitfinexAssets.exists(_.currencySymbol.officialSymbol == e._2)) // crosscheck with bitfinex (configured) assets
+      .map(e => BitfinexTradePair(Asset(e._1), Asset(e._2), e._3))
+      .toSet
+    if (log.isTraceEnabled) log.trace(s"bitfinexTradePairs: $bitfinexTradePairs")
   }
 
-  /*
-    Algorithm to create and keep a book instance updated
-
-    1. subscribe to channel
-    2. receive the book snapshot and create your in-memory book structure
-    3. when count > 0 then you have to add or update the price level
-    3.1 if amount > 0 then add/update bids
-    3.2 if amount < 0 then add/update asks
-    4. when count = 0 then you have to delete the price level.
-    4.1 if amount = 1 then remove from bids
-    4.2 if amount = -1 then remove from asks
-  */
-  private def toOrderBookUpdate(update: RawOrderBookUpdateMessage): OrderBookUpdate = {
-    if (update.value.count > 0) {
-      if (update.value.amount > 0)
-        OrderBookUpdate(List(Bid(update.value.price, update.value.amount)), List())
-      else if (update.value.amount < 0)
-        OrderBookUpdate(List(), List(Ask(update.value.price, -update.value.amount)))
-      else {
-        log.warn(s"undefined update case: $update")
-        OrderBookUpdate(List(), List())
-      }
-    } else if (update.value.count == 0) {
-      if (update.value.amount == 1.0d)
-        OrderBookUpdate(List(Bid(update.value.price, 0.0d)), List())
-      else if (update.value.amount == -1.0d)
-        OrderBookUpdate(List(), List(Ask(update.value.price, 0.0d)))
-      else {
-        log.warn(s"undefined update case: $update")
-        OrderBookUpdate(List(), List())
-      }
-    } else {
-      log.warn(s"undefined update case: $update")
-      OrderBookUpdate(List(), List())
-    }
+  override def preStart(): Unit = {
+    super.preStart()
+    initTradePairs()
   }
 
-  override def preStart() {
-    log.debug(s"BitfinexTradePairDataStreamer($tradePair) initializing...")
-    orderBookWebSocketFlow = context.actorOf(BitfinexTradePairBasedWebSockets.props(config, tradePair, self))
-  }
-
-  override def receive: Receive = {
-
-    case s: RawOrderBookSnapshotMessage =>
-      log.debug(s"Initializing OrderBook($tradePair) with received snapshot")
-      tradePairDataManager ! toOrderBookInitialData(s)
-
-    case u: RawOrderBookUpdateMessage =>
-      tradePairDataManager ! toOrderBookUpdate(u)
-
-    case t: RawTickerMessage =>
-      tradePairDataManager ! t.value.toTicker(config.exchangeName, tradePair)
-
-    case Status.Failure(cause) =>
-      log.error("Failure received", cause)
+  override def receive: Receive = super.receive orElse {
+    case GetBitfinexTradePair(tp) => sender() ! bitfinexTradePairs.find(e => e.baseAsset==tp.baseAsset && e.quoteAsset==tp.quoteAsset).get
   }
 }

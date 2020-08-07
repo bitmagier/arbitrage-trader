@@ -2,13 +2,12 @@ package org.purevalue.arbitrage
 
 import java.time.LocalDateTime
 
-import akka.pattern.gracefulStop
 import akka.actor.SupervisorStrategy.Restart
-import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, OneForOneStrategy, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, OneForOneStrategy, Props, Status}
 import akka.pattern.{ask, pipe}
 import akka.util.Timeout
 import org.purevalue.arbitrage.Exchange._
-import org.purevalue.arbitrage.TradepairDataManager.{Ask, Bid, InitCheck}
+import org.purevalue.arbitrage.TPDataManager.{Ask, Bid}
 import org.purevalue.arbitrage.adapter.ExchangeDataChannel.{GetTradePairs, TradePairs}
 import org.slf4j.LoggerFactory
 
@@ -60,23 +59,24 @@ object Exchange {
   case class GetOrderBooks()
   case class GetFee()
 
-  def props(name: String, config: ExchangeConfig, adapter: ActorRef): Props = Props(new Exchange(name, config, adapter))
+  def props(name: String, config: ExchangeConfig, exchangeDataChannel: ActorRef, tpDataChannelPropsInit: Function1[TPDataChannelPropsParams, Props]): Props =
+    Props(new Exchange(name, config, exchangeDataChannel, tpDataChannelPropsInit))
 }
 
-case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: ActorRef) extends Actor {
+case class Exchange(exchangeName: String, config: ExchangeConfig, exchangeDataChannel: ActorRef, tpDataChannelPropsInit:Function1[TPDataChannelPropsParams, Props]) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[Exchange])
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
-  val fee: Fee = Fee(name, config.makerFee, config.takerFee)
+  val fee: Fee = Fee(exchangeName, config.makerFee, config.takerFee)
   // dynamic
   var tradePairs: Set[TradePair] = _
-  var tradePairDataManagers: Map[TradePair, ActorRef] = Map()
-  var tradePairDataInitPending: Set[TradePair] = _
+  var tpDataManagers: Map[TradePair, ActorRef] = Map()
+  var tpDataInitPending: Set[TradePair] = _
 
-  def initialized: Boolean = tradePairDataInitPending != null && tradePairDataInitPending.isEmpty
+  def initialized: Boolean = tpDataInitPending != null && tpDataInitPending.isEmpty
 
-  var wallet: Wallet = Wallet(name, // TODO ask exchange adapter for that
+  var wallet: Wallet = Wallet(exchangeName, // TODO ask exchange adapter for that
     Map(
       Asset("BTC") -> 0.5d,
       Asset("USDT") -> 2000.0d,
@@ -88,22 +88,23 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
   )
 
   def initTradePairBasedData(): Unit = {
-    tradePairDataInitPending = tradePairs
+    tpDataInitPending = tradePairs
     for (p <- tradePairs) {
-      tradePairDataManagers = tradePairDataManagers + (p -> context.actorOf(TradepairDataManager.props(name, p, exchangeAdapter, self),
-        s"$name.TradePairDataManager-${p.baseAsset.officialSymbol}-${p.quoteAsset.officialSymbol}"))
+      tpDataManagers = tpDataManagers + (p -> context.actorOf(TPDataManager.props(exchangeName, p, exchangeDataChannel, self,
+        tpDataChannelPropsInit),
+        s"$exchangeName.TPDataManager-${p.baseAsset.officialSymbol}-${p.quoteAsset.officialSymbol}"))
     }
   }
 
-  override val supervisorStrategy =
+  override val supervisorStrategy: OneForOneStrategy =
     OneForOneStrategy(maxNrOfRetries = 10, withinTimeRange = 15.minutes, loggingEnabled = true) {
       case _ => Restart
     }
 
 
   override def preStart(): Unit = {
-    log.info(s"Initializing exchange $name")
-    exchangeAdapter ! GetTradePairs
+    log.info(s"Initializing exchange $exchangeName")
+    exchangeDataChannel ! GetTradePairs
   }
 
   override def receive: Receive = {
@@ -112,7 +113,7 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
     case IsInitialized() =>
       val result: Boolean = initialized
       if (!result) {
-        log.debug(s"[$name] initialization pending: $tradePairDataInitPending")
+        log.debug(s"[$exchangeName] initialization pending: $tpDataInitPending")
       }
       sender() ! Exchange.IsInitializedResponse(initialized)
 
@@ -120,54 +121,54 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
       if (initialized) {
         sender() ! wallet
       } else {
-        log.debug(s"[$name] We have been asked to deliver the Wallet, but we are not yet fully initialized")
+        log.debug(s"[$exchangeName] We have been asked to deliver the Wallet, but we are not yet fully initialized")
       }
 
     case GetOrderBooks() =>
       if (initialized) {
-        implicit val timeout: Timeout = StaticConfig.tradeRoom.internalCommunicationTimeout
+        implicit val timeout: Timeout = AppConfig.tradeRoom.internalCommunicationTimeout
         var orderBooks = List[Future[OrderBook]]()
-        for (m <- tradePairDataManagers.values) {
-          orderBooks = (m ? TradepairDataManager.GetOrderBook()).mapTo[OrderBook] :: orderBooks
+        for (m <- tpDataManagers.values) {
+          orderBooks = (m ? TPDataManager.GetOrderBook()).mapTo[OrderBook] :: orderBooks
         }
         Future.sequence(orderBooks).pipeTo(sender())
       } else {
-        log.debug(s"[$name] We have been asked to deliver OrderBooks, but we are not yet fully initialized")
+        log.debug(s"[$exchangeName] We have been asked to deliver OrderBooks, but we are not yet fully initialized")
       }
 
     case GetTickers() =>
       if (initialized) {
-        implicit val timeout: Timeout = StaticConfig.tradeRoom.internalCommunicationTimeout
+        implicit val timeout: Timeout = AppConfig.tradeRoom.internalCommunicationTimeout
         var ticker = List[Future[Ticker]]()
-        for (m <- tradePairDataManagers.values) {
-          ticker = (m ? TradepairDataManager.GetTicker()).mapTo[Ticker] :: ticker
+        for (m <- tpDataManagers.values) {
+          ticker = (m ? TPDataManager.GetTicker()).mapTo[Ticker] :: ticker
         }
         Future.sequence(ticker).pipeTo(sender())
       } else {
-        log.debug(s"[$name] We have been asked to deliver Ticker, but we are not yet fully initialized")
+        log.debug(s"[$exchangeName] We have been asked to deliver Ticker, but we are not yet fully initialized")
       }
 
     case GetFee() =>
       if (initialized) {
         sender() ! fee
       } else {
-        log.debug(s"[$name] We have been asked to deliver Fee, but we are not yet fully initialized")
+        log.debug(s"[$exchangeName] We have been asked to deliver Fee, but we are not yet fully initialized")
       }
 
     // Messages from ExchangeAdapter
 
     case TradePairs(t) =>
       tradePairs = t
-      log.info(s"$name: ${tradePairs.size} TradePairs: $tradePairs")
+      log.info(s"$exchangeName: ${tradePairs.size} TradePairs: $tradePairs")
       initTradePairBasedData()
 
     // Messages from TradePairDataManager
 
-    case TradepairDataManager.Initialized(t) =>
-      tradePairDataInitPending -= t
-      log.info(s"[$name]: [$t] initialized. Still pending: $tradePairDataInitPending")
-      if (tradePairDataInitPending.isEmpty) {
-        log.info(s"${Emoji.Robot} [$name]: all TradePair data initialized and running")
+    case TPDataManager.Initialized(t) =>
+      tpDataInitPending -= t
+      log.info(s"[$exchangeName]: [$t] initialized. Still pending: $tpDataInitPending")
+      if (tpDataInitPending.isEmpty) {
+        log.info(s"${Emoji.Robot} [$exchangeName]: all TradePair data initialized and running")
       }
 
     case Status.Failure(cause) =>

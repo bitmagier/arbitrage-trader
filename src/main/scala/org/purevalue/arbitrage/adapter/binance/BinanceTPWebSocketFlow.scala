@@ -15,13 +15,13 @@ import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonF
 import scala.concurrent.{Future, Promise}
 import scala.util.{Failure, Success}
 
-object BinanceTradePairBasedWebSockets {
-  def props(config: ExchangeConfig, tradePair: BinanceTradePair, tradePairDataStreamer: ActorRef): Props =
-    Props(new BinanceTradePairBasedWebSockets(config, tradePair, tradePairDataStreamer))
+object BinanceTPWebSocketFlow {
+  def props(config: ExchangeConfig, tradePair: BinanceTradePair, binanceTPDataChannel: ActorRef): Props =
+    Props(new BinanceTPWebSocketFlow(config, tradePair, binanceTPDataChannel))
 }
 
-case class BinanceTradePairBasedWebSockets(config: ExchangeConfig, tradePair: BinanceTradePair, tradePairDataStreamer: ActorRef) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[BinanceTradePairBasedWebSockets])
+case class BinanceTPWebSocketFlow(config: ExchangeConfig, tradePair: BinanceTradePair, binanceTPDataChannel: ActorRef) extends Actor {
+  private val log = LoggerFactory.getLogger(classOf[BinanceTPWebSocketFlow])
   private val symbol = tradePair.symbol.toLowerCase()
   implicit val actorSystem: ActorSystem = Main.actorSystem
 
@@ -38,7 +38,7 @@ case class BinanceTradePairBasedWebSockets(config: ExchangeConfig, tradePair: Bi
   private def handleDepthUpdate(u: RawOrderBookUpdate): Unit = {
     if (log.isTraceEnabled) log.trace(s"received OrderBook update: $u")
     u match {
-      case u if u.s == tradePair.symbol => tradePairDataStreamer ! u
+      case u if u.s == tradePair.symbol => binanceTPDataChannel ! u
       case x@_ => log.warn(s"${Emoji.Confused} RawOrderBookUpdate contains wrong TradePair. Expected was '$tradePair'. Message was: $x")
     }
   }
@@ -46,7 +46,7 @@ case class BinanceTradePairBasedWebSockets(config: ExchangeConfig, tradePair: Bi
   private def handleTicker(t: RawTicker): Unit = {
     if (log.isTraceEnabled) log.trace(s"received Ticker: $t")
     t.s match {
-      case tradePair.symbol => tradePairDataStreamer ! t
+      case tradePair.symbol => binanceTPDataChannel ! t
       case x@_ => log.warn(s"${Emoji.Confused} RawTicker contains wrong TradePair. Expected was '$tradePair'. Message was: $x`")
     }
   }
@@ -165,5 +165,3 @@ object WebSocketJsonProtocoll extends DefaultJsonProtocol {
   implicit val bookUpdate: RootJsonFormat[RawOrderBookUpdate] = jsonFormat7(RawOrderBookUpdate)
   implicit val rawTicker: RootJsonFormat[RawTicker] = jsonFormat22(RawTicker)
 }
-
-// TODO handle temporary down trading pair - at init time - where no subscribe response is deliverd, as well as during trading time (event?)

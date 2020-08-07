@@ -1,9 +1,9 @@
 package org.purevalue.arbitrage.adapter.binance
 
-import akka.actor.{ActorRef, Props, Status}
+import akka.actor.{Props, Status}
 import akka.pattern.pipe
 import org.purevalue.arbitrage.adapter.ExchangeDataChannel
-import org.purevalue.arbitrage.adapter.binance.BinanceAdapter.{GetOrderBookSnapshot, baseEndpoint}
+import org.purevalue.arbitrage.adapter.binance.BinanceDataChannel.{GetBinanceTradePair, GetOrderBookSnapshot, baseEndpoint}
 import org.purevalue.arbitrage.{Asset, ExchangeConfig, TradePair}
 import org.slf4j.LoggerFactory
 import spray.json._
@@ -28,32 +28,22 @@ import scala.concurrent.Await
 
 case class BinanceTradePair(baseAsset: Asset, quoteAsset: Asset, symbol: String) extends TradePair
 
-object BinanceAdapter {
+object BinanceDataChannel {
   case class GetOrderBookSnapshot(tradePair: BinanceTradePair)
+  case class GetBinanceTradePair(tradePair: TradePair)
 
   val baseEndpoint = "https://api.binance.com"
 
-  def props(config: ExchangeConfig): Props = Props(new BinanceAdapter(config))
+  def props(config: ExchangeConfig): Props = Props(new BinanceDataChannel(config))
 }
 
-class BinanceAdapter(config: ExchangeConfig) extends ExchangeDataChannel(config) {
-  private val log = LoggerFactory.getLogger(classOf[BinanceAdapter])
-
-  val name: String = "BinanceAdapter"
+class BinanceDataChannel(config: ExchangeConfig) extends ExchangeDataChannel(config) {
+  private val log = LoggerFactory.getLogger(classOf[BinanceDataChannel])
 
   private var exchangeInfo: RawBinanceExchangeInformation = _
-  private var binanceDataChannelStreamer: List[ActorRef] = List()
   private var binanceTradePairs: Set[BinanceTradePair] = _
 
   override def tradePairs: Set[TradePair] = binanceTradePairs.asInstanceOf[Set[TradePair]]
-
-  override def startStreamingTradePairData(tradePair: TradePair, tradePairDataManager: ActorRef): Unit = {
-    val binanceTradePair = binanceTradePairs
-      .find(e => e.baseAsset == tradePair.baseAsset && e.quoteAsset == tradePair.quoteAsset)
-      .getOrElse(throw new RuntimeException(s"No binance tradepair $tradePair available"))
-    binanceDataChannelStreamer = binanceDataChannelStreamer :+
-      context.actorOf(BinanceTPDataChannel.props(config, binanceTradePair, self, tradePairDataManager), s"BinanceTradePairDataStreamer-$tradePair")
-  }
 
   override def preStart(): Unit = {
     import BinanceJsonProtocol._
@@ -69,7 +59,10 @@ class BinanceAdapter(config: ExchangeConfig) extends ExchangeDataChannel(config)
 
   override def receive: Receive = super.receive orElse {
 
-    // Messages from BinanceTradePairBasedDataStreamer
+    // Messages from BinanceTPDataChannel
+    case GetBinanceTradePair(tp) =>
+      sender() ! binanceTradePairs.find(e => e.baseAsset==tp.baseAsset && e.quoteAsset==tp.quoteAsset).get
+
     case GetOrderBookSnapshot(tradePair) =>
       import BinanceJsonProtocol._
       log.debug(s"Binance: Get OrderBookSnapshot for $tradePair")

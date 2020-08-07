@@ -15,7 +15,7 @@ case class TradeRoomConfig(maxDataAge: Duration,
                            referenceTickerExchanges: Seq[String],
                            internalCommunicationTimeout: Timeout)
 
-object StaticConfig {
+object AppConfig {
   private val tradeRoomConfig: Config = ConfigFactory.load().getConfig("trade-room")
   val tradeRoom: TradeRoomConfig =
     TradeRoomConfig(
