@@ -6,7 +6,7 @@ import java.util.concurrent.TimeUnit
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props, Status}
 import com.typesafe.config.Config
-import org.purevalue.arbitrage.TradePairDataManager.{Ask, Bid}
+import org.purevalue.arbitrage.TradepairDataManager.{Ask, Bid}
 import org.purevalue.arbitrage.TradeRoom._
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.trader.FooTrader.Trigger
@@ -174,10 +174,19 @@ class FooTrader(config: Config, tradeRoom: ActorRef) extends Actor {
     result
   }
 
-  def lifeSign(): Unit = {
+  def lifeSign(dc: TradeDecisionContext): Unit = {
     val minutes = Duration.between(lastLifeSigh, Instant.now()).toMinutes
     if (minutes > 3) {
+      val numTradepairPerTickerAmount : Map[Int, Int] = dc.tickers
+        .map(e => e._2.size)
+        .foldLeft(Map[Int, Int]())((a,b) => a + (b -> a.getOrElse(b, 0)))
+      val tickerStats:String = numTradepairPerTickerAmount.foldLeft("")((a,b) => a + s"[${b._1} ticker: ${b._2}] ")
+      val numTradepairPerOrderBookAmount : Map[Int, Int] = dc.orderBooks
+        .map(e => e._2.size)
+        .foldLeft(Map[Int, Int]())((a,b) => a + (b -> a.getOrElse(b, 0)))
+      val orderBookStats:String = numTradepairPerOrderBookAmount.foldLeft("")((a,b) => a + s"[${b._1} orderbooks: ${b._2}] ")
       log.info(s"Life sign: $numSearchesDiff search runs ($numSingleSearchesDiff single searches) done in last $minutes minutes. Total search runs: $numSearchesTotal")
+      log.info(s"DecisionContext: Ticker stats: $tickerStats, Orderbook stats: $orderBookStats")
       lastLifeSigh = Instant.now()
       numSingleSearchesDiff = 0
       numSearchesDiff = 0
@@ -196,12 +205,12 @@ class FooTrader(config: Config, tradeRoom: ActorRef) extends Actor {
 
     // response from TradeRoom
 
-    case t: TradeDecisionContext =>
-      log.debug(s"Using TradeDecisionContext: with Tickers for Tradepairs[${t.tickers.keys}], OrderBooks for TradePairs[${t.orderBooks.keys}], etc.")
-      lifeSign()
+    case dc: TradeDecisionContext =>
+      log.debug(s"Using TradeDecisionContext: with Tickers for Tradepairs[${dc.tickers.keys}], OrderBooks for TradePairs[${dc.orderBooks.keys}], etc.")
+      lifeSign(dc)
       numSearchesDiff += 1
       numSearchesTotal += 1
-      findBestShot(t) match {
+      findBestShot(dc) match {
         case Some(orderBundle) =>
           // TODO pendingOrderBundles += (orderBundle.id -> orderBundle)
           tradeRoom ! orderBundle

@@ -3,21 +3,21 @@ package org.purevalue.arbitrage.adapter
 import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.{ContentTypes, HttpEntity, HttpMethods, HttpRequest}
-import org.purevalue.arbitrage.adapter.ExchangeAdapterProxy.{GetTradePairs, TradePairDataStreamRequest, TradePairs}
+import org.purevalue.arbitrage.adapter.ExchangeDataChannel.{GetTradePairs, TradePairDataStreamRequest, TradePairs}
 import org.purevalue.arbitrage.{ExchangeConfig, Main, TradePair}
 import org.slf4j.LoggerFactory
 import spray.json.{DeserializationException, JsValue, JsonParser, JsonReader}
 
 import scala.concurrent.{ExecutionContextExecutor, Future}
 
-object ExchangeAdapterProxy {
+object ExchangeDataChannel {
   case class GetTradePairs()
   case class TradePairs(value: Set[TradePair])
   case class TradePairDataStreamRequest(tradePair: TradePair)
 }
 
-abstract class ExchangeAdapterProxy(config: ExchangeConfig) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[ExchangeAdapterProxy])
+abstract class ExchangeDataChannel(config: ExchangeConfig) extends Actor {
+  private val log = LoggerFactory.getLogger(classOf[ExchangeDataChannel])
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 

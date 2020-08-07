@@ -155,7 +155,7 @@ case class BitfinexTradePairBasedWebSockets(config: ExchangeConfig, tradePair: B
                   case None => JsonParser(s).convertTo[RawOrderBookUpdateMessage]
                 }
               case id@_ =>
-                log.error(s"${Emoji.SadAndConfused} bitfinex data message with unknown channelId $id received")
+                log.error(s"${Emoji.SadAndConfused} [bitfinex:$tradePair] data message with unknown channelId $id received.")
                 UnknownDataMessage(s)
             }
           case None => throw new RuntimeException(s"${Emoji.SadAndConfused} Unable to decode bifinex data message:\n$s")

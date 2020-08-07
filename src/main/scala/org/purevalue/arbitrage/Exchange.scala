@@ -2,13 +2,14 @@ package org.purevalue.arbitrage
 
 import java.time.LocalDateTime
 
+import akka.pattern.gracefulStop
 import akka.actor.SupervisorStrategy.Restart
-import akka.actor.{Actor, ActorRef, ActorSystem, OneForOneStrategy, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, OneForOneStrategy, Props, Status}
 import akka.pattern.{ask, pipe}
 import akka.util.Timeout
 import org.purevalue.arbitrage.Exchange._
-import org.purevalue.arbitrage.TradePairDataManager.{Ask, Bid}
-import org.purevalue.arbitrage.adapter.ExchangeAdapterProxy.{GetTradePairs, TradePairs}
+import org.purevalue.arbitrage.TradepairDataManager.{Ask, Bid, InitCheck}
+import org.purevalue.arbitrage.adapter.ExchangeDataChannel.{GetTradePairs, TradePairs}
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration.DurationInt
@@ -67,7 +68,6 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
-  // val assets: Set[Asset] = GlobalConfig.AllAssets.filter(e => config.assets.contains(e._2.officialSymbol)).values.toSet
   val fee: Fee = Fee(name, config.makerFee, config.takerFee)
   // dynamic
   var tradePairs: Set[TradePair] = _
@@ -90,15 +90,16 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
   def initTradePairBasedData(): Unit = {
     tradePairDataInitPending = tradePairs
     for (p <- tradePairs) {
-      tradePairDataManagers = tradePairDataManagers + (p -> context.actorOf(TradePairDataManager.props(name, p, exchangeAdapter, self),
+      tradePairDataManagers = tradePairDataManagers + (p -> context.actorOf(TradepairDataManager.props(name, p, exchangeAdapter, self),
         s"$name.TradePairDataManager-${p.baseAsset.officialSymbol}-${p.quoteAsset.officialSymbol}"))
     }
   }
 
   override val supervisorStrategy =
-    OneForOneStrategy(maxNrOfRetries = 10, withinTimeRange = 15.minutes) {
+    OneForOneStrategy(maxNrOfRetries = 10, withinTimeRange = 15.minutes, loggingEnabled = true) {
       case _ => Restart
     }
+
 
   override def preStart(): Unit = {
     log.info(s"Initializing exchange $name")
@@ -127,7 +128,7 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
         implicit val timeout: Timeout = StaticConfig.tradeRoom.internalCommunicationTimeout
         var orderBooks = List[Future[OrderBook]]()
         for (m <- tradePairDataManagers.values) {
-          orderBooks = (m ? TradePairDataManager.GetOrderBook()).mapTo[OrderBook] :: orderBooks
+          orderBooks = (m ? TradepairDataManager.GetOrderBook()).mapTo[OrderBook] :: orderBooks
         }
         Future.sequence(orderBooks).pipeTo(sender())
       } else {
@@ -139,7 +140,7 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
         implicit val timeout: Timeout = StaticConfig.tradeRoom.internalCommunicationTimeout
         var ticker = List[Future[Ticker]]()
         for (m <- tradePairDataManagers.values) {
-          ticker = (m ? TradePairDataManager.GetTicker()).mapTo[Ticker] :: ticker
+          ticker = (m ? TradepairDataManager.GetTicker()).mapTo[Ticker] :: ticker
         }
         Future.sequence(ticker).pipeTo(sender())
       } else {
@@ -162,7 +163,7 @@ case class Exchange(name: String, config: ExchangeConfig, exchangeAdapter: Actor
 
     // Messages from TradePairDataManager
 
-    case TradePairDataManager.Initialized(t) =>
+    case TradepairDataManager.Initialized(t) =>
       tradePairDataInitPending -= t
       log.info(s"[$name]: [$t] initialized. Still pending: $tradePairDataInitPending")
       if (tradePairDataInitPending.isEmpty) {

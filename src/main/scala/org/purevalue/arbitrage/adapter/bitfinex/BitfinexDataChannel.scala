@@ -1,17 +1,17 @@
 package org.purevalue.arbitrage.adapter.bitfinex
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
-import org.purevalue.arbitrage.TradePairDataManager._
+import org.purevalue.arbitrage.TradepairDataManager._
 import org.purevalue.arbitrage.{ExchangeConfig, Main}
 import org.slf4j.LoggerFactory
 
 
-object BitfinexTradePairDataStreamer {
+object BitfinexDataChannel {
   def props(config: ExchangeConfig, tradePair: BitfinexTradePair, tradePairDataManager: ActorRef): Props =
-    Props(new BitfinexTradePairDataStreamer(config, tradePair, tradePairDataManager))
+    Props(new BitfinexDataChannel(config, tradePair, tradePairDataManager))
 }
-class BitfinexTradePairDataStreamer(config: ExchangeConfig, tradePair: BitfinexTradePair, tradePairDataManager: ActorRef) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[BitfinexTradePairDataStreamer])
+class BitfinexDataChannel(config: ExchangeConfig, tradePair: BitfinexTradePair, tradePairDataManager: ActorRef) extends Actor {
+  private val log = LoggerFactory.getLogger(classOf[BitfinexDataChannel])
   implicit val system: ActorSystem = Main.actorSystem
 
   private var orderBookWebSocketFlow: ActorRef = _

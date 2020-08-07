@@ -3,15 +3,15 @@ package org.purevalue.arbitrage
 import java.time.{Duration, Instant, LocalDateTime}
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, PoisonPill, Props, Status}
-import org.purevalue.arbitrage.TradePairDataManager._
-import org.purevalue.arbitrage.adapter.ExchangeAdapterProxy
+import org.purevalue.arbitrage.TradepairDataManager._
+import org.purevalue.arbitrage.adapter.ExchangeDataChannel
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.ExecutionContextExecutor
 import scala.concurrent.duration.DurationInt
 
 
-object TradePairDataManager {
+object TradepairDataManager {
   case class InitCheck()
   case class GetTicker()
   case class GetOrderBook()
@@ -26,14 +26,14 @@ object TradePairDataManager {
   case class OrderBookUpdate(bids: Seq[Bid], asks: Seq[Ask])
 
   def props(exchange: String, tradePair: TradePair, exchangeQueryAdapter: ActorRef, exchangeActor: ActorRef): Props =
-    Props(new TradePairDataManager(exchange, tradePair, exchangeQueryAdapter, exchangeActor))
+    Props(new TradepairDataManager(exchange, tradePair, exchangeQueryAdapter, exchangeActor))
 }
 
 /**
  * Manages all kind of data of one tradepair at one exchange
  */
-case class TradePairDataManager(exchange: String, tradePair: TradePair, exchangeQueryAdapter: ActorRef, exchangeActor: ActorRef) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[TradePairDataManager])
+case class TradepairDataManager(exchange: String, tradePair: TradePair, exchangeQueryAdapter: ActorRef, exchangeActor: ActorRef) extends Actor {
+  private val log = LoggerFactory.getLogger(classOf[TradepairDataManager])
   private var initializedMsgSend = false
   private var orderBookInitialized = false
   private var orderBook: OrderBook = OrderBook(exchange, tradePair, Map(), Map(), LocalDateTime.MIN)
@@ -56,7 +56,7 @@ case class TradePairDataManager(exchange: String, tradePair: TradePair, exchange
 
   override def preStart(): Unit = {
     initTime = Instant.now()
-    exchangeQueryAdapter ! ExchangeAdapterProxy.TradePairDataStreamRequest(tradePair)
+    exchangeQueryAdapter ! ExchangeDataChannel.TradePairDataStreamRequest(tradePair)
   }
 
   def receive: Receive = {
@@ -67,7 +67,7 @@ case class TradePairDataManager(exchange: String, tradePair: TradePair, exchange
       else {
         if (Duration.between(initTime, Instant.now()).compareTo(StaticConfig.dataManagerInitTimeout) > 0) {
           log.info(s"Killing TradePairDataManager[$exchange:$tradePair]")
-          self ! Kill
+          self ! Kill // TODO graceful shutdown of tradepair-channel via parent actor
         }
       }
 
@@ -119,4 +119,3 @@ case class TradePairDataManager(exchange: String, tradePair: TradePair, exchange
     orderBook.toCondensedString
   }
 }
-// TODO restart self if not initialized after a timeout of 60s

@@ -1,7 +1,7 @@
 package org.purevalue.arbitrage.adapter.bitfinex
 
 import akka.actor.{ActorRef, Props}
-import org.purevalue.arbitrage.adapter.ExchangeAdapterProxy
+import org.purevalue.arbitrage.adapter.ExchangeDataChannel
 import org.purevalue.arbitrage.{Asset, ExchangeConfig, GlobalConfig, TradePair}
 import org.slf4j.LoggerFactory
 import spray.json._
@@ -14,13 +14,13 @@ case class BitfinexTradePair(baseAsset: Asset, quoteAsset: Asset, apiSymbol: Str
 object BitfinexAdapter {
   def props(config: ExchangeConfig): Props = Props(new BitfinexAdapter(config))
 }
-class BitfinexAdapter(config: ExchangeConfig) extends ExchangeAdapterProxy(config) {
+class BitfinexAdapter(config: ExchangeConfig) extends ExchangeDataChannel(config) {
   private val log = LoggerFactory.getLogger(classOf[BitfinexAdapter])
 
   val baseRestEndpointPublic = "https://api-pub.bitfinex.com"
   val name: String = "BitfinexAdapter"
 
-  var tradePairDataStreamer: List[ActorRef] = List()
+  var bitfinexChannelDataStreamer: List[ActorRef] = List()
 
   var bitfinexAssets: Set[BitfinexSymbol] = _
   var bitfinexTradePairs: Set[BitfinexTradePair] = _
@@ -82,8 +82,8 @@ class BitfinexAdapter(config: ExchangeConfig) extends ExchangeAdapterProxy(confi
     val bitfinexTradePair = bitfinexTradePairs
       .find(e => e.baseAsset == tradePair.baseAsset && e.quoteAsset == tradePair.quoteAsset)
       .getOrElse(throw new RuntimeException(s"No corresponding bitfinex tradepair $tradePair available"))
-    tradePairDataStreamer = tradePairDataStreamer :+
-      context.actorOf(BitfinexTradePairDataStreamer.props(config, bitfinexTradePair, tradePairDataManager), s"BitfinexTradePairDataStreamer-$tradePair")
+    bitfinexChannelDataStreamer = bitfinexChannelDataStreamer :+
+      context.actorOf(BitfinexDataChannel.props(config, bitfinexTradePair, tradePairDataManager), s"BitfinexTradePairDataStreamer-$tradePair")
   }
 
   override def preStart(): Unit = {

@@ -10,7 +10,7 @@ import akka.util.Timeout
 import org.purevalue.arbitrage.CryptoValue.formatDecimal
 import org.purevalue.arbitrage.Exchange.{GetFee, GetOrderBooks, GetTickers, GetWallet, IsInitialized, IsInitializedResponse}
 import org.purevalue.arbitrage.TradeRoom._
-import org.purevalue.arbitrage.adapter.ExchangeAdapterProxy
+import org.purevalue.arbitrage.adapter.ExchangeDataChannel
 import org.purevalue.arbitrage.adapter.binance.BinanceAdapter
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexAdapter
 import org.purevalue.arbitrage.trader.FooTrader

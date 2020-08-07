@@ -1,20 +1,20 @@
 package org.purevalue.arbitrage.adapter.binance
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
-import org.purevalue.arbitrage.TradePairDataManager.{Ask, Bid, OrderBookInitialData, OrderBookUpdate}
+import org.purevalue.arbitrage.TradepairDataManager.{Ask, Bid, OrderBookInitialData, OrderBookUpdate}
 import org.purevalue.arbitrage.adapter.binance.BinanceAdapter.GetOrderBookSnapshot
 import org.purevalue.arbitrage.{ExchangeConfig, Main}
 import org.slf4j.LoggerFactory
 
 import scala.collection.mutable.ListBuffer
 
-object BinanceTradePairDataStreamer {
+object BinanceTPDataChannel {
   def props(config: ExchangeConfig, tradePair: BinanceTradePair, binanceAdapter:ActorRef, tradePairDataManager: ActorRef): Props =
-    Props(new BinanceTradePairDataStreamer(config, tradePair, binanceAdapter, tradePairDataManager))
+    Props(new BinanceTPDataChannel(config, tradePair, binanceAdapter, tradePairDataManager))
 }
 
-class BinanceTradePairDataStreamer(config: ExchangeConfig, tradePair: BinanceTradePair, binanceAdapter:ActorRef, tradePairDataManager: ActorRef) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[BinanceTradePairDataStreamer])
+class BinanceTPDataChannel(config: ExchangeConfig, tradePair: BinanceTradePair, binanceAdapter:ActorRef, tradePairDataManager: ActorRef) extends Actor {
+  private val log = LoggerFactory.getLogger(classOf[BinanceTPDataChannel])
   implicit val system: ActorSystem = Main.actorSystem
 
   private var webSocketFlow: ActorRef = _
@@ -87,14 +87,20 @@ class BinanceTradePairDataStreamer(config: ExchangeConfig, tradePair: BinanceTra
 
   override def preStart() {
     log.debug(s"BinanceTradePairDataStreamer($tradePair) initializing...")
-    webSocketFlow = context.actorOf(BinanceTradePairBasedWebSockets.
-      props(config, tradePair, self))
+    webSocketFlow = context.actorOf(BinanceTradePairBasedWebSockets.props(config, tradePair, self))
   }
 
   override def receive: Receive = {
     case s: RawOrderBookSnapshot =>
       initOrderBook(s)
 
+    // 2020-08-07 00:42:38.277 INFO  akka.actor.LocalActorRef - Message [org.purevalue.arbitrage.adapter.bitfinex.RawOrderBookUpdateMessage]
+    // from Actor[akka://ArbitrageTrader/user/TradeRoom/BitfinexAdapter/BitfinexTradePairDataStreamer-BCH:BTC/$a#1542073973]
+    // to Actor[akka://ArbitrageTrader/user/TradeRoom/BitfinexAdapter/BitfinexTradePairDataStreamer-BCH:BTC#208834353] was not delivered.
+    // [10] dead letters encountered, no more dead letters will be logged in next [5.000 min].
+    // If this is not an expected behavior then Actor[akka://ArbitrageTrader/user/TradeRoom/BitfinexAdapter/BitfinexTradePairDataStreamer-BCH:BTC#208834353]
+    // may have terminated unexpectedly.
+    // This logging can be turned off or adjusted with configuration settings 'akka.log-dead-letters' and 'akka.log-dead-letters-during-shutdown'.
     case u: RawOrderBookUpdate =>
       handleIncomingOrderBookUpdate(u)
       if (orderBookBufferingPhase && !orderBookSnapshotRequested) {
