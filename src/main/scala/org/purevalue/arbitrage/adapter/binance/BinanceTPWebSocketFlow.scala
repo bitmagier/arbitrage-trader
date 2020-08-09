@@ -29,6 +29,7 @@ case class BinanceTPWebSocketFlow(config: ExchangeConfig, tradePair: BinanceTrad
   implicit val actorSystem: ActorSystem = Main.actorSystem
 
   val IdBookTickerStreamRequest: Int = 1
+  val IdExtendedTickerStreamRequest: Int = 2
   val IdOrderBookStreamRequest: Int = 3
 
   val BookTickerStreamName: String = s"$symbol@bookTicker" // realtime
@@ -88,7 +89,7 @@ case class BinanceTPWebSocketFlow(config: ExchangeConfig, tradePair: BinanceTrad
         .toMat(sink)(Keep.right),
       Source(List(
         TextMessage(StreamSubscribeRequestJson(params = Seq(BookTickerStreamName), id = IdBookTickerStreamRequest).toJson.compactPrint),
-        //        TextMessage(StreamSubscribeRequestJson(params = Seq(ExtendedTickerStreamName), id = 2).toJson.compactPrint),
+        TextMessage(StreamSubscribeRequestJson(params = Seq(ExtendedTickerStreamName), id = IdExtendedTickerStreamRequest).toJson.compactPrint),
         TextMessage(StreamSubscribeRequestJson(params = Seq(OrderBookStreamName), id = IdOrderBookStreamRequest).toJson.compactPrint)
       )).concatMat(Source.maybe[Message])(Keep.right))(Keep.right)
   }

@@ -82,14 +82,14 @@ case class Order(id: UUID,
     if (direction == TradeDirection.Buy)
       Seq(
         CryptoValue(tradePair.baseAsset, amountBaseAsset.get),
-        CryptoValue(tradePair.quoteAsset, -limit),
-        CryptoValue(tradePair.quoteAsset, -limit * fee.takerFee) // for now we just take the higher taker fee
+        CryptoValue(tradePair.quoteAsset, limit * -amountBaseAsset.get),
+        CryptoValue(tradePair.quoteAsset, limit * -amountBaseAsset.get * fee.takerFee) // for now we just take the higher taker fee
       )
     else
       Seq(
-        CryptoValue(tradePair.baseAsset, -limit),
-        CryptoValue(tradePair.baseAsset, -limit * fee.takerFee),
         CryptoValue(tradePair.quoteAsset, amountQuoteAsset.get),
+        CryptoValue(tradePair.baseAsset, limit * -amountQuoteAsset.get),
+        CryptoValue(tradePair.baseAsset, limit * -amountQuoteAsset.get * fee.takerFee),
       )
   }
 }
@@ -288,9 +288,10 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
 
   def logStats(): Unit = {
-    log.info(s"${Emoji.Robot} TradeRoom stats (1/3) [exchanges / ticker / orderbooks] : [" +
+    log.info(s"${Emoji.Robot} TradeRoom stats (1/3) [exchanges / ticker / extended-ticker / orderbooks] : [" +
       s"${exchanges.size} / " +
       s"${tickers.values.map(_.values.count(_ => true))}" +
+      s"/ ${extendedTickers.values.map((_.values.count(_ => true)))}" +
       s"/ ${orderBooks.values.map(_.values.count(_ => true))}]")
     val orderBookTop3 = orderBooks.flatMap(_._2.values)
       .map(e => (e.bids.size + e.asks.size, e))
