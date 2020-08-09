@@ -30,22 +30,27 @@ case class CryptoValue(asset: Asset, amount: Double) {
   override def toString: String = s"${formatDecimal(amount)} ${asset.officialSymbol}"
 
     def convertTo(targetAsset: Asset, tc: TradeContext): Option[Double] = {
-      if (this.asset == targetAsset) Some(amount)
+      if (this.asset == targetAsset)
+        Some(amount)
       else {
         // try direct conversion first
         tc.findReferenceTicker(TradePair.of(this.asset, targetAsset)) match {
           case Some(ticker) =>
-              Some(amount * ticker.weightedAveragePrice)
-          case None => // convert to BTC first and then to targetAsset
-            val toBtcTicker = tc.findReferenceTicker(TradePair.of(this.asset, Asset("BTC")))
-            if (toBtcTicker.isEmpty) return None
-            val toBtcRate = toBtcTicker.get.weightedAveragePrice
-
-            val btcToTargetTicker = tc.findReferenceTicker(TradePair.of(Asset("BTC"), targetAsset))
-            if (btcToTargetTicker.isEmpty) return None
-            val btcToTargetRate = btcToTargetTicker.get.weightedAveragePrice
-
-            Some(amount * toBtcRate * btcToTargetRate)
+            Some(amount * ticker.weightedAveragePrice)
+          case None =>
+            tc.findReferenceTicker(TradePair.of(targetAsset, this.asset)) match {
+              case Some(ticker) =>
+                Some(amount / ticker.weightedAveragePrice)
+              case None =>
+                None
+                if ((this.asset != Asset("BTC") && targetAsset != Asset("BTC"))
+                  && tc.findReferenceTicker(TradePair.of(this.asset, Asset("BTC"))).isDefined
+                  && tc.findReferenceTicker(TradePair.of(targetAsset, Asset("BTC"))).isDefined) {
+                  CryptoValue(Asset("BTC"), this.convertTo(Asset("BTC"), tc).get).convertTo(targetAsset, tc)
+                } else {
+                  None
+                }
+            }
         }
       }
     }

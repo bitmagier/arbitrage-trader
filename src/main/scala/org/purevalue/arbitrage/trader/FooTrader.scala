@@ -55,8 +55,15 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc:TradeContext) extends Ac
 //  def convertToUSDT(amount: Double, asset: Asset, dc: TradeDecisionContext): Option[Double] =
 //    CryptoValue(asset, amount).convertTo(Asset("USDT"), dc)
 
-  def findBestShotBasedOnOrderBook(tradePair: TradePair): Option[OrderBundle] = {
-    val minBalanceBeforeTradeInUSDT = config.getDouble("order-bundle.min-balance-before-trade-in-usdt")
+  trait NoResultReason
+  case class BuyOrSellBookEmpty() extends NoResultReason
+  case class BidAskGap() extends NoResultReason
+  case class Confused() extends NoResultReason
+  case class NoUSDTConversion(asses:Asset) extends NoResultReason
+  case class MinGainTooLow() extends NoResultReason
+
+  def findBestShotBasedOnOrderBook(tradePair: TradePair): (Option[OrderBundle], Option[NoResultReason]) = {
+//    val minBalanceBeforeTradeInUSDT = config.getDouble("order-bundle.min-balance-before-trade-in-usdt")
 //    val whatsSpendablePerExchange: Map[String, Set[Asset]] =
 //      tc.wallets
 //        .map(pair => (
@@ -85,7 +92,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc:TradeContext) extends Ac
     }
 
     if (books4Sell.isEmpty || books4Buy.isEmpty)
-      return None
+      return (None, Some(BuyOrSellBookEmpty()))
 
     val tradeQuantityUSDT = config.getDouble("order-bundle.trade-amount-in-usdt")
 
@@ -99,19 +106,19 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc:TradeContext) extends Ac
         .minBy(_._2.price)
 
     if (highestBid._2.price <= lowestAsk._2.price) {
-      return None
+      return (None, Some(BidAskGap()))
     }
 
     if (highestBid._1 == lowestAsk._1) {
       log.warn(s"${Emoji.SadAndConfused} [$tradePair] found highest bid $highestBid and lowest ask $lowestAsk on the same exchange.")
-      return None
+      return (None, Some(Confused()))
     }
 
     val orderBundleId = newUUID()
     val orderLimitAdditionRate: Double = config.getDouble("order-bundle.order-limit-addition-rate")
     val amountBaseAsset: Option[Double] = CryptoValue(Asset("USDT"), tradeQuantityUSDT).convertTo(tradePair.baseAsset, tc)
     if (amountBaseAsset.isEmpty)
-      return None // only want to have assets convertible to USDT here
+      return (None, Some(NoUSDTConversion(tradePair.baseAsset))) // only want to have assets convertible to USDT here
 
     val ourBuyBaseAssetOrder = Order(
       newUUID(),
@@ -126,7 +133,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc:TradeContext) extends Ac
 
     val amountQuoteAsset = CryptoValue(Asset("USDT"), tradeQuantityUSDT).convertTo(tradePair.quoteAsset, tc)
     if (amountQuoteAsset.isEmpty)
-      return None
+      return (None, Some(NoUSDTConversion(tradePair.quoteAsset)))
 
     val ourSellBaseAssetOrder = Order(
       newUUID(),
@@ -142,7 +149,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc:TradeContext) extends Ac
 
     val estimatedWinUSDT: Option[Double] = calculateWinUSDT(Seq(ourBuyBaseAssetOrder, ourSellBaseAssetOrder))
     if (estimatedWinUSDT.isDefined && estimatedWinUSDT.get >= config.getDouble("order-bundle.min-gain-in-usdt")) {
-      Some(OrderBundle(
+      (Some(OrderBundle(
         orderBundleId,
         name,
         self,
@@ -150,11 +157,13 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc:TradeContext) extends Ac
         List(ourBuyBaseAssetOrder, ourSellBaseAssetOrder),
         estimatedWinUSDT.get,
         ""
-      ))
+      )), None)
     } else {
-      None
+      (None, Some(MinGainTooLow()))
     }
   }
+
+  var noResultReasonStats: Map[NoResultReason, Int] = Map()
 
   def findBestShot(): Option[OrderBundle] = {
     var result: Option[OrderBundle] = None
@@ -162,10 +171,14 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc:TradeContext) extends Ac
       if (tc.orderBooks.count(_._2.keySet.contains(tradePair)) > 1) {
         numSingleSearchesDiff += 1
         findBestShotBasedOnOrderBook(tradePair) match {
-          case Some(shot) => if (result.isEmpty || shot.estimatedWinUSDT > result.get.estimatedWinUSDT) {
+          case (Some(shot), _) => if (result.isEmpty || shot.estimatedWinUSDT > result.get.estimatedWinUSDT) {
             result = Some(shot)
           }
-          case None =>
+
+          case (None, Some(noResultReason)) =>
+            noResultReasonStats += (noResultReason -> (1 + noResultReasonStats.getOrElse(noResultReason, 0)))
+
+          case _ => throw new IllegalStateException()
         }
       }
     }
@@ -180,6 +193,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc:TradeContext) extends Ac
       val tickerChoicesAggregated: Map[Int, Int] = t1Stats.values.foldLeft(Map[Int, Int]())((a,b) => a + (b -> (a.getOrElse(b, 0) + 1)))
 
       log.info(s"${Emoji.Robot} FooTrader TradeContext: TickerChoicesAggregated: $tickerChoicesAggregated")
+      log.info(s"${Emoji.Robot} FooTrader no-result-reasons: ${noResultReasonStats}")
       lastLifeSign = Instant.now()
       numSingleSearchesDiff = 0
       numSearchesDiff = 0
