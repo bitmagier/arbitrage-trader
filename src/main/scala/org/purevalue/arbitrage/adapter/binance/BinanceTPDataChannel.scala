@@ -6,7 +6,6 @@ import akka.stream.scaladsl.{Flow, Keep, Sink}
 import akka.util.Timeout
 import akka.{Done, NotUsed}
 import org.purevalue.arbitrage.TPDataManager.StartStreamRequest
-import org.purevalue.arbitrage.Utils.queryJson
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.binance.BinanceDataChannel.GetBinanceTradePair
 import org.slf4j.LoggerFactory
@@ -51,12 +50,17 @@ class BinanceTPDataChannel(config: ExchangeConfig, tradePair: TradePair, binance
         lastUpdateId = Some(update.lastUpdateId)
         Seq(update.toOrderBookSnapshot)
       }
+
+    case other =>
+      log.error(s"unhandled: $other")
+      Seq()
   }
 
   override def preStart() {
     log.debug(s"BinanceTPDataChannel($tradePair) initializing...")
     implicit val timeout: Timeout = AppConfig.tradeRoom.internalCommunicationTimeout
-    binanceTradePair = Await.result((binanceDataChannel ? GetBinanceTradePair(tradePair)).mapTo[BinanceTradePair], AppConfig.tradeRoom.internalCommunicationTimeout.duration)
+    binanceTradePair = Await.result((binanceDataChannel ? GetBinanceTradePair(tradePair)).mapTo[BinanceTradePair],
+      AppConfig.tradeRoom.internalCommunicationTimeout.duration)
     binanceTPWebSocketFlow = context.actorOf(
       BinanceTPWebSocketFlow.props(config, binanceTradePair, self), s"BinanceTPWebSocketFlow-${binanceTradePair.symbol}")
   }

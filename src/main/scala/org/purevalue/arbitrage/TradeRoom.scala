@@ -3,8 +3,9 @@ package org.purevalue.arbitrage
 import java.text.DecimalFormat
 import java.time.{Duration, LocalDateTime, ZonedDateTime}
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
-import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props, Status}
 import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage.CryptoValue.formatDecimal
@@ -16,6 +17,7 @@ import org.slf4j.LoggerFactory
 import scala.collection._
 import scala.collection.concurrent.TrieMap
 import scala.collection.mutable.ArrayBuffer
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.concurrent.{Await, ExecutionContextExecutor, TimeoutException}
 
 sealed trait TradeDirection
@@ -137,6 +139,8 @@ object TradeRoom {
   case class PlaceOrder(order: Order)
   case class CancelOrder()
 
+  case class LogStats()
+
   def props(config: TradeRoomConfig): Props = Props(new TradeRoom(config))
 }
 
@@ -167,6 +171,9 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
   // TODO buffer+persist completed order bundles to a database instead (cassandra?)
   //  private var completedOrderBundles: Map[UUID, CompletedOrderBundle] = Map() // orderBundleID -> CompletedOrderBundle
+
+  val scheduleRate: FiniteDuration = FiniteDuration(config.statsInterval.toNanos, TimeUnit.NANOSECONDS)
+  val schedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(30.seconds, scheduleRate, self, LogStats())
 
 
   def calculateBill(trades: List[Trade]): Seq[CryptoValue] = { // TODO move calc function to Trade class
@@ -260,12 +267,22 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     initTraders()
   }
 
+  def logStats(): Unit = {
+    log.info(s"${Emoji.Robot} TradeRoom statistics [exchanges / ticker / orderbooks] : [" +
+      s"${exchanges.size} / " +
+      s"${tickers.values.flatMap(_.values).count(_ => true)}" +
+      s"/ ${orderBooks.values.flatMap(_.values).count(_ => true)}]")
+  }
+
   def receive: Receive = {
 
     // messages from Trader
 
     case ob: OrderBundle =>
       placeOrderBundleOrders(ob)
+
+    case LogStats() =>
+      logStats()
 
     case Status.Failure(cause) =>
       log.error("received failure", cause)

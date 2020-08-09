@@ -2,39 +2,39 @@ package org.purevalue.arbitrage.adapter.bitfinex
 
 import java.time.LocalDateTime
 
-import akka.Done
 import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model._
 import akka.http.scaladsl.model.ws.{TextMessage, _}
 import akka.stream.scaladsl._
+import akka.{Done, NotUsed}
 import org.purevalue.arbitrage._
+import org.purevalue.arbitrage.adapter.bitfinex.BitfinexTPWebSocketFlow.StartStreamRequest
 import org.slf4j.LoggerFactory
 import spray.json._
 
-import scala.concurrent.{Future, Promise}
-import scala.util.{Failure, Success}
+import scala.concurrent.{Await, Future, Promise}
 
 
-trait DecodedMessage
-case class UnknownDataMessage(m: String) extends DecodedMessage
-case class JsonMessage(j: JsObject) extends DecodedMessage
-case class SubscribeRequest(event: String = "subscribe", channel: String, symbol: String)
+trait DecodedBitfinexMessage
+case class UnknownChannelDataMessage(m: String) extends DecodedBitfinexMessage
+case class JsonMessage(j: JsObject) extends DecodedBitfinexMessage
+case class SubscribeRequestJson(event: String = "subscribe", channel: String, symbol: String)
 
-case class Heartbeat() extends DecodedMessage
+case class Heartbeat() extends DecodedBitfinexMessage
 
-case class RawOrderBookEntry(price: Double, count: Int, amount: Double)
-object RawOrderBookEntry {
-  def apply(v: Tuple3[Double, Int, Double]): RawOrderBookEntry = RawOrderBookEntry(v._1, v._2, v._3)
+case class RawOrderBookEntryJson(price: Double, count: Int, amount: Double)
+object RawOrderBookEntryJson {
+  def apply(v: Tuple3[Double, Int, Double]): RawOrderBookEntryJson = RawOrderBookEntryJson(v._1, v._2, v._3)
 }
 
-case class RawOrderBookSnapshotMessage(channelId: Int, values: List[RawOrderBookEntry]) extends DecodedMessage { // [channelId, [[price, count, amount],...]]
-  private def toOrderBookSnapshot(snapshot: RawOrderBookSnapshotMessage) = {
-    val bids = snapshot.values
+case class RawOrderBookSnapshotJson(channelId: Int, values: List[RawOrderBookEntryJson]) extends DecodedBitfinexMessage { // [channelId, [[price, count, amount],...]]
+  def toOrderBookSnapshot: OrderBookSnapshot = {
+    val bids = values
       .filter(_.count > 0)
       .filter(_.amount > 0)
       .map(e => Bid(e.price, e.amount))
-    val asks = snapshot.values
+    val asks = values
       .filter(_.count > 0)
       .filter(_.amount < 0)
       .map(e => Ask(e.price, -e.amount))
@@ -43,82 +43,122 @@ case class RawOrderBookSnapshotMessage(channelId: Int, values: List[RawOrderBook
     )
   }
 }
-object RawOrderBookSnapshotMessage {
-  def apply(v: Tuple2[Int, List[RawOrderBookEntry]]): RawOrderBookSnapshotMessage = RawOrderBookSnapshotMessage(v._1, v._2)
+object RawOrderBookSnapshotJson {
+  def apply(v: Tuple2[Int, List[RawOrderBookEntryJson]]): RawOrderBookSnapshotJson = RawOrderBookSnapshotJson(v._1, v._2)
 }
 
-case class RawOrderBookUpdateMessage(channelId: Int, value: RawOrderBookEntry) extends DecodedMessage // [channelId, [price, count, amount]]
-object RawOrderBookUpdateMessage {
-  def apply(v: Tuple2[Int, RawOrderBookEntry]): RawOrderBookUpdateMessage = RawOrderBookUpdateMessage(v._1, v._2)
+case class RawOrderBookUpdateJson(channelId: Int, value: RawOrderBookEntryJson) extends DecodedBitfinexMessage { // [channelId, [price, count, amount]]
+  private val log = LoggerFactory.getLogger(classOf[RawOrderBookUpdateJson])
+  /*
+    Algorithm to create and keep a book instance updated
+
+    1. subscribe to channel
+    2. receive the book snapshot and create your in-memory book structure
+    3. when count > 0 then you have to add or update the price level
+    3.1 if amount > 0 then add/update bids
+    3.2 if amount < 0 then add/update asks
+    4. when count = 0 then you have to delete the price level.
+    4.1 if amount = 1 then remove from bids
+    4.2 if amount = -1 then remove from asks
+  */
+  def toOrderBookUpdate: OrderBookUpdate = {
+    if (value.count > 0) {
+      if (value.amount > 0)
+        OrderBookUpdate(List(Bid(value.price, value.amount)), List())
+      else if (value.amount < 0)
+        OrderBookUpdate(List(), List(Ask(value.price, -value.amount)))
+      else {
+        log.warn(s"undefined update case: $this")
+        OrderBookUpdate(List(), List())
+      }
+    } else if (value.count == 0) {
+      if (value.amount == 1.0d)
+        OrderBookUpdate(List(Bid(value.price, 0.0d)), List())
+      else if (value.amount == -1.0d)
+        OrderBookUpdate(List(), List(Ask(value.price, 0.0d)))
+      else {
+        log.warn(s"undefined update case: $this")
+        OrderBookUpdate(List(), List())
+      }
+    } else {
+      log.warn(s"undefined update case: $this")
+      OrderBookUpdate(List(), List())
+    }
+  }
+}
+object RawOrderBookUpdateJson {
+  def apply(v: Tuple2[Int, RawOrderBookEntryJson]): RawOrderBookUpdateJson = RawOrderBookUpdateJson(v._1, v._2)
 }
 
-case class RawTicker(bid: Double, // Price of last highest bid
-                     bidSize: Double, // Sum of 25 highest bid sizes
-                     ask: Double, // Price of last lowest ask
-                     askSize: Double, // Sum of 25 lowest ask sizes
-                     dailyChange: Double, // Amount that the last price has changed since yesterday
-                     dailyChangeRelative: Double, // Relative price change since yesterday (*100 for percentage change)
-                     lastPrice: Double, // Price of the last trade
-                     volume: Double, // Daily volume
-                     high: Double, // Daily high
-                     low: Double) { // Daily low
+case class RawTickerEntryJson(bid: Double, // Price of last highest bid
+                              bidSize: Double, // Sum of 25 highest bid sizes
+                              ask: Double, // Price of last lowest ask
+                              askSize: Double, // Sum of 25 lowest ask sizes
+                              dailyChange: Double, // Amount that the last price has changed since yesterday
+                              dailyChangeRelative: Double, // Relative price change since yesterday (*100 for percentage change)
+                              lastPrice: Double, // Price of the last trade
+                              volume: Double, // Daily volume
+                              high: Double, // Daily high
+                              low: Double) { // Daily low
   def toTicker(exchange: String, tradePair: TradePair): Ticker =
     Ticker(exchange, tradePair, bid, None, ask, None, Some(lastPrice), LocalDateTime.now)
 }
-object RawTicker {
-  def apply(v: Array[Double]): RawTicker =
-    RawTicker(v(0), v(1), v(2), v(3), v(4), v(5), v(6), v(7), v(8), v(9))
+object RawTickerEntryJson {
+  def apply(v: Array[Double]): RawTickerEntryJson =
+    RawTickerEntryJson(v(0), v(1), v(2), v(3), v(4), v(5), v(6), v(7), v(8), v(9))
 }
 
-case class RawTickerMessage(channelId: Int, value: RawTicker) extends DecodedMessage // [channelId, [bid, bidSize, ask, askSize, dailyChange, dailyChangeRelative, lastPrice, volume, high, low]]
+case class RawTickerJson(channelId: Int, value: RawTickerEntryJson) extends DecodedBitfinexMessage // [channelId, [bid, bidSize, ask, askSize, dailyChange, dailyChangeRelative, lastPrice, volume, high, low]]
 
-object RawTickerMessage {
-  def apply(v: Tuple2[Int, RawTicker]): RawTickerMessage = RawTickerMessage(v._1, v._2)
+object RawTickerJson {
+  def apply(v: Tuple2[Int, RawTickerEntryJson]): RawTickerJson = RawTickerJson(v._1, v._2)
 }
 
 
 object WebSocketJsonProtocoll extends DefaultJsonProtocol {
-  implicit val subscribeRequest: RootJsonFormat[SubscribeRequest] = jsonFormat3(SubscribeRequest)
+  implicit val subscribeRequest: RootJsonFormat[SubscribeRequestJson] = jsonFormat3(SubscribeRequestJson)
 
-  implicit object rawOrderBookEntryFormat extends RootJsonFormat[RawOrderBookEntry] {
-    def read(value: JsValue): RawOrderBookEntry = RawOrderBookEntry(value.convertTo[Tuple3[Double, Int, Double]])
+  implicit object rawOrderBookEntryFormat extends RootJsonFormat[RawOrderBookEntryJson] {
+    def read(value: JsValue): RawOrderBookEntryJson = RawOrderBookEntryJson(value.convertTo[Tuple3[Double, Int, Double]])
 
-    def write(v: RawOrderBookEntry): JsValue = ???
+    def write(v: RawOrderBookEntryJson): JsValue = ???
   }
 
-  implicit object rawOrderBookSnapshotFormat extends RootJsonFormat[RawOrderBookSnapshotMessage] {
-    def read(value: JsValue): RawOrderBookSnapshotMessage = RawOrderBookSnapshotMessage(value.convertTo[Tuple2[Int, List[RawOrderBookEntry]]])
+  implicit object rawOrderBookSnapshotFormat extends RootJsonFormat[RawOrderBookSnapshotJson] {
+    def read(value: JsValue): RawOrderBookSnapshotJson = RawOrderBookSnapshotJson(value.convertTo[Tuple2[Int, List[RawOrderBookEntryJson]]])
 
-    def write(v: RawOrderBookSnapshotMessage): JsValue = ???
+    def write(v: RawOrderBookSnapshotJson): JsValue = ???
   }
 
-  implicit object rawOrderBookUpdateFormat extends RootJsonFormat[RawOrderBookUpdateMessage] {
-    def read(value: JsValue): RawOrderBookUpdateMessage = RawOrderBookUpdateMessage(value.convertTo[Tuple2[Int, RawOrderBookEntry]])
+  implicit object rawOrderBookUpdateFormat extends RootJsonFormat[RawOrderBookUpdateJson] {
+    def read(value: JsValue): RawOrderBookUpdateJson = RawOrderBookUpdateJson(value.convertTo[Tuple2[Int, RawOrderBookEntryJson]])
 
-    def write(v: RawOrderBookUpdateMessage): JsValue = ???
+    def write(v: RawOrderBookUpdateJson): JsValue = ???
   }
 
-  implicit object rawTickerFormar extends RootJsonFormat[RawTicker] {
-    def read(value: JsValue): RawTicker = RawTicker(value.convertTo[Array[Double]])
+  implicit object rawTickerFormat extends RootJsonFormat[RawTickerEntryJson] {
+    def read(value: JsValue): RawTickerEntryJson = RawTickerEntryJson(value.convertTo[Array[Double]])
 
-    def write(v: RawTicker): JsValue = ???
+    def write(v: RawTickerEntryJson): JsValue = ???
   }
 
-  implicit object rawTickerMessageFormat extends RootJsonFormat[RawTickerMessage] {
-    def read(value: JsValue): RawTickerMessage = RawTickerMessage(value.convertTo[Tuple2[Int, RawTicker]])
+  implicit object rawTickerMessageFormat extends RootJsonFormat[RawTickerJson] {
+    def read(value: JsValue): RawTickerJson = RawTickerJson(value.convertTo[Tuple2[Int, RawTickerEntryJson]])
 
-    def write(v: RawTickerMessage): JsValue = ???
+    def write(v: RawTickerJson): JsValue = ???
   }
 }
 
 
-object BitfinexTradePairBasedWebSockets {
+object BitfinexTPWebSocketFlow {
+  case class StartStreamRequest(sink: Sink[DecodedBitfinexMessage, NotUsed])
+
   def props(config: ExchangeConfig, tradePair: BitfinexTradePair, tradePairDataStreamer: ActorRef): Props =
-    Props(new BitfinexTradePairBasedWebSockets(config, tradePair, tradePairDataStreamer))
+    Props(new BitfinexTPWebSocketFlow(config, tradePair, tradePairDataStreamer))
 }
 
-case class BitfinexTradePairBasedWebSockets(config: ExchangeConfig, tradePair: BitfinexTradePair, tradePairDataStreamer: ActorRef) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[BitfinexTradePairBasedWebSockets])
+case class BitfinexTPWebSocketFlow(config: ExchangeConfig, tradePair: BitfinexTradePair, tradePairDataStreamer: ActorRef) extends Actor {
+  private val log = LoggerFactory.getLogger(classOf[BitfinexTPWebSocketFlow])
 
   implicit val actorSystem: ActorSystem = Main.actorSystem
 
@@ -140,17 +180,21 @@ case class BitfinexTradePairBasedWebSockets(config: ExchangeConfig, tradePair: B
       val channel = j.fields("channel").convertTo[String]
       val channelId = j.fields("chanId").convertTo[Int]
       channel match {
-        case "ticker" => tickerChannelId = channelId; log.debug(s"$tradePair: ticker channelId=$channelId")
-        case "book" => orderBookChannelId = channelId; log.debug(s"$tradePair: book channelId=$channelId")
+        case "ticker" =>
+          tickerChannelId = channelId
+          log.debug(s"$tradePair: ticker channelId=$channelId")
+        case "book" =>
+          orderBookChannelId = channelId
+          log.debug(s"$tradePair: book channelId=$channelId")
       }
     case "error" => log.error(s"received error message: $j")
     case "info" => log.debug(s"received info message: $j")
     case _ => log.warn(s"received unidentified message: $j")
   }
 
-  def decodeJson(s: String): DecodedMessage = JsonMessage(JsonParser(s).asJsObject)
+  def decodeJson(s: String): DecodedBitfinexMessage = JsonMessage(JsonParser(s).asJsObject)
 
-  def decodeDataArray(s: String): DecodedMessage = {
+  def decodeDataArray(s: String): DecodedBitfinexMessage = {
     val heatBeatPattern = """^\[\s*\d+,\s*"hb"\s*]""".r
     heatBeatPattern.findFirstIn(s) match {
       case Some(_) => Heartbeat()
@@ -161,77 +205,100 @@ case class BitfinexTradePairBasedWebSockets(config: ExchangeConfig, tradePair: B
             val TickerChannelId = tickerChannelId
             val OrderBookChannelId = orderBookChannelId
             m.group(1).toInt match {
-              case TickerChannelId => JsonParser(s).convertTo[RawTickerMessage]
+              case TickerChannelId => JsonParser(s).convertTo[RawTickerJson]
               case OrderBookChannelId =>
                 val snapshotPattern = "^\\[\\d+\\s*,\\s*\\[\\s*\\[.*".r
                 snapshotPattern.findFirstIn(s) match {
-                  case Some(_) => JsonParser(s).convertTo[RawOrderBookSnapshotMessage]
-                  case None => JsonParser(s).convertTo[RawOrderBookUpdateMessage]
+                  case Some(_) => JsonParser(s).convertTo[RawOrderBookSnapshotJson]
+                  case None => JsonParser(s).convertTo[RawOrderBookUpdateJson]
                 }
-              case id@_ =>
+              case id =>
                 log.error(s"${Emoji.SadAndConfused} [bitfinex:$tradePair] data message with unknown channelId $id received.")
-                UnknownDataMessage(s)
+                UnknownChannelDataMessage(s)
             }
           case None => throw new RuntimeException(s"${Emoji.SadAndConfused} Unable to decode bifinex data message:\n$s")
         }
     }
   }
 
-  val sink: Sink[Message, Future[Done]] = Sink.foreach[Message] {
+  val downStreamFlow: Flow[Message, Option[DecodedBitfinexMessage], NotUsed] = Flow.fromFunction {
     case msg: TextMessage =>
-      msg.toStrict(config.httpTimeout)
-        .map(_.getStrictText)
-        .map {
-          case s: String if s.startsWith("{") => decodeJson(s)
-          case s: String if s.startsWith("[") => decodeDataArray(s)
-        }.onComplete {
-        case Failure(exception) => log.error(s"Unable to decode expected Json message", exception)
-        case Success(v) => v match {
-          case h: Heartbeat => if (log.isTraceEnabled) log.trace(s"heartbeat received: $h")
-          case j: JsonMessage if j.j.fields.contains("event") => handleEvent(j.j.fields("event").convertTo[String], j.j)
-          case j: JsonMessage => log.warn(s"Unhandled JsonMessage received: $j")
-          case t: RawTickerMessage => tradePairDataStreamer ! t
-          case d: RawOrderBookSnapshotMessage => tradePairDataStreamer ! d
-          case d: RawOrderBookUpdateMessage => tradePairDataStreamer ! d
-          case x@_ => log.error(s"Unhandled message: $x")
+      val f: Future[Option[DecodedBitfinexMessage]] = {
+        msg.toStrict(config.httpTimeout)
+          .map(_.getStrictText)
+          .map {
+            case s: String if s.startsWith("{") => decodeJson(s)
+            case s: String if s.startsWith("[") => decodeDataArray(s)
+          } map {
+          case j: JsonMessage if j.j.fields.contains("event") =>
+            handleEvent(j.j.fields("event").convertTo[String], j.j)
+            None
+          case j: JsonMessage =>
+            log.warn(s"Unhandled JsonMessage received: $j")
+            None
+          case m: UnknownChannelDataMessage =>
+            None
+          case m: DecodedBitfinexMessage =>
+            if (log.isTraceEnabled) log.trace(s"received: $m")
+            Some(m)
+          case other =>
+            log.warn(s"${Emoji.Confused} Unhandled object (for $tradePair). Message: $other")
+            None
         }
+      }
+      try {
+        Await.result(f, config.httpTimeout)
+      } catch {
+        case e: Exception => throw new RuntimeException(s"While decoding WebSocket stream event: $msg", e)
       }
     case msg: Message =>
       log.warn(s"Unexpected kind of Message received: $msg")
+      None
   }
 
 
   // flow to us
-  // emits a Message and then keep the connection open
-  val flow: Flow[Message, Message, Promise[Option[Message]]] =
-  Flow.fromSinkAndSourceCoupledMat(
-    sink,
-    Source(List(
-      TextMessage(SubscribeRequest(channel = "ticker", symbol = tradePair.apiSymbol).toJson.compactPrint),
-      TextMessage(SubscribeRequest(channel = "book", symbol = tradePair.apiSymbol).toJson.compactPrint)
-    )).concatMat(Source.maybe[Message])(Keep.right))(Keep.right)
-
-
-  val WebSocketEndpoint: Uri = Uri(s"wss://api-pub.bitfinex.com/ws/2")
-  val (upgradeResponse, promise) =
-    Http().singleWebSocketRequest(
-      WebSocketRequest(WebSocketEndpoint),
-      flow)
-
-  val connected: Future[Done.type] = upgradeResponse.flatMap { upgrade =>
-    if (upgrade.response.status == StatusCodes.SwitchingProtocols) {
-      log.debug("WebSocket connected")
-      Future.successful(Done)
-    } else {
-      throw new RuntimeException(s"Connection failed: ${upgrade.response.status}")
-    }
+  // emits a list of Messages and then keep the connection open
+  def createFlowTo(sink: Sink[DecodedBitfinexMessage, NotUsed]): Flow[Message, Message, Promise[Option[Message]]] = {
+    Flow.fromSinkAndSourceCoupledMat(
+      downStreamFlow
+        .filter(_.isDefined)
+        .map(_.get)
+        .toMat(sink)(Keep.right),
+      Source(List(
+        TextMessage(SubscribeRequestJson(channel = "ticker", symbol = tradePair.apiSymbol).toJson.compactPrint),
+        TextMessage(SubscribeRequestJson(channel = "book", symbol = tradePair.apiSymbol).toJson.compactPrint)
+      )).concatMat(Source.maybe[Message])(Keep.right))(Keep.right)
   }
 
+  val WebSocketEndpoint: Uri = Uri(s"wss://api-pub.bitfinex.com/ws/2")
+  var ws: (Future[WebSocketUpgradeResponse], Promise[Option[Message]]) = _
+
+  var connected: Future[Done.type] = _
+
+  def createConnected: Future[Done.type] =
+    ws._1.flatMap {
+      upgrade =>
+        if (upgrade.response.status == StatusCodes.SwitchingProtocols) {
+          log.debug("WebSocket connected")
+          Future.successful(Done)
+        } else {
+          throw new RuntimeException(s"Connection failed: ${
+            upgrade.response.status
+          }")
+        }
+    }
+
+
   override def receive: Receive = {
+    case StartStreamRequest(sink) =>
+      log.debug("starting WebSocket stream")
+      ws = Http().singleWebSocketRequest(
+        WebSocketRequest(WebSocketEndpoint),
+        createFlowTo(sink))
+      connected = createConnected
+
     case Status.Failure(cause) =>
       log.error("received failure", cause)
   }
 }
-
-
-// TODO send unsubscribe message to bitfinex on shutdown event

@@ -1,13 +1,16 @@
 package org.purevalue.arbitrage.adapter.bitfinex
 
+import akka.{Done, NotUsed}
 import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
 import akka.pattern.ask
+import akka.stream.scaladsl.{Flow, Keep, Sink}
 import akka.util.Timeout
+import org.purevalue.arbitrage.TPDataManager.StartStreamRequest
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexDataChannel.GetBitfinexTradePair
 import org.purevalue.arbitrage._
 import org.slf4j.LoggerFactory
 
-import scala.concurrent.Await
+import scala.concurrent.{Await, Future}
 
 
 object BitfinexTPDataChannel {
@@ -23,66 +26,47 @@ class BitfinexTPDataChannel(config: ExchangeConfig, tradePair: TradePair, bitfin
   implicit val system: ActorSystem = Main.actorSystem
 
   private var bitfinexTradePair: BitfinexTradePair = _
-  private var orderBookWebSocketFlow: ActorRef = _
+  private var bitfinexTPWebSocketFlow: ActorRef = _
 
+  private var sink: Sink[DecodedBitfinexMessage, NotUsed] = _
 
+  def createSinkTo(downstreamSink: Sink[Seq[TPStreamData], Future[Done]]): Sink[DecodedBitfinexMessage, NotUsed] = {
+    Flow.fromFunction(streamMapping).toMat(downstreamSink)(Keep.none)
+  }
 
-  /*
-    Algorithm to create and keep a book instance updated
+  def streamMapping(in: DecodedBitfinexMessage): Seq[TPStreamData] = in match {
+    case t: RawTickerJson =>
+      Seq(t.value.toTicker(config.exchangeName, tradePair))
 
-    1. subscribe to channel
-    2. receive the book snapshot and create your in-memory book structure
-    3. when count > 0 then you have to add or update the price level
-    3.1 if amount > 0 then add/update bids
-    3.2 if amount < 0 then add/update asks
-    4. when count = 0 then you have to delete the price level.
-    4.1 if amount = 1 then remove from bids
-    4.2 if amount = -1 then remove from asks
-  */
-  private def toOrderBookUpdate(update: RawOrderBookUpdateMessage): OrderBookUpdate = {
-    if (update.value.count > 0) {
-      if (update.value.amount > 0)
-        OrderBookUpdate(List(Bid(update.value.price, update.value.amount)), List())
-      else if (update.value.amount < 0)
-        OrderBookUpdate(List(), List(Ask(update.value.price, -update.value.amount)))
-      else {
-        log.warn(s"undefined update case: $update")
-        OrderBookUpdate(List(), List())
-      }
-    } else if (update.value.count == 0) {
-      if (update.value.amount == 1.0d)
-        OrderBookUpdate(List(Bid(update.value.price, 0.0d)), List())
-      else if (update.value.amount == -1.0d)
-        OrderBookUpdate(List(), List(Ask(update.value.price, 0.0d)))
-      else {
-        log.warn(s"undefined update case: $update")
-        OrderBookUpdate(List(), List())
-      }
-    } else {
-      log.warn(s"undefined update case: $update")
-      OrderBookUpdate(List(), List())
-    }
+    case o: RawOrderBookSnapshotJson =>
+      Seq(o.toOrderBookSnapshot)
+
+    case o: RawOrderBookUpdateJson =>
+      Seq(o.toOrderBookUpdate)
+
+    case h: Heartbeat =>
+      Seq()
+
+    case other =>
+      log.error(s"unhandled: $other")
+      Seq()
   }
 
   override def preStart() {
     log.debug(s"BitfinexTradePairDataStreamer($tradePair) initializing...")
     implicit val timeout: Timeout = AppConfig.tradeRoom.internalCommunicationTimeout
-    bitfinexTradePair = Await.result((bitfinexDataChannel ? GetBitfinexTradePair(tradePair)).mapTo[BitfinexTradePair], AppConfig.tradeRoom.internalCommunicationTimeout.duration)
-    orderBookWebSocketFlow = context.actorOf(BitfinexTradePairBasedWebSockets.props(config, bitfinexTradePair, self))
+    bitfinexTradePair = Await.result((bitfinexDataChannel ? GetBitfinexTradePair(tradePair)).mapTo[BitfinexTradePair],
+      AppConfig.tradeRoom.internalCommunicationTimeout.duration)
+    bitfinexTPWebSocketFlow = context.actorOf(
+      BitfinexTPWebSocketFlow.props(config, bitfinexTradePair, self), s"BitfinexTPWebSocketFlow-${bitfinexTradePair.apiSymbol}")
   }
 
   override def receive: Receive = {
 
-//    case s: RawOrderBookSnapshotMessage =>
-//      log.debug(s"Initializing OrderBook($tradePair) with received snapshot")
-//      tradePairDataManager ! toOrderBookInitialData(s)
-//
-//    case u: RawOrderBookUpdateMessage =>
-//      tradePairDataManager ! toOrderBookUpdate(u)
-//
-//    case t: RawTickerMessage =>
-//      tradePairDataManager ! t.value.toTicker(config.exchangeName, tradePair)
-//
+    case StartStreamRequest(downstreamSink) =>
+      sink = createSinkTo(downstreamSink)
+      bitfinexTPWebSocketFlow ! BitfinexTPWebSocketFlow.StartStreamRequest(sink)
+
     case Status.Failure(cause) =>
       log.error("Failure received", cause)
   }

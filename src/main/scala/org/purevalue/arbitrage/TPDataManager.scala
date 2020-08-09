@@ -145,9 +145,7 @@ case class TPDataManager(exchangeName: String, tradePair: TradePair, exchangeDat
   }
 
   override def preStart(): Unit = {
-    log.debug(s"TPDataManager $tradePair preStart()")
     initTime = Instant.now()
-
     tpDataChannel = context.actorOf(
       tpDataChannelInit.apply(TPDataChannelPropsParams(tradePair, exchangeDataChannel, self)), s"$exchangeName-TPDataChannel-$tradePair")
 

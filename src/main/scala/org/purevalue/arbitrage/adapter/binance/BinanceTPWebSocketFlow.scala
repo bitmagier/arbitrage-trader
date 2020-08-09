@@ -17,7 +17,6 @@ import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonF
 import scala.concurrent.{Await, Future, Promise}
 
 object BinanceTPWebSocketFlow {
-  case class Started()
   case class StartStreamRequest(sink: Sink[DecodedBinanceMessage, NotUsed])
 
   def props(config: ExchangeConfig, tradePair: BinanceTradePair, binanceTPDataChannel: ActorRef): Props =
@@ -64,7 +63,7 @@ case class BinanceTPWebSocketFlow(config: ExchangeConfig, tradePair: BinanceTrad
             if (log.isTraceEnabled) log.trace(s"received $m")
             Some(m)
           case other =>
-            log.warn(s"${Emoji.Confused} Unhandled object (likely contains wrong TradePair, expected was '$tradePair'). Message: $other")
+            log.warn(s"${Emoji.Confused} Unhandled object (for $tradePair). Message: $other")
             None
         }
       }

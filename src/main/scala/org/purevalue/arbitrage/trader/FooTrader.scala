@@ -179,7 +179,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc:TradeContext) extends Ac
       val t1Stats: Map[TradePair, Int] = tc.tickers.values.flatMap(_.keys).foldLeft(Map[TradePair, Int]())((a,b) => a + (b -> (a.getOrElse(b, 0) + 1)))
       val tickerChoicesAggregated: Map[Int, Int] = t1Stats.values.foldLeft(Map[Int, Int]())((a,b) => a + (b -> (a.getOrElse(b, 0) + 1)))
 
-      log.info(s"TradeContext: TickerChoicesAggregated: $tickerChoicesAggregated")
+      log.info(s"${Emoji.Robot} FooTrader TradeContext: TickerChoicesAggregated: $tickerChoicesAggregated")
       lastLifeSign = Instant.now()
       numSingleSearchesDiff = 0
       numSearchesDiff = 0
