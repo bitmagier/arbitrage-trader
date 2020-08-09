@@ -1,13 +1,14 @@
 package org.purevalue.arbitrage.adapter.bitfinex
 
-import akka.actor.{ActorRef, Props}
-import org.purevalue.arbitrage.adapter.ExchangeDataChannel
+import akka.actor.{Actor, ActorSystem, Props, Status}
+import org.purevalue.arbitrage.Exchange.{GetTradePairs, TradePairs}
+import org.purevalue.arbitrage.Utils.queryJson
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexDataChannel.GetBitfinexTradePair
-import org.purevalue.arbitrage.{Asset, ExchangeConfig, GlobalConfig, TradePair}
+import org.purevalue.arbitrage.{Asset, ExchangeConfig, GlobalConfig, Main, TradePair}
 import org.slf4j.LoggerFactory
 import spray.json._
 
-import scala.concurrent.Await
+import scala.concurrent.{Await, ExecutionContextExecutor}
 
 case class BitfinexSymbol(currencySymbol: Asset, apiSymbol: String)
 case class BitfinexTradePair(baseAsset: Asset, quoteAsset: Asset, apiSymbol: String) extends TradePair
@@ -17,8 +18,15 @@ object BitfinexDataChannel {
 
   def props(config: ExchangeConfig): Props = Props(new BitfinexDataChannel(config))
 }
-class BitfinexDataChannel(config: ExchangeConfig) extends ExchangeDataChannel(config) {
+
+/**
+ * Bitfinex exchange data channel
+ */
+class BitfinexDataChannel(config: ExchangeConfig) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BitfinexDataChannel])
+  implicit val system:ActorSystem = Main.actorSystem
+  implicit val executor: ExecutionContextExecutor = system.dispatcher
+
 
   val baseRestEndpointPublic = "https://api-pub.bitfinex.com"
 
@@ -30,17 +38,16 @@ class BitfinexDataChannel(config: ExchangeConfig) extends ExchangeDataChannel(co
   def initTradePairs(): Unit = {
     import DefaultJsonProtocol._
 
-    val apiSymbolToOfficialCurrencySymbolMapping: Map[String, String] = Await.result(
-      queryJson[List[List[Tuple2[String, String]]]](s"$baseRestEndpointPublic/v2/conf/pub:map:currency:sym"),
-      config.httpTimeout)
+    val apiSymbolToOfficialCurrencySymbolMapping: Map[String, String] =
+      Await.result(queryJson[List[List[Tuple2[String, String]]]](s"$baseRestEndpointPublic/v2/conf/pub:map:currency:sym", config.httpTimeout), config.httpTimeout)
       .head
       .map(e => (e._1, e._2.toUpperCase))
       .toMap
     if (log.isTraceEnabled) log.trace(s"currency mappings received: $apiSymbolToOfficialCurrencySymbolMapping")
 
     // currency->name
-    val currencies: Map[String, String] = Await.result(
-      queryJson[List[List[Tuple2[String, String]]]](s"$baseRestEndpointPublic/v2/conf/pub:map:currency:label"),
+    val currencies: Map[String, String] =
+      Await.result(queryJson[List[List[Tuple2[String, String]]]](s"$baseRestEndpointPublic/v2/conf/pub:map:currency:label", config.httpTimeout),
       config.httpTimeout)
       .head
       .map(e => (e._1, e._2))
@@ -55,9 +62,8 @@ class BitfinexDataChannel(config: ExchangeConfig) extends ExchangeDataChannel(co
       .toSet
     if (log.isTraceEnabled) log.trace(s"bitfinexAssets: $bitfinexAssets")
 
-    val tradePairs: List[String] = Await.result(
-      queryJson[List[List[String]]](s"$baseRestEndpointPublic/v2/conf/pub:list:pair:exchange"),
-      config.httpTimeout)
+    val tradePairs: List[String] =
+      Await.result(queryJson[List[List[String]]](s"$baseRestEndpointPublic/v2/conf/pub:list:pair:exchange", config.httpTimeout), config.httpTimeout)
       .head
     if (log.isTraceEnabled) log.trace(s"tradepairs: $tradePairs")
 
@@ -79,11 +85,17 @@ class BitfinexDataChannel(config: ExchangeConfig) extends ExchangeDataChannel(co
   }
 
   override def preStart(): Unit = {
-    super.preStart()
     initTradePairs()
   }
 
-  override def receive: Receive = super.receive orElse {
-    case GetBitfinexTradePair(tp) => sender() ! bitfinexTradePairs.find(e => e.baseAsset==tp.baseAsset && e.quoteAsset==tp.quoteAsset).get
+  override def receive: Receive = {
+    case GetTradePairs() =>
+      sender() ! TradePairs(tradePairs)
+
+    case GetBitfinexTradePair(tp) =>
+      sender() ! bitfinexTradePairs.find(e => e.baseAsset==tp.baseAsset && e.quoteAsset==tp.quoteAsset).get
+
+    case Status.Failure(cause) =>
+      log.error("received failure", cause)
   }
 }

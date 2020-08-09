@@ -3,38 +3,29 @@ package org.purevalue.arbitrage.adapter.bitfinex
 import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
 import akka.pattern.ask
 import akka.util.Timeout
-import org.purevalue.arbitrage.TPDataManager._
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexDataChannel.GetBitfinexTradePair
-import org.purevalue.arbitrage.{AppConfig, ExchangeConfig, Main, TradePair}
+import org.purevalue.arbitrage._
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.Await
 
 
 object BitfinexTPDataChannel {
-  def props(config: ExchangeConfig, tradePair: TradePair, bitfinexDataChannel: ActorRef, tradePairDataManager: ActorRef): Props =
-    Props(new BitfinexTPDataChannel(config, tradePair, bitfinexDataChannel, tradePairDataManager))
+  def props(config: ExchangeConfig, tradePair: TradePair, bitfinexDataChannel: ActorRef): Props =
+    Props(new BitfinexTPDataChannel(config, tradePair, bitfinexDataChannel))
 }
-class BitfinexTPDataChannel(config: ExchangeConfig, tradePair: TradePair, bitfinexDataChannel:ActorRef, tradePairDataManager: ActorRef) extends Actor {
+
+/**
+ * Bitfinex TradePair-based data channel
+ */
+class BitfinexTPDataChannel(config: ExchangeConfig, tradePair: TradePair, bitfinexDataChannel:ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BitfinexTPDataChannel])
   implicit val system: ActorSystem = Main.actorSystem
 
   private var bitfinexTradePair: BitfinexTradePair = _
   private var orderBookWebSocketFlow: ActorRef = _
 
-  private def toOrderBookInitialData(snapshot: RawOrderBookSnapshotMessage) = {
-    val bids = snapshot.values
-      .filter(_.count > 0)
-      .filter(_.amount > 0)
-      .map(e => Bid(e.price, e.amount))
-    val asks = snapshot.values
-      .filter(_.count > 0)
-      .filter(_.amount < 0)
-      .map(e => Ask(e.price, -e.amount))
-    OrderBookInitialData(
-      bids, asks
-    )
-  }
+
 
   /*
     Algorithm to create and keep a book instance updated
@@ -82,16 +73,16 @@ class BitfinexTPDataChannel(config: ExchangeConfig, tradePair: TradePair, bitfin
 
   override def receive: Receive = {
 
-    case s: RawOrderBookSnapshotMessage =>
-      log.debug(s"Initializing OrderBook($tradePair) with received snapshot")
-      tradePairDataManager ! toOrderBookInitialData(s)
-
-    case u: RawOrderBookUpdateMessage =>
-      tradePairDataManager ! toOrderBookUpdate(u)
-
-    case t: RawTickerMessage =>
-      tradePairDataManager ! t.value.toTicker(config.exchangeName, tradePair)
-
+//    case s: RawOrderBookSnapshotMessage =>
+//      log.debug(s"Initializing OrderBook($tradePair) with received snapshot")
+//      tradePairDataManager ! toOrderBookInitialData(s)
+//
+//    case u: RawOrderBookUpdateMessage =>
+//      tradePairDataManager ! toOrderBookUpdate(u)
+//
+//    case t: RawTickerMessage =>
+//      tradePairDataManager ! t.value.toTicker(config.exchangeName, tradePair)
+//
     case Status.Failure(cause) =>
       log.error("Failure received", cause)
   }

@@ -11,7 +11,9 @@
   </appender>
 
   <logger name="org.purevalue.arbitrage" level="INFO"/>
-<!--  <logger name="org.purevalue.arbitrage.trader.FooTrader" level="DEBUG"/>-->
+  <logger name="org.purevalue.arbitrage.Exchange" level="DEBUG"/>
+  <logger name="org.purevalue.arbitrage.TPDataManager" level="DEBUG"/>
+<!--  <logger name="org.purevalue.arbitrage.adapter.binance" level="DEBUG"/>-->
   <logger name="org.purevalue.arbitrage.TradeRoom" level="DEBUG"/>
 
   <root level="INFO">

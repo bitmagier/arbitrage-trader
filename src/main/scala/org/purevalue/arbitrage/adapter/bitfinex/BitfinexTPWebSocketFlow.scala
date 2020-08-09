@@ -28,7 +28,21 @@ object RawOrderBookEntry {
   def apply(v: Tuple3[Double, Int, Double]): RawOrderBookEntry = RawOrderBookEntry(v._1, v._2, v._3)
 }
 
-case class RawOrderBookSnapshotMessage(channelId: Int, values: List[RawOrderBookEntry]) extends DecodedMessage // [channelId, [[price, count, amount],...]]
+case class RawOrderBookSnapshotMessage(channelId: Int, values: List[RawOrderBookEntry]) extends DecodedMessage { // [channelId, [[price, count, amount],...]]
+  private def toOrderBookSnapshot(snapshot: RawOrderBookSnapshotMessage) = {
+    val bids = snapshot.values
+      .filter(_.count > 0)
+      .filter(_.amount > 0)
+      .map(e => Bid(e.price, e.amount))
+    val asks = snapshot.values
+      .filter(_.count > 0)
+      .filter(_.amount < 0)
+      .map(e => Ask(e.price, -e.amount))
+    OrderBookSnapshot(
+      bids, asks
+    )
+  }
+}
 object RawOrderBookSnapshotMessage {
   def apply(v: Tuple2[Int, List[RawOrderBookEntry]]): RawOrderBookSnapshotMessage = RawOrderBookSnapshotMessage(v._1, v._2)
 }
@@ -49,7 +63,7 @@ case class RawTicker(bid: Double, // Price of last highest bid
                      high: Double, // Daily high
                      low: Double) { // Daily low
   def toTicker(exchange: String, tradePair: TradePair): Ticker =
-    Ticker(exchange, tradePair, bid, None, ask, None, lastPrice, None, None, LocalDateTime.now)
+    Ticker(exchange, tradePair, bid, None, ask, None, Some(lastPrice), LocalDateTime.now)
 }
 object RawTicker {
   def apply(v: Array[Double]): RawTicker =

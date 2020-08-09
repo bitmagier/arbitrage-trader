@@ -1,14 +1,14 @@
 package org.purevalue.arbitrage.adapter.binance
 
-import akka.actor.{Props, Status}
-import akka.pattern.pipe
-import org.purevalue.arbitrage.adapter.ExchangeDataChannel
-import org.purevalue.arbitrage.adapter.binance.BinanceDataChannel.{GetBinanceTradePair, GetOrderBookSnapshot, baseEndpoint}
-import org.purevalue.arbitrage.{Asset, ExchangeConfig, TradePair}
+import akka.actor.{Actor, ActorSystem, Props, Status}
+import org.purevalue.arbitrage.Exchange.{GetTradePairs, TradePairs}
+import org.purevalue.arbitrage.Utils.queryJson
+import org.purevalue.arbitrage._
+import org.purevalue.arbitrage.adapter.binance.BinanceDataChannel._
 import org.slf4j.LoggerFactory
 import spray.json._
 
-import scala.concurrent.Await
+import scala.concurrent.{Await, ExecutionContextExecutor}
 
 
 /*
@@ -29,63 +29,77 @@ import scala.concurrent.Await
 case class BinanceTradePair(baseAsset: Asset, quoteAsset: Asset, symbol: String) extends TradePair
 
 object BinanceDataChannel {
-  case class GetOrderBookSnapshot(tradePair: BinanceTradePair)
   case class GetBinanceTradePair(tradePair: TradePair)
+
+  def toBid(e: Seq[String]): Bid = {
+    if (e.length != 2) throw new IllegalArgumentException(e.toString())
+    Bid(
+      e.head.toDouble, // Price level
+      e(1).toDouble // Quantity
+    )
+  }
+
+  def toAsk(e: Seq[String]): Ask = {
+    if (e.length != 2) throw new IllegalArgumentException(e.toString())
+    Ask(
+      e.head.toDouble, // Price level
+      e(1).toDouble // Quantity
+    )
+  }
 
   val baseEndpoint = "https://api.binance.com"
 
   def props(config: ExchangeConfig): Props = Props(new BinanceDataChannel(config))
 }
 
-class BinanceDataChannel(config: ExchangeConfig) extends ExchangeDataChannel(config) {
+/**
+ * Binance exchange data channel
+ */
+class BinanceDataChannel(config: ExchangeConfig) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BinanceDataChannel])
+  implicit val system: ActorSystem = Main.actorSystem
+  implicit val executionContext: ExecutionContextExecutor = system.dispatcher
 
-  private var exchangeInfo: RawBinanceExchangeInformation = _
+  private var exchangeInfo: RawBinanceExchangeInformationJson = _
   private var binanceTradePairs: Set[BinanceTradePair] = _
 
-  override def tradePairs: Set[TradePair] = binanceTradePairs.asInstanceOf[Set[TradePair]]
+  def tradePairs: Set[TradePair] = binanceTradePairs.asInstanceOf[Set[TradePair]]
 
   override def preStart(): Unit = {
     import BinanceJsonProtocol._
-    super.preStart()
-    exchangeInfo = Await.result(queryJson[RawBinanceExchangeInformation](s"$baseEndpoint/api/v3/exchangeInfo"), config.httpTimeout)
+
+    exchangeInfo = Await.result(queryJson[RawBinanceExchangeInformationJson](s"$baseEndpoint/api/v3/exchangeInfo", config.httpTimeout), config.httpTimeout)
     binanceTradePairs = exchangeInfo.symbols
-      .filter(s => s.status=="TRADING" && s.orderTypes.contains("LIMIT") /* && s.orderTypes.contains("LIMIT_MAKER")*/ && s.permissions.contains("SPOT"))
+      .filter(s => s.status == "TRADING" && s.orderTypes.contains("LIMIT") /* && s.orderTypes.contains("LIMIT_MAKER")*/ && s.permissions.contains("SPOT"))
       .filter(s => config.assets.contains(s.baseAsset) && config.assets.contains(s.quoteAsset))
       .map(s => BinanceTradePair(Asset(s.baseAsset), Asset(s.quoteAsset), s.symbol))
       .toSet
     log.debug("received ExchangeInfo")
   }
 
-  override def receive: Receive = super.receive orElse {
+  override def receive: Receive = {
+
+    case GetTradePairs() =>
+      sender() ! TradePairs(tradePairs)
 
     // Messages from BinanceTPDataChannel
     case GetBinanceTradePair(tp) =>
-      sender() ! binanceTradePairs.find(e => e.baseAsset==tp.baseAsset && e.quoteAsset==tp.quoteAsset).get
-
-    case GetOrderBookSnapshot(tradePair) =>
-      import BinanceJsonProtocol._
-      log.debug(s"Binance: Get OrderBookSnapshot for $tradePair")
-
-      queryJson[RawOrderBookSnapshot](s"$baseEndpoint/api/v3/depth?symbol=${tradePair.symbol}&limit=1000")
-        .pipeTo(sender())
+      sender() ! binanceTradePairs.find(e => e.baseAsset == tp.baseAsset && e.quoteAsset == tp.quoteAsset).get
 
     case Status.Failure(cause) =>
       log.error("received failure", cause)
   }
 }
 
-case class RawBinanceTradePair(symbol: String, status: String, baseAsset: String, baseAssetPrecision: Int, quoteAsset: String,
-                               quotePrecision: Int, baseCommissionPrecision: Int, quoteCommissionPrecision: Int,
-                               orderTypes: Seq[String], icebergAllowed: Boolean, ocoAllowed: Boolean,
-                               quoteOrderQtyMarketAllowed: Boolean, isSpotTradingAllowed: Boolean,
-                               isMarginTradingAllowed: Boolean, /*filters*/ permissions: Seq[String])
+case class RawBinanceTradePairJson(symbol: String, status: String, baseAsset: String, baseAssetPrecision: Int, quoteAsset: String,
+                                   quotePrecision: Int, baseCommissionPrecision: Int, quoteCommissionPrecision: Int,
+                                   orderTypes: Seq[String], icebergAllowed: Boolean, ocoAllowed: Boolean,
+                                   quoteOrderQtyMarketAllowed: Boolean, isSpotTradingAllowed: Boolean,
+                                   isMarginTradingAllowed: Boolean, /*filters*/ permissions: Seq[String])
 
-case class RawBinanceExchangeInformation(timezone: String, serverTime: Long, /*rateLimits,exchangeFilters*/ symbols: Seq[RawBinanceTradePair])
-case class RawOrderBookSnapshot(lastUpdateId: Long, bids: Seq[Seq[String]], asks: Seq[Seq[String]])
+case class RawBinanceExchangeInformationJson(timezone: String, serverTime: Long, /*rateLimits,exchangeFilters*/ symbols: Seq[RawBinanceTradePairJson])
 
 object BinanceJsonProtocol extends DefaultJsonProtocol {
-  implicit val rawSymbolFormat: RootJsonFormat[RawBinanceTradePair] = jsonFormat15(RawBinanceTradePair)
-  implicit val rawExchangeInformationFormat: RootJsonFormat[RawBinanceExchangeInformation] = jsonFormat3(RawBinanceExchangeInformation)
-  implicit val orderBookSnapshot: RootJsonFormat[RawOrderBookSnapshot] = jsonFormat3(RawOrderBookSnapshot)
+  implicit val rawSymbolFormat: RootJsonFormat[RawBinanceTradePairJson] = jsonFormat15(RawBinanceTradePairJson)
+  implicit val rawExchangeInformationFormat: RootJsonFormat[RawBinanceExchangeInformationJson] = jsonFormat3(RawBinanceExchangeInformationJson)
 }

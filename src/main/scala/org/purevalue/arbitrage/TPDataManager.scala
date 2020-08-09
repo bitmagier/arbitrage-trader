@@ -2,38 +2,88 @@ package org.purevalue.arbitrage
 
 import java.time.{Duration, Instant, LocalDateTime}
 
+import akka.Done
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, Props, Status}
+import akka.stream.scaladsl.Sink
 import org.purevalue.arbitrage.TPDataManager._
-import org.purevalue.arbitrage.adapter.binance.BinanceTPDataChannel
-import org.purevalue.arbitrage.adapter.bitfinex.BitfinexTPDataChannel
 import org.slf4j.LoggerFactory
 
-import scala.concurrent.ExecutionContextExecutor
+import scala.collection._
 import scala.concurrent.duration.DurationInt
+import scala.concurrent.{ExecutionContextExecutor, Future}
 
+trait TPStreamData
+case class Ticker(exchange: String,
+                  tradePair: TradePair,
+                  highestBidPrice: Double,
+                  highestBidQuantity: Option[Double],
+                  lowestAskPrice: Double,
+                  lowestAskQuantity: Option[Double],
+                  lastPrice: Option[Double],
+                  lastUpdated: LocalDateTime) extends TPStreamData
+case class ExtendedTicker(exchange: String,
+                          tradePair: TradePair,
+                          highestBidPrice: Double,
+                          highestBidQuantity: Double,
+                          lowestAskPrice: Double,
+                          lowestAskQuantity: Double,
+                          lastPrice: Double,
+                          lastQuantity: Double,
+                          weightedAveragePrice: Double,
+                          lastUpdated: LocalDateTime) extends TPStreamData
+case class OrderBookSnapshot(bids: Seq[Bid], asks: Seq[Ask]) extends TPStreamData
+case class OrderBookUpdate(bids: Seq[Bid], asks: Seq[Ask]) extends TPStreamData
+
+
+case class Bid(price: Double, quantity: Double) { // A bid is an offer to buy an asset; (likely aggregated) bid position(s) for a price level
+  override def toString: String = s"Bid(price=${CryptoValue.formatDecimal(price)}, amount=${CryptoValue.formatDecimal(quantity)})"
+}
+
+case class Ask(price: Double, quantity: Double) { // An ask is an offer to sell an asset; (likely aggregated) ask position(s) for a price level
+  override def toString: String = s"Ask(price=${CryptoValue.formatDecimal(price)}, amount=${CryptoValue.formatDecimal(quantity)})"
+}
+
+case class OrderBook(exchange: String,
+                     tradePair: TradePair,
+                     bids: Map[Double, Bid], // price-level -> bid
+                     asks: Map[Double, Ask], // price-level -> ask
+                     lastUpdated: LocalDateTime) {
+
+  def toCondensedString: String = {
+    val bestBid = highestBid
+    val bestAsk = lowestAsk
+    s"${bids.keySet.size} Bids (highest price: ${CryptoValue.formatDecimal(bestBid.price)}, quantity: ${bestBid.quantity}) " +
+      s"${asks.keySet.size} Asks(lowest price: ${CryptoValue.formatDecimal(bestAsk.price)}, quantity: ${bestAsk.quantity})"
+  }
+
+  def highestBid: Bid = bids(bids.keySet.max)
+
+  def lowestAsk: Ask = asks(asks.keySet.min)
+}
+
+/**
+ * Exchange-part of the global data structure the TPDataManager shall write to
+ */
+case class TPData(ticker: concurrent.Map[TradePair, Ticker],
+                  extendedTicker: concurrent.Map[TradePair, ExtendedTicker],
+                  orderBook: concurrent.Map[TradePair, OrderBook])
 
 object TPDataManager {
   case class InitCheck()
-  case class GetTicker()
-  case class GetOrderBook()
   case class Initialized(tradePair: TradePair)
-  case class Bid(price: Double, quantity: Double) { // A bid is an offer to buy an asset; (likely aggregated) bid position(s) for a price level
-    override def toString: String = s"Bid(price=${CryptoValue.formatDecimal(price)}, amount=${CryptoValue.formatDecimal(quantity)})"
-  }
-  case class Ask(price: Double, quantity: Double) { // An ask is an offer to sell an asset; (likely aggregated) ask position(s) for a price level
-    override def toString: String = s"Ask(price=${CryptoValue.formatDecimal(price)}, amount=${CryptoValue.formatDecimal(quantity)})"
-  }
-  case class OrderBookInitialData(bids: Seq[Bid], asks: Seq[Ask])
-  case class OrderBookUpdate(bids: Seq[Bid], asks: Seq[Ask])
+  case class StartStreamRequest(sink: Sink[Seq[TPStreamData], Future[Done]])
 
-  def props(exchangeName: String, tradePair: TradePair, exchangeDataChannel: ActorRef, exchange: ActorRef, tpDataChannelInit: Function1[TPDataChannelPropsParams, Props]): Props =
-    Props(new TPDataManager(exchangeName, tradePair, exchangeDataChannel, exchange, tpDataChannelInit))
+  def props(exchangeName: String, tradePair: TradePair, exchangeDataChannel: ActorRef, exchange: ActorRef,
+            tpDataChannelInit: Function1[TPDataChannelPropsParams, Props], tpDataSink: TPData): Props =
+    Props(new TPDataManager(exchangeName, tradePair, exchangeDataChannel, exchange, tpDataChannelInit, tpDataSink))
 }
 
 /**
  * Manages all kind of data of one tradepair at one exchange
  */
-case class TPDataManager(exchangeName: String, tradePair: TradePair, exchangeDataChannel: ActorRef, exchange: ActorRef, tpDataChannelInit: Function1[TPDataChannelPropsParams, Props]) extends Actor {
+case class TPDataManager(exchangeName: String, tradePair: TradePair, exchangeDataChannel: ActorRef, exchange: ActorRef,
+                         tpDataChannelInit: Function1[TPDataChannelPropsParams, Props],
+                         tpData: TPData) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[TPDataManager])
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
@@ -42,13 +92,50 @@ case class TPDataManager(exchangeName: String, tradePair: TradePair, exchangeDat
 
   private var initializedMsgSend = false
   private var orderBookInitialized = false
-  private var orderBook: OrderBook = OrderBook(exchangeName, tradePair, Map(), Map(), LocalDateTime.MIN)
-  private var ticker: Option[Ticker] = None
+
   private var initTime: Instant = _
 
   val initCheckSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(1.seconds, 1.seconds, self, InitCheck())
 
-  def initialized: Boolean = orderBookInitialized && ticker.isDefined
+  def initialized: Boolean = tpData.ticker.isDefinedAt(tradePair) && orderBookInitialized
+
+  val sink: Sink[Seq[TPStreamData], Future[Done]] = Sink.foreach[Seq[TPStreamData]] { // TODO test foreachAsync
+    data: Seq[TPStreamData] =>
+      data.foreach {
+        case t: Ticker =>
+          tpData.ticker += tradePair -> t
+
+        case t: ExtendedTicker =>
+          tpData.extendedTicker += tradePair -> t
+
+        case o: OrderBookSnapshot =>
+          tpData.orderBook += tradePair ->
+            OrderBook(
+              exchangeName,
+              tradePair,
+              o.bids.map(e => (e.price, e)).toMap,
+              o.asks.map(e => (e.price, e)).toMap,
+              LocalDateTime.now
+            )
+          orderBookInitialized = true
+
+        case o: OrderBookUpdate =>
+          if (tpData.orderBook.isDefinedAt(tradePair)) {
+            tpData.orderBook += tradePair ->
+              OrderBook(
+                exchangeName,
+                tradePair,
+                (tpData.orderBook(tradePair).bids -- o.bids.filter(_.quantity == 0.0d).map(_.price)) ++ o.bids.map(e => e.price -> e),
+                (tpData.orderBook(tradePair).asks -- o.asks.filter(_.quantity == 0.0d).map(_.price)) ++ o.asks.map(e => e.price -> e),
+                LocalDateTime.now
+              )
+          } else {
+            log.warn(s"$o received, but no OrderBook present yet")
+          }
+      }
+      eventuallyInitialized()
+  }
+
 
   def eventuallyInitialized(): Unit = {
     if (!initializedMsgSend && initialized) {
@@ -58,7 +145,13 @@ case class TPDataManager(exchangeName: String, tradePair: TradePair, exchangeDat
   }
 
   override def preStart(): Unit = {
+    log.debug(s"TPDataManager $tradePair preStart()")
     initTime = Instant.now()
+
+    tpDataChannel = context.actorOf(
+      tpDataChannelInit.apply(TPDataChannelPropsParams(tradePair, exchangeDataChannel, self)), s"$exchangeName-TPDataChannel-$tradePair")
+
+    tpDataChannel ! StartStreamRequest(sink)
   }
 
   def receive: Receive = {
@@ -66,60 +159,14 @@ case class TPDataManager(exchangeName: String, tradePair: TradePair, exchangeDat
     // Messages from Exchange
     case InitCheck() =>
       if (initialized) initCheckSchedule.cancel()
-      else if (tpDataChannel == null) {
-        tpDataChannel = context.actorOf(tpDataChannelInit.apply(TPDataChannelPropsParams(tradePair, exchangeDataChannel, self)), s"$exchangeName-TPDataChannel-$tradePair")
-      } else {
+      else {
         if (Duration.between(initTime, Instant.now()).compareTo(AppConfig.dataManagerInitTimeout) > 0) {
           log.info(s"Killing $exchangeName-TPDataManager-$tradePair")
           self ! Kill // TODO graceful shutdown of tradepair-channel via parent actor
         }
       }
 
-    case GetTicker() =>
-      if (initialized)
-        sender() ! ticker.get
-
-    case GetOrderBook() =>
-      if (initialized)
-        sender() ! orderBook
-
-
-    // Messages from TradePairBasedDataStreamer
-
-    case t: Ticker =>
-      ticker = Some(t)
-      eventuallyInitialized()
-
-    case i: OrderBookInitialData =>
-      orderBook = OrderBook(
-        exchangeName,
-        tradePair,
-        i.bids.map(e => Tuple2(e.price, e)).toMap,
-        i.asks.map(e => Tuple2(e.price, e)).toMap,
-        LocalDateTime.now())
-      if (log.isTraceEnabled) log.trace(s"OrderBook $tradePair received initial data")
-      orderBookInitialized = true
-      eventuallyInitialized()
-
-    case u: OrderBookUpdate =>
-      val newBids = u.bids.map(e => Tuple2(e.price, e)).toMap
-      val newAsks = u.asks.map(e => Tuple2(e.price, e)).toMap
-      orderBook = OrderBook(
-        exchangeName,
-        tradePair,
-        (orderBook.bids ++ newBids).filter(_._2.quantity != 0.0d),
-        (orderBook.asks ++ newAsks).filter(_._2.quantity != 0.0d),
-        LocalDateTime.now())
-
-      if (log.isTraceEnabled) {
-        log.trace(s"OrderBook $exchangeName:$tradePair received update. $status")
-      }
-
     case Status.Failure(cause) =>
       log.error("received failure", cause)
-  }
-
-  def status: String = {
-    orderBook.toCondensedString
   }
 }

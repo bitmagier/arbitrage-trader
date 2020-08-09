@@ -61,11 +61,11 @@ object GlobalConfig {
     "binance" -> ExchangeInitStuff(
       () => BinanceDataChannel.props(AppConfig.exchange("binance")),
       (p: TPDataChannelPropsParams) =>
-        BinanceTPDataChannel.props(AppConfig.exchange("binance"), p.tp, p.exchangeDataChannel, p.tpDataManager)),
+        BinanceTPDataChannel.props(AppConfig.exchange("binance"), p.tp, p.exchangeDataChannel)),
     "bitfinex" -> ExchangeInitStuff(
       () => BitfinexDataChannel.props(AppConfig.exchange("bitfinex")),
       (p: TPDataChannelPropsParams) =>
-        BitfinexTPDataChannel.props(AppConfig.exchange("bitfinex"), p.tp, p.exchangeDataChannel, p.tpDataManager))
+        BitfinexTPDataChannel.props(AppConfig.exchange("bitfinex"), p.tp, p.exchangeDataChannel))
   )
 
   // this is the reference to know exactly about which asset (or coin) we are talking at each Exchange
