@@ -281,12 +281,31 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     initTraders()
   }
 
+
   def logStats(): Unit = {
-    log.info(s"${Emoji.Robot} TradeRoom statistics [exchanges / ticker / orderbooks] : [" +
+    log.info(s"${Emoji.Robot} TradeRoom stats (1/3) [exchanges / ticker / orderbooks] : [" +
       s"${exchanges.size} / " +
       s"${tickers.values.map(_.values.count(_ => true))}" +
       s"/ ${orderBooks.values.map(_.values.count(_ => true))}]")
+    val orderBookTop3 = orderBooks.flatMap(_._2.values)
+      .map(e => (e.bids.size + e.asks.size, e))
+      .toSeq
+      .sortBy(_._1)
+      .reverse
+      .take(3)
+      .map(e => s"[${e._2.bids.size} bids/${e._2.asks.size} asks: ${e._2.exchange}:${e._2.tradePair}] ")
+      .toList
+    log.info(s"${Emoji.Robot} TradeRoom stats (2/3) [biggest 3 orderbooks] : $orderBookTop3")
+    val orderBookBottom3 = orderBooks.flatMap(_._2.values)
+      .map(e => (e.bids.size + e.asks.size, e))
+      .toSeq
+      .sortBy(_._1)
+      .take(3)
+      .map(e => s"[${e._2.bids.size} bids/${e._2.asks.size} asks: ${e._2.exchange}:${e._2.tradePair}] ")
+      .toList
+    log.info(s"${Emoji.Robot} TradeRoom stats (3/3) [smallest 3 orderbooks] : $orderBookBottom3")
   }
+
 
   def receive: Receive = {
 
