@@ -1,7 +1,7 @@
 package org.purevalue.arbitrage
 
 import java.text.DecimalFormat
-import java.time.{Duration, LocalDateTime, ZonedDateTime}
+import java.time.{LocalDateTime, ZonedDateTime}
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -220,14 +220,6 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     invoiceAggregated.map(e => CryptoValue(e._1, e._2)).toSeq
   }
 
-  def isUpToDate(ob: OrderBook, now: LocalDateTime): Boolean = {
-    Duration.between(ob.lastUpdated, now).compareTo(config.maxDataAge) <= 0
-  }
-
-  def isUpToDate(t: ExtendedTicker, now: LocalDateTime): Boolean = {
-    Duration.between(t.lastUpdated, now).compareTo(config.maxDataAge) <= 0
-  }
-
   def placeOrderBundleOrders(t: OrderBundle): Unit = {
     log.debug(s"got order bundle to place: $t")
   }
@@ -292,8 +284,8 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   def logStats(): Unit = {
     log.info(s"${Emoji.Robot} TradeRoom statistics [exchanges / ticker / orderbooks] : [" +
       s"${exchanges.size} / " +
-      s"${tickers.values.flatMap(_.values).count(_ => true)}" +
-      s"/ ${orderBooks.values.flatMap(_.values).count(_ => true)}]")
+      s"${tickers.values.map(_.values.count(_ => true))}" +
+      s"/ ${orderBooks.values.map(_.values.count(_ => true))}]")
   }
 
   def receive: Receive = {
