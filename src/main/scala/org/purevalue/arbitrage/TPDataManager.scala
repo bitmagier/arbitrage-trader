@@ -113,8 +113,8 @@ case class TPDataManager(exchangeName: String, tradePair: TradePair, exchangeDat
             OrderBook(
               exchangeName,
               tradePair,
-              o.bids.map(e => (e.price, e)).toMap,
-              o.asks.map(e => (e.price, e)).toMap,
+              o.bids.filterNot(_.quantity == 0.0d).map(e => (e.price, e)).toMap,
+              o.asks.filterNot(_.quantity == 0.0d).map(e => (e.price, e)).toMap,
               LocalDateTime.now
             )
           orderBookInitialized = true
@@ -125,8 +125,8 @@ case class TPDataManager(exchangeName: String, tradePair: TradePair, exchangeDat
               OrderBook(
                 exchangeName,
                 tradePair,
-                (tpData.orderBook(tradePair).bids -- o.bids.filter(_.quantity == 0.0d).map(_.price)) ++ o.bids.map(e => e.price -> e),
-                (tpData.orderBook(tradePair).asks -- o.asks.filter(_.quantity == 0.0d).map(_.price)) ++ o.asks.map(e => e.price -> e),
+                (tpData.orderBook(tradePair).bids ++ o.bids.map(e => e.price -> e)).filterNot(_._2.quantity == 0.0d),
+                (tpData.orderBook(tradePair).asks ++ o.asks.map(e => e.price -> e)).filterNot(_._2.quantity == 0.0d),
                 LocalDateTime.now
               )
           } else {

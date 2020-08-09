@@ -29,25 +29,26 @@ object TradeDirection extends TradeDirection {
 case class CryptoValue(asset: Asset, amount: Double) {
   override def toString: String = s"${formatDecimal(amount)} ${asset.officialSymbol}"
 
-  //  def convertTo(targetAsset: Asset, tc: TradeContext): Option[Double] = {
-  //    if (this.asset == targetAsset) Some(amount)
-  //    else {
-  //      // try direct conversion first
-  //      dc.referenceTicker(TradePair.of(this.asset, targetAsset)) match {
-  //        case Some(ticker) =>
-  //            Some(amount * ticker.weightedAveragePrice.getOrElse(ticker.lastPrice))
-  //        case None => // convert to BTC first and then to targetAsset
-  //          val toBtcTicker = dc.referenceTicker(TradePair.of(this.asset, Asset("BTC")))
-  //          if (toBtcTicker.isEmpty) return None
-  //
-  //          val toBTCRate = toBtcTicker.get.weightedAveragePrice.getOrElse(toBtcTicker.get.lastPrice)
-  //          val btcToTargetTicker = dc.referenceTicker(TradePair.of(Asset("BTC"), targetAsset))
-  //          if (btcToTargetTicker.isEmpty) return None
-  //          val btcToTargetRate = btcToTargetTicker.get.weightedAveragePrice.getOrElse(btcToTargetTicker.get.lastPrice)
-  //          Some(amount * toBTCRate * btcToTargetRate)
-  //      }
-  //    }
-  //  }
+    def convertTo(targetAsset: Asset, tc: TradeContext): Option[Double] = {
+      if (this.asset == targetAsset) Some(amount)
+      else {
+        // try direct conversion first
+        tc.findReferenceTicker(TradePair.of(this.asset, targetAsset)) match {
+          case Some(ticker) =>
+              Some(amount * ticker.weightedAveragePrice)
+          case None => // convert to BTC first and then to targetAsset
+            val toBtcTicker = tc.findReferenceTicker(TradePair.of(this.asset, Asset("BTC")))
+            if (toBtcTicker.isEmpty) return None
+            val toBtcRate = toBtcTicker.get.weightedAveragePrice
+
+            val btcToTargetTicker = tc.findReferenceTicker(TradePair.of(Asset("BTC"), targetAsset))
+            if (btcToTargetTicker.isEmpty) return None
+            val btcToTargetRate = btcToTargetTicker.get.weightedAveragePrice
+
+            Some(amount * toBtcRate * btcToTargetRate)
+        }
+      }
+    }
 }
 object CryptoValue {
   def formatDecimal(d: Double): String = new DecimalFormat("#.##########").format(d)
@@ -117,7 +118,25 @@ object TradeRoom {
    */
   case class TradeContext(tickers: Map[String, Map[TradePair, Ticker]],
                           extendedTickers: Map[String, Map[TradePair, ExtendedTicker]],
-                          orderBooks: Map[String, Map[TradePair, OrderBook]])
+                          orderBooks: Map[String, Map[TradePair, OrderBook]],
+                          fees: Map[String, Fee]) {
+
+    /**
+     * find the best ticker stats for the tradepair prioritized by exchange via config
+     */
+    def findReferenceTicker(tradePair:TradePair): Option[ExtendedTicker] = {
+      for (exchange <- AppConfig.tradeRoom.extendedTickerExchanges) {
+        extendedTickers.get(exchange) match {
+          case Some(eTickers) => eTickers.get(tradePair) match {
+            case Some(ticker) => return Some(ticker)
+            case _ =>
+          }
+          case _ =>
+        }
+      }
+      None
+    }
+  }
 
   /** High level order bundle, covering 2 or more trader orders */
   case class OrderBundle(id: UUID,
@@ -162,8 +181,11 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   private val tickers: concurrent.Map[String, concurrent.Map[TradePair, Ticker]] = TrieMap()
   private val extendedTickers: concurrent.Map[String, concurrent.Map[TradePair, ExtendedTicker]] = TrieMap()
   private val orderBooks: concurrent.Map[String, concurrent.Map[TradePair, OrderBook]] = TrieMap()
-
-  private val tradeContext: TradeContext = TradeContext(tickers, extendedTickers, orderBooks)
+  private val fees: Map[String, Fee] = Map( // TODO
+    "binance" -> Fee("binance", AppConfig.exchange("binance").makerFee, AppConfig.exchange("binance").takerFee),
+    "bitfinex" -> Fee("bitfinex", AppConfig.exchange("bitfinex").makerFee, AppConfig.exchange("bitfinex").takerFee)
+  )
+  private val tradeContext: TradeContext = TradeContext(tickers, extendedTickers, orderBooks, fees)
 
   //  private var activeOrders: Map[UUID, Order] = Map() // orderId -> Order; orders, belonging to activeOrderBundles & active at the corresponding exchange
   //  private var tradesPerActiveOrderBundle: Map[UUID, ListBuffer[Trade]] = Map() // orderBundleId -> Trade; trades, belonging to activeOrderBundles & executed at an exchange

@@ -92,7 +92,7 @@ case class Exchange(exchangeName: String,
 
     case TPDataManager.Initialized(t) =>
       tpDataInitPending -= t
-      log.info(s"[$exchangeName]: [$t] initialized. Still pending: $tpDataInitPending")
+      log.debug(s"[$exchangeName]: [$t] initialized. Still pending: $tpDataInitPending")
       if (tpDataInitPending.isEmpty) {
         log.info(s"${Emoji.Robot} [$exchangeName]: all TradePair data initialized and running")
       }
