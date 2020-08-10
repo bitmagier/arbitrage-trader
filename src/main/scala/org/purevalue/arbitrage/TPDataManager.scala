@@ -6,6 +6,7 @@ import akka.Done
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, Props, Status}
 import akka.stream.scaladsl.Sink
 import org.purevalue.arbitrage.TPDataManager._
+import org.purevalue.arbitrage.Utils.formatDecimal
 import org.slf4j.LoggerFactory
 
 import scala.collection._
@@ -36,11 +37,11 @@ case class OrderBookUpdate(bids: Seq[Bid], asks: Seq[Ask]) extends TPStreamData
 
 
 case class Bid(price: Double, quantity: Double) { // A bid is an offer to buy an asset; (likely aggregated) bid position(s) for a price level
-  override def toString: String = s"Bid(price=${CryptoValue.formatDecimal(price)}, amount=${CryptoValue.formatDecimal(quantity)})"
+  override def toString: String = s"Bid(price=${formatDecimal(price)}, amount=${formatDecimal(quantity)})"
 }
 
 case class Ask(price: Double, quantity: Double) { // An ask is an offer to sell an asset; (likely aggregated) ask position(s) for a price level
-  override def toString: String = s"Ask(price=${CryptoValue.formatDecimal(price)}, amount=${CryptoValue.formatDecimal(quantity)})"
+  override def toString: String = s"Ask(price=${formatDecimal(price)}, amount=${formatDecimal(quantity)})"
 }
 
 case class OrderBook(exchange: String,
@@ -52,8 +53,8 @@ case class OrderBook(exchange: String,
   def toCondensedString: String = {
     val bestBid = highestBid
     val bestAsk = lowestAsk
-    s"${bids.keySet.size} Bids (highest price: ${CryptoValue.formatDecimal(bestBid.price)}, quantity: ${bestBid.quantity}) " +
-      s"${asks.keySet.size} Asks(lowest price: ${CryptoValue.formatDecimal(bestAsk.price)}, quantity: ${bestAsk.quantity})"
+    s"${bids.keySet.size} Bids (highest price: ${formatDecimal(bestBid.price)}, quantity: ${bestBid.quantity}) " +
+      s"${asks.keySet.size} Asks(lowest price: ${formatDecimal(bestAsk.price)}, quantity: ${bestAsk.quantity})"
   }
 
   def highestBid: Bid = bids(bids.keySet.max)

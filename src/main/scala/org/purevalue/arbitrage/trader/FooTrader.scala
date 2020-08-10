@@ -42,19 +42,6 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc:TradeContext) extends Ac
 
   def newUUID(): UUID = UUID.randomUUID() // switch to Time based UUID when connecting a DB like cassandra
 
-  def calculateWinUSDT(orders: Seq[Order]): Option[Double] = {
-    val invoice: Seq[CryptoValue] = orders.flatMap(_.bill)
-    val converted = invoice.map(_.convertTo(Asset("USDT"), tc))
-    if (converted.forall(_.isDefined)) {
-      Some(converted.map(_.get).sum)
-    } else {
-      None
-    }
-  }
-//
-//  def convertToUSDT(amount: Double, asset: Asset, dc: TradeDecisionContext): Option[Double] =
-//    CryptoValue(asset, amount).convertTo(Asset("USDT"), dc)
-
   trait NoResultReason
   case class BuyOrSellBookEmpty() extends NoResultReason
   case class BidAskGap() extends NoResultReason
@@ -116,9 +103,12 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc:TradeContext) extends Ac
 
     val orderBundleId = newUUID()
     val orderLimitAdditionRate: Double = config.getDouble("order-bundle.order-limit-addition-rate")
-    val amountBaseAsset: Option[Double] = CryptoValue(Asset("USDT"), tradeQuantityUSDT).convertTo(tradePair.baseAsset, tc)
-    if (amountBaseAsset.isEmpty)
-      return (None, Some(NoUSDTConversion(tradePair.baseAsset))) // only want to have assets convertible to USDT here
+    val amountBaseAsset: Double = CryptoValue(Asset("USDT"), tradeQuantityUSDT).convertTo(tradePair.baseAsset, tc) match {
+      case Some(v) => v
+       case None =>
+         log.warn(s"${Emoji.NoSupport} Unable to convert ${tradePair.baseAsset} to USDT")
+         return (None, Some(NoUSDTConversion(tradePair.baseAsset))) // only want to have assets convertible to USDT here
+    }
 
     val ourBuyBaseAssetOrder = Order(
       newUUID(),
@@ -128,12 +118,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc:TradeContext) extends Ac
       TradeDirection.Buy,
       tc.fees(lowestAsk._1),
       amountBaseAsset,
-      None,
       lowestAsk._2.price * (1.0d + orderLimitAdditionRate))
-
-    val amountQuoteAsset = CryptoValue(Asset("USDT"), tradeQuantityUSDT).convertTo(tradePair.quoteAsset, tc)
-    if (amountQuoteAsset.isEmpty)
-      return (None, Some(NoUSDTConversion(tradePair.quoteAsset)))
 
     val ourSellBaseAssetOrder = Order(
       newUUID(),
@@ -142,20 +127,19 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc:TradeContext) extends Ac
       tradePair,
       TradeDirection.Sell,
       tc.fees(highestBid._1),
-      None,
-      amountQuoteAsset,
-      highestBid._2.price * (1.0d - orderLimitAdditionRate * 0.01d)
+      amountBaseAsset,
+      highestBid._2.price * (1.0d - orderLimitAdditionRate)
     )
 
-    val estimatedWinUSDT: Option[Double] = calculateWinUSDT(Seq(ourBuyBaseAssetOrder, ourSellBaseAssetOrder))
-    if (estimatedWinUSDT.isDefined && estimatedWinUSDT.get >= config.getDouble("order-bundle.min-gain-in-usdt")) {
+    val bill: OrderBill = OrderBill.calc(Seq(ourBuyBaseAssetOrder, ourSellBaseAssetOrder), tc)
+    if (bill.sumUSDT >= config.getDouble("order-bundle.min-gain-in-usdt")) {
       (Some(OrderBundle(
         orderBundleId,
         name,
         self,
         LocalDateTime.now(),
         List(ourBuyBaseAssetOrder, ourSellBaseAssetOrder),
-        estimatedWinUSDT.get,
+        bill,
         ""
       )), None)
     } else {
@@ -171,7 +155,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc:TradeContext) extends Ac
       if (tc.orderBooks.count(_._2.keySet.contains(tradePair)) > 1) {
         numSingleSearchesDiff += 1
         findBestShotBasedOnOrderBook(tradePair) match {
-          case (Some(shot), _) => if (result.isEmpty || shot.estimatedWinUSDT > result.get.estimatedWinUSDT) {
+          case (Some(shot), _) => if (result.isEmpty || shot.bill.sumUSDT > result.get.bill.sumUSDT) {
             result = Some(shot)
           }
 
@@ -193,7 +177,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc:TradeContext) extends Ac
       val tickerChoicesAggregated: Map[Int, Int] = t1Stats.values.foldLeft(Map[Int, Int]())((a,b) => a + (b -> (a.getOrElse(b, 0) + 1)))
 
       log.info(s"${Emoji.Robot} FooTrader TradeContext: TickerChoicesAggregated: $tickerChoicesAggregated")
-      log.info(s"${Emoji.Robot} FooTrader no-result-reasons: ${noResultReasonStats}")
+      log.info(s"${Emoji.Robot} FooTrader no-result-reasons: $noResultReasonStats")
       lastLifeSign = Instant.now()
       numSingleSearchesDiff = 0
       numSearchesDiff = 0

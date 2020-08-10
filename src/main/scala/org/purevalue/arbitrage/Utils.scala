@@ -1,5 +1,7 @@
 package org.purevalue.arbitrage
 
+import java.text.DecimalFormat
+
 import akka.actor.ActorSystem
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.{ContentTypes, HttpEntity, HttpMethods, HttpRequest}
@@ -41,4 +43,6 @@ object Utils {
       }
     }
   }
+
+  def formatDecimal(d: Double): String = new DecimalFormat("#.##########").format(d)
 }

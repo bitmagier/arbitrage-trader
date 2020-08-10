@@ -3,6 +3,7 @@ package org.purevalue.arbitrage
 // from github.com/dysfunc/ascii-emoji
 object Emoji {
   val Bitcoin = "฿"
+  val ThreeBitcoin = "฿฿฿"
   val SadAndConfused = """¯\_(⊙︿⊙)_/¯"""
   val SadAndCrying = "(ᵟຶ︵ ᵟຶ)"
   val Confused = "¿ⓧ_ⓧﮌ"

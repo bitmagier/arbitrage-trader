@@ -12,7 +12,8 @@ import scala.concurrent.duration.FiniteDuration
 case class ExchangeConfig(exchangeName:String, assets: Set[String], makerFee: Double, takerFee: Double, httpTimeout: FiniteDuration)
 case class TradeRoomConfig(extendedTickerExchanges: Seq[String],
                            internalCommunicationTimeout: Timeout,
-                           statsInterval: Duration)
+                           statsInterval: Duration,
+                           maximumReasonableWinUSDT: Double)
 
 object AppConfig {
   private val tradeRoomConfig: Config = ConfigFactory.load().getConfig("trade-room")
@@ -20,7 +21,8 @@ object AppConfig {
     TradeRoomConfig(
       tradeRoomConfig.getStringList("extended-ticker-exchanges").asScala,
       Timeout.create(tradeRoomConfig.getDuration("internal-communication-timeout")),
-      tradeRoomConfig.getDuration("stats-interval")
+      tradeRoomConfig.getDuration("stats-interval"),
+      tradeRoomConfig.getDouble("max-reasonable-win-usdt")
     )
 
   private val exchangesConfig: Config = tradeRoomConfig.getConfig("exchange")
