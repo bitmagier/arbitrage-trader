@@ -252,7 +252,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     if (t.bill.sumUSDT <= 0) {
       log.warn(s"${Emoji.Questionable} Got OrderBundle with negative balance: $t. I will not execute that one!")
       false
-    } else if (t.bill.sumUSDT >= config.maximumReasonableWinUSDT) {
+    } else if (t.bill.sumUSDT >= config.maximumReasonableWinPerOrderBundleUSDT) {
       log.warn(s"${Emoji.EyeRoll} Got OrderBundle with unbelievable high win of ${formatDecimal(t.bill.sumUSDT)} USDT: $t. I will rather not execute that one - seem to be a bug!")
       false
     } else {
@@ -262,7 +262,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
   def placeOrderBundleOrders(t: OrderBundle): Unit = {
     if (validityCheck(t)) {
-      log.info(s"${Emoji.ThreeBitcoin} [simulated] Placing OrderBundle: $t")
+      log.info(s"${Emoji.Excited} [simulated] Placing OrderBundle: $t")
     }
   }
 
