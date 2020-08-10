@@ -2,7 +2,7 @@ package org.purevalue.arbitrage
 
 import akka.actor.SupervisorStrategy.Restart
 import akka.actor.{Actor, ActorRef, ActorSystem, OneForOneStrategy, Props, Status}
-import org.purevalue.arbitrage.Exchange._
+import org.purevalue.arbitrage.Exchange.{GetTradePairs, IsInitialized, TradePairs}
 import org.slf4j.LoggerFactory
 
 import scala.collection._

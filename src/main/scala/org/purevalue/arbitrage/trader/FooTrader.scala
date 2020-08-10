@@ -221,8 +221,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
         self,
         LocalDateTime.now(),
         List(ourBuyBaseAssetOrder, ourSellBaseAssetOrder),
-        bill,
-        ""
+        bill
       )), None)
     } else {
       (None, Some(MinGainTooLow()))

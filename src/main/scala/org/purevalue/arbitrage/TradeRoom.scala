@@ -7,8 +7,7 @@ import java.util.concurrent.TimeUnit
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props, Status}
 import akka.pattern.ask
 import akka.util.Timeout
-import org.purevalue.arbitrage.Exchange._
-import org.purevalue.arbitrage.TradeRoom._
+import org.purevalue.arbitrage.TradeRoom.{LogStats, OrderBundle, TradeContext}
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.purevalue.arbitrage.trader.FooTrader
 import org.slf4j.LoggerFactory
@@ -308,7 +307,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       in = Set()
       for (name <- exchanges.keys) {
         try {
-          if (Await.result((exchanges(name) ? IsInitialized).mapTo[IsInitializedResponse], timeout.duration).initialized) {
+          if (Await.result((exchanges(name) ? Exchange.IsInitialized).mapTo[Exchange.IsInitializedResponse], timeout.duration).initialized) {
             in += name
           }
         } catch {
