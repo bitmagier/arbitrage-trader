@@ -73,9 +73,9 @@ case class RawOrderBookUpdateJson(channelId: Int, value: RawOrderBookEntryJson) 
       }
     } else if (value.count == 0) {
       if (value.amount == 1.0d)
-        OrderBookUpdate(List(Bid(value.price, 0.0d)), List())
+        OrderBookUpdate(List(Bid(value.price, 0.0d)), List()) // quantity == 0.0 means remove price level in our OrderBook
       else if (value.amount == -1.0d)
-        OrderBookUpdate(List(), List(Ask(value.price, 0.0d)))
+        OrderBookUpdate(List(), List(Ask(value.price, 0.0d))) // quantity == 0.0 means remove price level in our OrderBook
       else {
         log.warn(s"undefined update case: $this")
         OrderBookUpdate(List(), List())

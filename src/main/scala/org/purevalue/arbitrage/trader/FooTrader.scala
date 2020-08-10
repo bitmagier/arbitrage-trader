@@ -49,6 +49,87 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc:TradeContext) extends Ac
   case class NoUSDTConversion(asses:Asset) extends NoResultReason
   case class MinGainTooLow() extends NoResultReason
 
+  def findBestShotBasedOnTicker(tradePair: TradePair): (Option[OrderBundle], Option[NoResultReason]) = {
+    // ignore wallet for now
+    val ticker4Buy: Iterable[Ticker] = tc.tickers.map(_._2(tradePair))
+    val ticker4Sell: Iterable[Ticker] = tc.tickers.map(_._2(tradePair))
+
+    // safety check
+    if (!ticker4Buy.forall(_.tradePair == tradePair)
+      || !ticker4Sell.forall(_.tradePair == tradePair)) {
+      throw new RuntimeException("safety-check failed")
+    }
+
+    if (ticker4Sell.isEmpty || ticker4Buy.isEmpty)
+      return (None, Some(BuyOrSellBookEmpty()))
+
+    val tradeQuantityUSDT = config.getDouble("order-bundle.trade-amount-in-usdt")
+
+    val highestBid: Tuple2[String, Bid] = // that's what we try to sell to
+      ticker4Sell
+        .map(e => (e.exchange, Bid(e.highestBidPrice, e.highestBidQuantity.getOrElse(1))))
+        .maxBy(_._2.price)
+    val lowestAsk: Tuple2[String, Ask] = // that's what we try to buy
+      ticker4Buy
+        .map(e => (e.exchange, Ask(e.lowestAskPrice, e.lowestAskQuantity.getOrElse(1))))
+        .minBy(_._2.price)
+
+    if (highestBid._2.price <= lowestAsk._2.price) {
+      return (None, Some(BidAskGap()))
+    }
+
+    if (highestBid._1 == lowestAsk._1) {
+      log.warn(s"${Emoji.SadAndConfused} [$tradePair] found highest bid $highestBid and lowest ask $lowestAsk on the same exchange.")
+      return (None, Some(Confused()))
+    }
+
+    val orderBundleId = newUUID()
+    val orderLimitAdditionRate: Double = config.getDouble("order-bundle.order-limit-addition-rate")
+    val amountBaseAsset: Double = CryptoValue(Asset("USDT"), tradeQuantityUSDT).convertTo(tradePair.baseAsset, tc) match {
+      case Some(v) => v
+      case None =>
+        log.warn(s"${Emoji.NoSupport} Unable to convert ${tradePair.baseAsset} to USDT")
+        return (None, Some(NoUSDTConversion(tradePair.baseAsset))) // only want to have assets convertible to USDT here
+    }
+
+    val ourBuyBaseAssetOrder = Order(
+      newUUID(),
+      orderBundleId,
+      lowestAsk._1,
+      tradePair,
+      TradeDirection.Buy,
+      tc.fees(lowestAsk._1),
+      amountBaseAsset,
+      lowestAsk._2.price * (1.0d + orderLimitAdditionRate))
+
+    val ourSellBaseAssetOrder = Order(
+      newUUID(),
+      orderBundleId,
+      highestBid._1,
+      tradePair,
+      TradeDirection.Sell,
+      tc.fees(highestBid._1),
+      amountBaseAsset,
+      highestBid._2.price * (1.0d - orderLimitAdditionRate)
+    )
+
+    val bill: OrderBill = OrderBill.calc(Seq(ourBuyBaseAssetOrder, ourSellBaseAssetOrder), tc)
+    if (bill.sumUSDT >= config.getDouble("order-bundle.min-gain-in-usdt")) {
+      (Some(OrderBundle(
+        orderBundleId,
+        name,
+        self,
+        LocalDateTime.now(),
+        List(ourBuyBaseAssetOrder, ourSellBaseAssetOrder),
+        bill,
+        ""
+      )), None)
+    } else {
+      (None, Some(MinGainTooLow()))
+    }
+  }
+
+
   def findBestShotBasedOnOrderBook(tradePair: TradePair): (Option[OrderBundle], Option[NoResultReason]) = {
 //    val minBalanceBeforeTradeInUSDT = config.getDouble("order-bundle.min-balance-before-trade-in-usdt")
 //    val whatsSpendablePerExchange: Map[String, Set[Asset]] =
@@ -149,15 +230,18 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc:TradeContext) extends Ac
 
   var noResultReasonStats: Map[NoResultReason, Int] = Map()
 
-  def findBestShot(): Option[OrderBundle] = {
-    var result: Option[OrderBundle] = None
+  def findBestShots(maxCount:Int): Seq[OrderBundle] = {
+    var result: List[OrderBundle] = List()
     for (tradePair: TradePair <- tc.orderBooks.values.flatMap(_.keys).toSet) {
       if (tc.orderBooks.count(_._2.keySet.contains(tradePair)) > 1) {
         numSingleSearchesDiff += 1
-        findBestShotBasedOnOrderBook(tradePair) match {
-          case (Some(shot), _) => if (result.isEmpty || shot.bill.sumUSDT > result.get.bill.sumUSDT) {
-            result = Some(shot)
-          }
+        findBestShotBasedOnTicker(tradePair) match {
+
+          case (Some(shot), _) if result.size < maxCount =>
+            result = shot :: result
+
+          case (Some(shot), _) if shot.bill.sumUSDT > result.map(_.bill.sumUSDT).min =>
+            result = shot :: result.sortBy(_.bill.sumUSDT).tail
 
           case (None, Some(noResultReason)) =>
             noResultReasonStats += (noResultReason -> (1 + noResultReasonStats.getOrElse(noResultReason, 0)))
@@ -166,7 +250,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc:TradeContext) extends Ac
         }
       }
     }
-    result
+    result.sortBy(_.bill.sumUSDT).reverse
   }
 
   def lifeSign(): Unit = {
@@ -206,11 +290,9 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc:TradeContext) extends Ac
         lifeSign()
         numSearchesDiff += 1
         numSearchesTotal += 1
-        findBestShot() match {
-          case Some(orderBundle) =>
+        findBestShots(maxOpenOrderBundles - pendingOrderBundles.size).foreach { b =>
             // TODO pendingOrderBundles += (orderBundle.id -> orderBundle)
-            tradeRoom ! orderBundle
-          case None =>
+            tradeRoom ! b
         }
       }
 

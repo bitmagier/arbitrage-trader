@@ -255,6 +255,8 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     } else if (t.bill.sumUSDT >= config.maximumReasonableWinPerOrderBundleUSDT) {
       log.warn(s"${Emoji.EyeRoll} Got OrderBundle with unbelievable high win of ${formatDecimal(t.bill.sumUSDT)} USDT: $t. I will rather not execute that one - seem to be a bug!")
       false
+//    } else {
+//      // TODO Doublecheck with Ticker best bid/ask + limit
     } else {
       true
     }
