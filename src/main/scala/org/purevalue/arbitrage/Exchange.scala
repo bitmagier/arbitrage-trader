@@ -94,7 +94,7 @@ case class Exchange(exchangeName: String,
       tpDataInitPending -= t
       log.debug(s"[$exchangeName]: [$t] initialized. Still pending: $tpDataInitPending")
       if (tpDataInitPending.isEmpty) {
-        log.info(s"${Emoji.Robot} [$exchangeName]: all TradePair data initialized and running")
+        log.info(s"${Emoji.Robot} [$exchangeName]: All TradePair data initialized and running")
       }
 
     case Status.Failure(cause) =>

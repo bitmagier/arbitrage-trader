@@ -261,7 +261,6 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   }
 
   def placeOrderBundleOrders(t: OrderBundle): Unit = {
-    log.debug(s"Got order bundle to place: $t")
     if (validityCheck(t)) {
       log.info(s"${Emoji.ThreeBitcoin} [simulated] Placing OrderBundle: $t")
     }
