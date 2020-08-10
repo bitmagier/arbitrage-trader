@@ -18,7 +18,8 @@ case class ExchangeConfig(exchangeName:String,
 case class TradeRoomConfig(extendedTickerExchanges: Seq[String],
                            internalCommunicationTimeout: Timeout,
                            statsInterval: Duration,
-                           maximumReasonableWinPerOrderBundleUSDT: Double)
+                           maximumReasonableWinPerOrderBundleUSDT: Double,
+                           maxOrderLimitTickerVariance: Double)
 
 object AppConfig {
   private val tradeRoomConfig: Config = ConfigFactory.load().getConfig("trade-room")
@@ -27,7 +28,8 @@ object AppConfig {
       tradeRoomConfig.getStringList("extended-ticker-exchanges").asScala,
       Timeout.create(tradeRoomConfig.getDuration("internal-communication-timeout")),
       tradeRoomConfig.getDuration("stats-interval"),
-      tradeRoomConfig.getDouble("max-reasonable-win-per-order-bundle-usdt")
+      tradeRoomConfig.getDouble("order-validity-check.max-reasonable-win-per-order-bundle-usdt"),
+      tradeRoomConfig.getDouble("order-validity-check.max-order-limit-ticker-variance")
     )
 
   private val exchangesConfig: Config = tradeRoomConfig.getConfig("exchange")

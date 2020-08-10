@@ -170,9 +170,8 @@ object TradeRoom {
                          trader: ActorRef,
                          creationTime: LocalDateTime,
                          orders: Seq[Order],
-                         bill: OrderBill,
-                         decisionComment: String) {
-    override def toString: String = s"OrderBundle($id, $traderName, creationTime:$creationTime, orders:$orders, $bill, $decisionComment)"
+                         bill: OrderBill) {
+    override def toString: String = s"OrderBundle($id, $traderName, creationTime:$creationTime, orders:$orders, $bill)"
   }
 
   case class OrderBundlePlaced(orderBundleId: UUID)
@@ -213,6 +212,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     "binance" -> Fee("binance", AppConfig.exchange("binance").makerFee, AppConfig.exchange("binance").takerFee),
     "bitfinex" -> Fee("bitfinex", AppConfig.exchange("bitfinex").makerFee, AppConfig.exchange("bitfinex").takerFee)
   )
+
   private val tradeContext: TradeContext = TradeContext(tickers, extendedTickers, orderBooks, fees)
 
   //  private var activeOrders: Map[UUID, Order] = Map() // orderId -> Order; orders, belonging to activeOrderBundles & active at the corresponding exchange
@@ -248,15 +248,27 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     invoiceAggregated.map(e => CryptoValue(e._1, e._2)).toSeq
   }
 
+  def orderLimitCloseToTicker(order:Order): Boolean = {
+    val ticker = tickers(order.exchange)(order.tradePair)
+    val bestOfferPrice: Double = if (order.direction == TradeDirection.Buy) ticker.lowestAskPrice else ticker.highestBidPrice
+    val diff = ((order.limit - bestOfferPrice) / bestOfferPrice).abs
+    val valid = diff < config.maxOrderLimitTickerVariance
+    if (!valid) {
+      log.warn(s"${Emoji.Disagree} Got OrderBundle where a order limit is too far away from ticker value " +
+        s"(max variance=${formatDecimal(config.maxOrderLimitTickerVariance)}). $order ticker: $ticker")
+    }
+    valid
+  }
+
   def validityCheck(t: OrderBundle): Boolean = {
     if (t.bill.sumUSDT <= 0) {
-      log.warn(s"${Emoji.Questionable} Got OrderBundle with negative balance: $t. I will not execute that one!")
+      log.warn(s"${Emoji.Disagree} Got OrderBundle with negative balance: $t. I will not execute that one!")
       false
     } else if (t.bill.sumUSDT >= config.maximumReasonableWinPerOrderBundleUSDT) {
-      log.warn(s"${Emoji.EyeRoll} Got OrderBundle with unbelievable high win of ${formatDecimal(t.bill.sumUSDT)} USDT: $t. I will rather not execute that one - seem to be a bug!")
+      log.warn(s"${Emoji.Disagree} Got OrderBundle with unbelievable high estimated win of ${formatDecimal(t.bill.sumUSDT)} USDT: $t. I will rather not execute that one - seem to be a bug!")
       false
-//    } else {
-//      // TODO Doublecheck with Ticker best bid/ask + limit
+    } else if (!t.orders.forall(orderLimitCloseToTicker)) {
+      false
     } else {
       true
     }
