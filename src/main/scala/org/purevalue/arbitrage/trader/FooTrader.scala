@@ -37,8 +37,8 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc:TradeContext) extends Ac
   var numSingleSearchesDiff: Int = 0
   var lastLifeSign: Instant = Instant.now()
 
-  val scheduleRate: FiniteDuration = FiniteDuration(config.getDuration("schedule-rate").toNanos, TimeUnit.NANOSECONDS)
-  val schedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(10.seconds, scheduleRate, self, Trigger())
+  val scheduleDelay: FiniteDuration = FiniteDuration(config.getDuration("schedule-delay").toNanos, TimeUnit.NANOSECONDS)
+  val schedule: Cancellable = actorSystem.scheduler.scheduleWithFixedDelay(30.seconds, scheduleDelay, self, Trigger())
 
   def newUUID(): UUID = UUID.randomUUID() // switch to Time based UUID when connecting a DB like cassandra
 
