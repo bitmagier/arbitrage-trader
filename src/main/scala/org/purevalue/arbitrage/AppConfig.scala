@@ -9,7 +9,12 @@ import com.typesafe.config.{Config, ConfigFactory}
 import scala.collection.JavaConverters._
 import scala.concurrent.duration.FiniteDuration
 
-case class ExchangeConfig(exchangeName:String, assets: Set[String], makerFee: Double, takerFee: Double, httpTimeout: FiniteDuration)
+case class ExchangeConfig(exchangeName:String,
+                          assets: Set[String],
+                          makerFee: Double,
+                          takerFee: Double,
+                          httpTimeout: FiniteDuration,
+                          orderBooksEnabled:Boolean)
 case class TradeRoomConfig(extendedTickerExchanges: Seq[String],
                            internalCommunicationTimeout: Timeout,
                            statsInterval: Duration,
@@ -35,7 +40,8 @@ object AppConfig {
     c.getStringList("assets").asScala.toSet,
     c.getDouble("fee.maker"),
     c.getDouble("fee.taker"),
-    FiniteDuration(c.getDuration("http-timeout").toNanos, TimeUnit.NANOSECONDS)
+    FiniteDuration(c.getDuration("http-timeout").toNanos, TimeUnit.NANOSECONDS),
+    c.getBoolean("order-books-enabled")
   )
 
   def exchange(name: String): ExchangeConfig = exchangeConfig(name, exchangesConfig.getConfig(name))

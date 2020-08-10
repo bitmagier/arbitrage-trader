@@ -79,6 +79,14 @@ case class BinanceTPWebSocketFlow(config: ExchangeConfig, tradePair: BinanceTrad
       None
   }
 
+  val DefaultSubscribeMessages: List[StreamSubscribeRequestJson] = List(
+    StreamSubscribeRequestJson(params = Seq(BookTickerStreamName), id = IdBookTickerStreamRequest),
+    StreamSubscribeRequestJson(params = Seq(ExtendedTickerStreamName), id = IdExtendedTickerStreamRequest)
+  )
+  val SubscribeMessages: List[StreamSubscribeRequestJson] = if (config.orderBooksEnabled)
+    StreamSubscribeRequestJson(params = Seq(OrderBookStreamName), id = IdOrderBookStreamRequest) :: DefaultSubscribeMessages
+  else DefaultSubscribeMessages
+
   // flow to us
   // emits a list of Messages and then keep the connection open
   def createFlowTo(sink: Sink[DecodedBinanceMessage, NotUsed]): Flow[Message, Message, Promise[Option[Message]]] = {
@@ -87,11 +95,9 @@ case class BinanceTPWebSocketFlow(config: ExchangeConfig, tradePair: BinanceTrad
         .filter(_.isDefined)
         .map(_.get)
         .toMat(sink)(Keep.right),
-      Source(List(
-        TextMessage(StreamSubscribeRequestJson(params = Seq(BookTickerStreamName), id = IdBookTickerStreamRequest).toJson.compactPrint),
-        TextMessage(StreamSubscribeRequestJson(params = Seq(ExtendedTickerStreamName), id = IdExtendedTickerStreamRequest).toJson.compactPrint),
-        TextMessage(StreamSubscribeRequestJson(params = Seq(OrderBookStreamName), id = IdOrderBookStreamRequest).toJson.compactPrint)
-      )).concatMat(Source.maybe[Message])(Keep.right))(Keep.right)
+      Source(
+        SubscribeMessages.map(msg => TextMessage(msg.toJson.compactPrint))
+      ).concatMat(Source.maybe[Message])(Keep.right))(Keep.right)
   }
 
 

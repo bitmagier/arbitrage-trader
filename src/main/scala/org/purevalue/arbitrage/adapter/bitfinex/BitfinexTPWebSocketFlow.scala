@@ -236,7 +236,7 @@ case class BitfinexTPWebSocketFlow(config: ExchangeConfig, tradePair: BitfinexTr
           case j: JsonMessage =>
             log.warn(s"Unhandled JsonMessage received: $j")
             None
-          case m: UnknownChannelDataMessage =>
+          case _: UnknownChannelDataMessage =>
             None
           case m: DecodedBitfinexMessage =>
             if (log.isTraceEnabled) log.trace(s"received: $m")
@@ -256,6 +256,12 @@ case class BitfinexTPWebSocketFlow(config: ExchangeConfig, tradePair: BitfinexTr
       None
   }
 
+  private val DefaultSubscribeMessages = List(
+    SubscribeRequestJson(channel = "ticker", symbol = tradePair.apiSymbol)
+  )
+  private val SubscribeMessages: List[SubscribeRequestJson] = if (config.orderBooksEnabled)
+    SubscribeRequestJson(channel = "book", symbol = tradePair.apiSymbol) :: DefaultSubscribeMessages
+  else DefaultSubscribeMessages
 
   // flow to us
   // emits a list of Messages and then keep the connection open
@@ -265,10 +271,9 @@ case class BitfinexTPWebSocketFlow(config: ExchangeConfig, tradePair: BitfinexTr
         .filter(_.isDefined)
         .map(_.get)
         .toMat(sink)(Keep.right),
-      Source(List(
-        TextMessage(SubscribeRequestJson(channel = "ticker", symbol = tradePair.apiSymbol).toJson.compactPrint),
-        TextMessage(SubscribeRequestJson(channel = "book", symbol = tradePair.apiSymbol).toJson.compactPrint)
-      )).concatMat(Source.maybe[Message])(Keep.right))(Keep.right)
+      Source(
+        SubscribeMessages.map(m => TextMessage(m.toJson.compactPrint))
+      ).concatMat(Source.maybe[Message])(Keep.right))(Keep.right)
   }
 
   val WebSocketEndpoint: Uri = Uri(s"wss://api-pub.bitfinex.com/ws/2")
