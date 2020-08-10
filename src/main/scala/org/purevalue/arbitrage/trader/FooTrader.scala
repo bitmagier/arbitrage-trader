@@ -173,10 +173,21 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc:TradeContext) extends Ac
     val duration = Duration.between(lastLifeSign, Instant.now())
     if (duration.compareTo(config.getDuration("lifesign-interval")) > 0) {
       log.info(s"${Emoji.Robot} FooTrader life sign: $numSearchesDiff search runs ($numSingleSearchesDiff single searches) done since $duration. Total search runs: $numSearchesTotal")
-      val t1Stats: Map[TradePair, Int] = tc.tickers.values.flatMap(_.keys).foldLeft(Map[TradePair, Int]())((a,b) => a + (b -> (a.getOrElse(b, 0) + 1)))
-      val tickerChoicesAggregated: Map[Int, Int] = t1Stats.values.foldLeft(Map[Int, Int]())((a,b) => a + (b -> (a.getOrElse(b, 0) + 1)))
+      val tickerChoicesAggregated: Map[Int, Int] = tc.tickers
+        .values
+        .flatMap(_.keys)
+        .foldLeft(Map[TradePair, Int]())((a,b) => a + (b -> (a.getOrElse(b, 0) + 1)))
+        .values
+        .foldLeft(Map[Int, Int]())((a,b) => a + (b -> (a.getOrElse(b, 0) + 1)))
 
-      log.info(s"${Emoji.Robot} FooTrader TradeContext: TickerChoicesAggregated: $tickerChoicesAggregated")
+      val orderBookChoicesAggregated: Map[Int, Int] = tc.orderBooks
+        .values
+        .flatMap(_.keys)
+        .foldLeft(Map[TradePair, Int]())((a,b) => a + (b -> (a.getOrElse(b, 0) + 1)))
+        .values
+        .foldLeft(Map[Int, Int]())((a,b) => a + (b -> (a.getOrElse(b, 0) + 1)))
+
+      log.info(s"${Emoji.Robot} FooTrader TradeContext: TickerChoicesAggregated: $tickerChoicesAggregated, OrderBookChoicesAggregated: $orderBookChoicesAggregated")
       log.info(s"${Emoji.Robot} FooTrader no-result-reasons: $noResultReasonStats")
       lastLifeSign = Instant.now()
       numSingleSearchesDiff = 0
