@@ -74,15 +74,15 @@ object TPDataManager {
   case class Initialized(tradePair: TradePair)
   case class StartStreamRequest(sink: Sink[Seq[TPStreamData], Future[Done]])
 
-  def props(exchangeName: String, tradePair: TradePair, exchangeDataChannel: ActorRef, exchange: ActorRef,
+  def props(config:ExchangeConfig, tradePair: TradePair, exchangeDataChannel: ActorRef, exchange: ActorRef,
             tpDataChannelInit: Function1[TPDataChannelPropsParams, Props], tpDataSink: TPData): Props =
-    Props(new TPDataManager(exchangeName, tradePair, exchangeDataChannel, exchange, tpDataChannelInit, tpDataSink))
+    Props(new TPDataManager(config, tradePair, exchangeDataChannel, exchange, tpDataChannelInit, tpDataSink))
 }
 
 /**
  * Manages all kind of data of one tradepair at one exchange
  */
-case class TPDataManager(exchangeName: String, tradePair: TradePair, exchangeDataChannel: ActorRef, exchange: ActorRef,
+case class TPDataManager(config: ExchangeConfig, tradePair: TradePair, exchangeDataChannel: ActorRef, exchange: ActorRef,
                          tpDataChannelInit: Function1[TPDataChannelPropsParams, Props],
                          tpData: TPData) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[TPDataManager])
@@ -98,7 +98,9 @@ case class TPDataManager(exchangeName: String, tradePair: TradePair, exchangeDat
 
   val initCheckSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(1.seconds, 1.seconds, self, InitCheck())
 
-  def initialized: Boolean = tpData.ticker.isDefinedAt(tradePair) && orderBookInitialized
+  def initialized: Boolean =
+    tpData.ticker.isDefinedAt(tradePair) &&
+    (if (config.orderBooksEnabled) orderBookInitialized else true)
 
   val sink: Sink[Seq[TPStreamData], Future[Done]] = Sink.foreach[Seq[TPStreamData]] { // TODO test foreachAsync
     data: Seq[TPStreamData] =>
@@ -112,7 +114,7 @@ case class TPDataManager(exchangeName: String, tradePair: TradePair, exchangeDat
         case o: OrderBookSnapshot =>
           tpData.orderBook += tradePair ->
             OrderBook(
-              exchangeName,
+              config.exchangeName,
               tradePair,
               o.bids.filterNot(_.quantity == 0.0d).map(e => (e.price, e)).toMap,
               o.asks.filterNot(_.quantity == 0.0d).map(e => (e.price, e)).toMap,
@@ -124,7 +126,7 @@ case class TPDataManager(exchangeName: String, tradePair: TradePair, exchangeDat
           if (tpData.orderBook.isDefinedAt(tradePair)) {
             tpData.orderBook += tradePair ->
               OrderBook(
-                exchangeName,
+                config.exchangeName,
                 tradePair,
                 (tpData.orderBook(tradePair).bids ++ o.bids.map(e => e.price -> e)).filterNot(_._2.quantity == 0.0d),
                 (tpData.orderBook(tradePair).asks ++ o.asks.map(e => e.price -> e)).filterNot(_._2.quantity == 0.0d),
@@ -148,7 +150,7 @@ case class TPDataManager(exchangeName: String, tradePair: TradePair, exchangeDat
   override def preStart(): Unit = {
     initTime = Instant.now()
     tpDataChannel = context.actorOf(
-      tpDataChannelInit.apply(TPDataChannelPropsParams(tradePair, exchangeDataChannel, self)), s"$exchangeName-TPDataChannel-$tradePair")
+      tpDataChannelInit.apply(TPDataChannelPropsParams(tradePair, exchangeDataChannel, self)), s"${config.exchangeName}-TPDataChannel-$tradePair")
 
     tpDataChannel ! StartStreamRequest(sink)
   }
@@ -160,7 +162,7 @@ case class TPDataManager(exchangeName: String, tradePair: TradePair, exchangeDat
       if (initialized) initCheckSchedule.cancel()
       else {
         if (Duration.between(initTime, Instant.now()).compareTo(AppConfig.dataManagerInitTimeout) > 0) {
-          log.info(s"Killing $exchangeName-TPDataManager-$tradePair")
+          log.info(s"Killing ${config.exchangeName}-TPDataManager-$tradePair")
           self ! Kill // TODO graceful shutdown of tradepair-channel via parent actor
         }
       }

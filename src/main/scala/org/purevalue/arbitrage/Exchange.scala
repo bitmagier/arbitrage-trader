@@ -55,13 +55,13 @@ case class Exchange(exchangeName: String,
     for (tp <- tradePairs) {
       tpDataManagers = tpDataManagers +
         (tp -> context.actorOf(
-          TPDataManager.props(exchangeName, tp, exchangeDataChannel, self, tpDataChannelPropsInit, tpData),
+          TPDataManager.props(config, tp, exchangeDataChannel, self, tpDataChannelPropsInit, tpData),
           s"$exchangeName.TPDataManager-${tp.baseAsset.officialSymbol}-${tp.quoteAsset.officialSymbol}"))
     }
   }
 
   override val supervisorStrategy: OneForOneStrategy =
-    OneForOneStrategy(maxNrOfRetries = 10, withinTimeRange = 15.minutes, loggingEnabled = true) {
+    OneForOneStrategy(maxNrOfRetries = 5, withinTimeRange = 10.minutes, loggingEnabled = true) {
       case _ => Restart
     }
 
