@@ -87,7 +87,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
     val orderBundleId = newUUID()
     val orderLimitAdditionRate: Double = config.getDouble("order-bundle.order-limit-addition-rate")
     val amountBaseAsset: Double = CryptoValue(Asset("USDT"), tradeQuantityUSDT).convertTo(tradePair.baseAsset, tc) match {
-      case Some(v) => v
+      case Some(v) => v.amount
       case None =>
         log.warn(s"${Emoji.NoSupport} Unable to convert ${tradePair.baseAsset} to USDT")
         return (None, Some(NoUSDTConversion(tradePair.baseAsset))) // only want to have assets convertible to USDT here
@@ -99,7 +99,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
         orderBundleId,
         lowestAsk._1,
         tradePair,
-        TradeDirection.Buy,
+        TradeSide.Buy,
         tc.fees(lowestAsk._1),
         amountBaseAsset,
         lowestAsk._2.price * (1.0d + orderLimitAdditionRate))
@@ -110,7 +110,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
         orderBundleId,
         highestBid._1,
         tradePair,
-        TradeDirection.Sell,
+        TradeSide.Sell,
         tc.fees(highestBid._1),
         amountBaseAsset,
         highestBid._2.price * (1.0d - orderLimitAdditionRate)
@@ -187,7 +187,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
     val orderBundleId = newUUID()
     val orderLimitAdditionRate: Double = config.getDouble("order-bundle.order-limit-addition-rate")
     val amountBaseAsset: Double = CryptoValue(Asset("USDT"), tradeQuantityUSDT).convertTo(tradePair.baseAsset, tc) match {
-      case Some(v) => v
+      case Some(v) => v.amount
       case None =>
         log.warn(s"${Emoji.NoSupport} Unable to convert ${tradePair.baseAsset} to USDT")
         return (None, Some(NoUSDTConversion(tradePair.baseAsset))) // only want to have assets convertible to USDT here
@@ -198,7 +198,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
       orderBundleId,
       lowestAsk._1,
       tradePair,
-      TradeDirection.Buy,
+      TradeSide.Buy,
       tc.fees(lowestAsk._1),
       amountBaseAsset,
       lowestAsk._2.price * (1.0d + orderLimitAdditionRate))
@@ -208,7 +208,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
       orderBundleId,
       highestBid._1,
       tradePair,
-      TradeDirection.Sell,
+      TradeSide.Sell,
       tc.fees(highestBid._1),
       amountBaseAsset,
       highestBid._2.price * (1.0d - orderLimitAdditionRate)
@@ -243,6 +243,8 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
 
           case (Some(shot), _) if shot.bill.sumUSDT > result.map(_.bill.sumUSDT).min =>
             result = shot :: result.sortBy(_.bill.sumUSDT).tail
+
+          case (Some(_), _) => // ignoring result
 
           case (None, Some(noResultReason)) =>
             noResultReasonStats += (noResultReason -> (1 + noResultReasonStats.getOrElse(noResultReason, 0)))

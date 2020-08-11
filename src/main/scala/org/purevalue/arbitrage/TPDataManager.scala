@@ -34,7 +34,9 @@ case class ExtendedTicker(exchange: String,
                           lastUpdated: LocalDateTime) extends TPStreamData
 case class OrderBookSnapshot(bids: Seq[Bid], asks: Seq[Ask]) extends TPStreamData
 case class OrderBookUpdate(bids: Seq[Bid], asks: Seq[Ask]) extends TPStreamData
+case class Balances(all: List[Balance]) extends TPStreamData
 
+//////////////////////
 
 case class Bid(price: Double, quantity: Double) { // A bid is an offer to buy an asset; (likely aggregated) bid position(s) for a price level
   override def toString: String = s"Bid(price=${formatDecimal(price)}, amount=${formatDecimal(quantity)})"
@@ -62,19 +64,26 @@ case class OrderBook(exchange: String,
   def lowestAsk: Ask = asks(asks.keySet.min)
 }
 
+case class Balance(asset: Asset, amountAvailable: Double, amountLocked: Double) {
+  def toCryptoValue: CryptoValue = CryptoValue(asset, amountAvailable)
+}
+
+case class Wallet(var balances: Map[Asset, Balance]) // we use a [var immutable map] instead of mutable one here, to be able to update the whole map at once without race a condition
+
 /**
  * Exchange-part of the global data structure the TPDataManager shall write to
  */
 case class TPData(ticker: concurrent.Map[TradePair, Ticker],
                   extendedTicker: concurrent.Map[TradePair, ExtendedTicker],
-                  orderBook: concurrent.Map[TradePair, OrderBook])
+                  orderBook: concurrent.Map[TradePair, OrderBook],
+                  wallet: Wallet)
 
 object TPDataManager {
   case class InitCheck()
   case class Initialized(tradePair: TradePair)
   case class StartStreamRequest(sink: Sink[Seq[TPStreamData], Future[Done]])
 
-  def props(config:ExchangeConfig, tradePair: TradePair, exchangeDataChannel: ActorRef, exchange: ActorRef,
+  def props(config: ExchangeConfig, tradePair: TradePair, exchangeDataChannel: ActorRef, exchange: ActorRef,
             tpDataChannelInit: Function1[TPDataChannelPropsParams, Props], tpDataSink: TPData): Props =
     Props(new TPDataManager(config, tradePair, exchangeDataChannel, exchange, tpDataChannelInit, tpDataSink))
 }
@@ -100,9 +109,9 @@ case class TPDataManager(config: ExchangeConfig, tradePair: TradePair, exchangeD
 
   def initialized: Boolean =
     tpData.ticker.isDefinedAt(tradePair) &&
-    (if (config.orderBooksEnabled) orderBookInitialized else true)
+      (if (config.orderBooksEnabled) orderBookInitialized else true)
 
-  val sink: Sink[Seq[TPStreamData], Future[Done]] = Sink.foreach[Seq[TPStreamData]] { // TODO test foreachAsync
+  val sink: Sink[Seq[TPStreamData], Future[Done]] = Sink.foreach[Seq[TPStreamData]] {
     data: Seq[TPStreamData] =>
       data.foreach {
         case t: Ticker =>
@@ -135,6 +144,10 @@ case class TPDataManager(config: ExchangeConfig, tradePair: TradePair, exchangeD
           } else {
             log.warn(s"$o received, but no OrderBook present yet")
           }
+
+        case b: Balances =>
+          tpData.wallet.balances = b.all.map(e => (e.asset, e)).toMap
+
       }
       eventuallyInitialized()
   }

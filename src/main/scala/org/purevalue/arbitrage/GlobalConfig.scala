@@ -16,6 +16,10 @@ case class Asset(officialSymbol: String, name: String) {
   override def hashCode(): Int = officialSymbol.hashCode
 }
 object Asset {
+  // very often used assets
+  val Bitcoin:Asset = Asset("BTC")
+  val USDT:Asset = Asset("USDT")
+
   def apply(officialSymbol: String): Asset = {
     if (!GlobalConfig.AllAssets.contains(officialSymbol)) {
       throw new RuntimeException(s"Unknown asset with officialSymbol $officialSymbol")

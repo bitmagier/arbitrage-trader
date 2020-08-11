@@ -1,12 +1,14 @@
 package org.purevalue.arbitrage
 
-import java.time.{LocalDateTime, ZonedDateTime}
+import java.time.{Duration, LocalDateTime, ZonedDateTime}
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
-import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props, Status}
+import akka.actor.SupervisorStrategy.Restart
+import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, OneForOneStrategy, Props, Status}
 import akka.pattern.ask
 import akka.util.Timeout
+import org.purevalue.arbitrage.Asset.Bitcoin
 import org.purevalue.arbitrage.TradeRoom.{LogStats, OrderBundle, TradeContext}
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.purevalue.arbitrage.trader.FooTrader
@@ -18,33 +20,33 @@ import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.concurrent.{Await, ExecutionContextExecutor, TimeoutException}
 
-sealed trait TradeDirection
-object TradeDirection extends TradeDirection {
-  case object Buy extends TradeDirection
-  case object Sell extends TradeDirection
+sealed trait TradeSide
+object TradeSide extends TradeSide {
+  case object Buy extends TradeSide
+  case object Sell extends TradeSide
 }
 
 case class CryptoValue(asset: Asset, amount: Double) {
   override def toString: String = s"${formatDecimal(amount)} ${asset.officialSymbol}"
 
-  def convertTo(targetAsset: Asset, tc: TradeContext): Option[Double] = {
+  def convertTo(targetAsset: Asset, tc: TradeContext): Option[CryptoValue] = {
     if (this.asset == targetAsset)
-      Some(amount)
+      Some(this)
     else {
       // try direct conversion first
       tc.findReferenceTicker(TradePair.of(this.asset, targetAsset)) match {
         case Some(ticker) =>
-          Some(amount * ticker.weightedAveragePrice)
+          Some(CryptoValue(targetAsset, amount * ticker.weightedAveragePrice))
         case None =>
           tc.findReferenceTicker(TradePair.of(targetAsset, this.asset)) match {
             case Some(ticker) =>
-              Some(amount / ticker.weightedAveragePrice)
+              Some(CryptoValue(targetAsset, amount / ticker.weightedAveragePrice))
             case None =>
               None
-              if ((this.asset != Asset("BTC") && targetAsset != Asset("BTC"))
-                && tc.findReferenceTicker(TradePair.of(this.asset, Asset("BTC"))).isDefined
-                && tc.findReferenceTicker(TradePair.of(targetAsset, Asset("BTC"))).isDefined) {
-                CryptoValue(Asset("BTC"), this.convertTo(Asset("BTC"), tc).get).convertTo(targetAsset, tc)
+              if ((this.asset != Bitcoin && targetAsset != Bitcoin)
+                && tc.findReferenceTicker(TradePair.of(this.asset, Bitcoin)).isDefined
+                && tc.findReferenceTicker(TradePair.of(targetAsset, Bitcoin)).isDefined) {
+                this.convertTo(Bitcoin, tc).get.convertTo(targetAsset, tc)
               } else {
                 None
               }
@@ -59,18 +61,10 @@ case class Order(id: UUID,
                  orderBundleId: UUID,
                  exchange: String,
                  tradePair: TradePair,
-                 direction: TradeDirection,
+                 direction: TradeSide,
                  fee: Fee,
                  amountBaseAsset: Double,
                  limit: Double) {
-  //  var placed: Boolean = false
-  //  var placementTime: ZonedDateTime = _
-  //
-  //  def setPlaced(ts: ZonedDateTime): Unit = {
-  //    placed = true
-  //    placementTime = ts
-  //  }
-
   override def toString: String = s"Order($id, orderBundleId:$orderBundleId, $exchange, $tradePair, $direction, $fee, " +
     s"amountBaseAsset:${formatDecimal(amountBaseAsset)}, limit:${formatDecimal(limit)})"
 }
@@ -80,7 +74,7 @@ case class Trade(id: UUID,
                  orderId: UUID,
                  exchange: String,
                  tradePair: TradePair,
-                 direction: TradeDirection,
+                 direction: TradeSide,
                  fee: Fee,
                  amountBaseAsset: Double,
                  amountQuoteAsset: Double,
@@ -94,12 +88,12 @@ case class OrderBill(balanceSheet: Seq[CryptoValue], sumUSDT: Double) {
 }
 object OrderBill {
   def calcBalanceSheet(order: Order): Seq[CryptoValue] = {
-    if (order.direction == TradeDirection.Buy)
+    if (order.direction == TradeSide.Buy)
       Seq(
         CryptoValue(order.tradePair.baseAsset, order.amountBaseAsset),
         CryptoValue(order.tradePair.quoteAsset, -(1.0d + order.fee.takerFee) * order.amountBaseAsset * order.limit),
       )
-    else if (order.direction == TradeDirection.Sell) {
+    else if (order.direction == TradeSide.Sell) {
       Seq(
         CryptoValue(order.tradePair.baseAsset, -order.amountBaseAsset),
         CryptoValue(order.tradePair.quoteAsset, (1.0d - order.fee.takerFee) * order.amountBaseAsset * order.limit)
@@ -114,7 +108,7 @@ object OrderBill {
 
     sumByAsset.map { v =>
       v.convertTo(targetAsset, tc) match {
-        case Some(v) => v
+        case Some(v) => v.amount
         case None =>
           val conversionOptions: Set[TradePair] = tc.extendedTickers.values.flatMap(_.keySet).toSet
           throw new RuntimeException(s"Unable to convert ${v.asset} to $targetAsset. Here are our total conversion options: $conversionOptions")
@@ -144,6 +138,7 @@ object TradeRoom {
   case class TradeContext(tickers: Map[String, Map[TradePair, Ticker]],
                           extendedTickers: Map[String, Map[TradePair, ExtendedTicker]],
                           orderBooks: Map[String, Map[TradePair, OrderBook]],
+                          balances: Map[String, Wallet],
                           fees: Map[String, Fee]) {
 
     /**
@@ -207,14 +202,14 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   private val tickers: concurrent.Map[String, concurrent.Map[TradePair, Ticker]] = TrieMap()
   private val extendedTickers: concurrent.Map[String, concurrent.Map[TradePair, ExtendedTicker]] = TrieMap()
   private val orderBooks: concurrent.Map[String, concurrent.Map[TradePair, OrderBook]] = TrieMap()
-  private val balances: concurrent.Map[String, concurrent.Map[Asset, AssetWallet]] = TrieMap()
+  private val wallets: concurrent.Map[String, Wallet] = TrieMap()
 
   private val fees: Map[String, Fee] = Map( // TODO
     "binance" -> Fee("binance", AppConfig.exchange("binance").makerFee, AppConfig.exchange("binance").takerFee),
     "bitfinex" -> Fee("bitfinex", AppConfig.exchange("bitfinex").makerFee, AppConfig.exchange("bitfinex").takerFee)
   )
 
-  private val tradeContext: TradeContext = TradeContext(tickers, extendedTickers, orderBooks, fees)
+  private val tradeContext: TradeContext = TradeContext(tickers, extendedTickers, orderBooks, wallets, fees)
 
   //  private var activeOrders: Map[UUID, Order] = Map() // orderId -> Order; orders, belonging to activeOrderBundles & active at the corresponding exchange
   //  private var tradesPerActiveOrderBundle: Map[UUID, ListBuffer[Trade]] = Map() // orderBundleId -> Trade; trades, belonging to activeOrderBundles & executed at an exchange
@@ -227,15 +222,15 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   val schedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(30.seconds, scheduleRate, self, LogStats())
 
 
-  def calculateBill(trades: List[Trade]): Seq[CryptoValue] = { // TODO move calc function to Trade class
+  def calculateBill(trades: List[Trade]): Seq[CryptoValue] = {
     val rawInvoice = ArrayBuffer[(Asset, Double)]()
     for (trade <- trades) {
       val feeRate = if (trade.wasMaker) trade.fee.makerFee else trade.fee.takerFee
-      if (trade.direction == TradeDirection.Buy) {
+      if (trade.direction == TradeSide.Buy) {
         rawInvoice += ((trade.tradePair.baseAsset, trade.amountBaseAsset.abs))
         rawInvoice += ((trade.tradePair.quoteAsset, -trade.amountQuoteAsset.abs))
         rawInvoice += ((trade.tradePair.quoteAsset, -(trade.amountQuoteAsset.abs * feeRate)))
-      } else if (trade.direction == TradeDirection.Sell) {
+      } else if (trade.direction == TradeSide.Sell) {
         rawInvoice += ((trade.tradePair.baseAsset, -trade.amountBaseAsset.abs))
         rawInvoice += ((trade.tradePair.baseAsset, -(trade.amountBaseAsset.abs * feeRate)))
         rawInvoice += ((trade.tradePair.quoteAsset, trade.amountQuoteAsset.abs))
@@ -251,22 +246,39 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
   def orderLimitCloseToTicker(order: Order): Boolean = {
     val ticker = tickers(order.exchange)(order.tradePair)
-    val bestOfferPrice: Double = if (order.direction == TradeDirection.Buy) ticker.lowestAskPrice else ticker.highestBidPrice
+    val bestOfferPrice: Double = if (order.direction == TradeSide.Buy) ticker.lowestAskPrice else ticker.highestBidPrice
     val diff = ((order.limit - bestOfferPrice) / bestOfferPrice).abs
-    val valid = diff < config.maxOrderLimitTickerVariance
+    val valid = diff < config.orderValidityGuard.maxOrderLimitTickerVariance
     if (!valid) {
-      log.warn(s"${Emoji.Disagree} Got OrderBundle where a order limit is too far away from ticker value " +
-        s"(max variance=${formatDecimal(config.maxOrderLimitTickerVariance)}). $order ticker: $ticker")
+      log.warn(s"${Emoji.Disagree} Got OrderBundle where a order limit is too far away ($diff) from ticker value " +
+        s"(max variance=${formatDecimal(config.orderValidityGuard.maxOrderLimitTickerVariance)})")
+      log.debug(s"$order, $ticker")
     }
     valid
   }
 
-  def validityCheck(t: OrderBundle): Boolean = {
+  def tickerDataUpToDate(o: Order): Boolean = {
+    val r = Duration.between(
+      tickers(o.exchange)(o.tradePair).lastUpdated,
+      LocalDateTime.now
+    ).compareTo(config.orderValidityGuard.maxTickerAge) < 0
+    if (!r) {
+      log.warn(s"${Emoji.NoSupport} Sorry, can't let that order through, because we don't have an up-to-date ticker here for ${o.exchange} ${o.tradePair} here.")
+      log.debug(s"${Emoji.NoSupport} $o")
+    }
+    r
+  }
+
+  def validityGuard(t: OrderBundle): Boolean = {
     if (t.bill.sumUSDT <= 0) {
-      log.warn(s"${Emoji.Disagree} Got OrderBundle with negative balance: $t. I will not execute that one!")
+      log.warn(s"${Emoji.Disagree} Got OrderBundle with negative balance: ${t.bill.sumUSDT}. I will not execute that one!")
+      log.debug(s"$t")
       false
-    } else if (t.bill.sumUSDT >= config.maximumReasonableWinPerOrderBundleUSDT) {
-      log.warn(s"${Emoji.Disagree} Got OrderBundle with unbelievable high estimated win of ${formatDecimal(t.bill.sumUSDT)} USDT: $t. I will rather not execute that one - seem to be a bug!")
+    } else if (!t.orders.forall(tickerDataUpToDate)) {
+      false
+    } else if (t.bill.sumUSDT >= config.orderValidityGuard.maximumReasonableWinPerOrderBundleUSDT) {
+      log.warn(s"${Emoji.Disagree} Got OrderBundle with unbelievable high estimated win of ${formatDecimal(t.bill.sumUSDT)} USDT. I will rather not execute that one - seem to be a bug!")
+      log.debug(s"${Emoji.Disagree} $t")
       false
     } else if (!t.orders.forall(orderLimitCloseToTicker)) {
       false
@@ -276,7 +288,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   }
 
   def placeOrderBundleOrders(t: OrderBundle): Unit = {
-    if (validityCheck(t)) {
+    if (validityGuard(t)) {
       log.info(s"${Emoji.Excited} [simulated] Placing OrderBundle: $t")
     }
   }
@@ -286,6 +298,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     tickers += exchangeName -> concurrent.TrieMap[TradePair, Ticker]()
     extendedTickers += exchangeName -> concurrent.TrieMap[TradePair, ExtendedTicker]()
     orderBooks += exchangeName -> concurrent.TrieMap[TradePair, OrderBook]()
+    wallets += exchangeName -> Wallet(Map())
 
     exchanges += exchangeName -> context.actorOf(
       Exchange.props(
@@ -296,7 +309,8 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
         TPData(
           tickers(exchangeName),
           extendedTickers(exchangeName),
-          orderBooks(exchangeName)
+          orderBooks(exchangeName),
+          wallets(exchangeName)
         )
       ), camelName)
   }
@@ -348,6 +362,18 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
         .mkString(", ")
     }
 
+    wallets.map { case (exchange, b) => (
+      exchange,
+      CryptoValue(
+        Bitcoin, // conversion to BTC is expected to work ALWAYS!
+        b.balances
+          .map(e => CryptoValue(e._2.asset, e._2.amountAvailable).convertTo(Bitcoin, tradeContext).get)
+          .map(_.amount)
+          .sum
+      ))
+    }
+    log.info(s"Total available balances: ")
+
     log.info(s"${Emoji.Robot} TradeRoom stats: [general] " +
       s"ticker:[${toEntriesPerExchange(tickers)}], " +
       s"/ extendedTicker:[${toEntriesPerExchange(extendedTickers)}], " +
@@ -373,6 +399,10 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     }
   }
 
+  override val supervisorStrategy: OneForOneStrategy =
+    OneForOneStrategy(maxNrOfRetries = 3, withinTimeRange = 10.minutes, loggingEnabled = true) {
+      case _ => Restart
+    }
 
   def receive: Receive = {
 

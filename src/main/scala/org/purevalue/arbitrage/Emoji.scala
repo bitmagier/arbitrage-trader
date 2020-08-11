@@ -12,7 +12,6 @@ object Emoji {
   val DoYouEvenLiftBro = "ᕦ(ò_óˇ)ᕤ"
   val Excited = "☜(⌒▽⌒)☞"
   val SadFace = "(ಥ⌣ಥ)"
-  val Dancing = "┌(ㆆ㉨ㆆ)ʃ"
   val Love = "♥‿♥"
   val Opera = "ヾ(´〇`)ﾉ♪♪♪"
   val Robot = "{•̃_•̃}"

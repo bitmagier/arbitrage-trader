@@ -43,21 +43,21 @@ import org.purevalue.arbitrage.ExchangeLiquidityManager.LiquidityRequest
 
 object ExchangeLiquidityManager {
 
-  case class LiquidityRequest(id:UUID, asset:Asset, amount:Double, intendedBuyAsset:Asset)
+  case class LiquidityRequest(id: UUID, asset: Asset, amount: Double, intendedBuyAsset: Asset)
 
-  def props(config:LiquidityManagerConfig, exchangeConfig: ExchangeConfig, balances: Map[Asset, AssetWallet]): Props =
-    Props(new ExchangeLiquidityManager(config, exchangeConfig, balances))
+  def props(config: LiquidityManagerConfig, exchangeConfig: ExchangeConfig, wallet: Wallet): Props =
+    Props(new ExchangeLiquidityManager(config, exchangeConfig, wallet))
 }
-class ExchangeLiquidityManager(config:LiquidityManagerConfig,
+class ExchangeLiquidityManager(config: LiquidityManagerConfig,
                                exchangeConfig: ExchangeConfig,
-                               balances: Map[Asset, AssetWallet]) extends Actor {
+                               wallet: Wallet) extends Actor {
 
-  case class RunningDemand(asset:Asset, amount:Double, requestTime:LocalDateTime)
+  case class RunningDemand(asset: Asset, amount: Double, requestTime: LocalDateTime)
 
   val liquidityRequestLifetime: Duration = Duration.ofSeconds(10) // TODO config
 
 
   override def receive: Receive = {
-    case r:LiquidityRequest =>
+    case r: LiquidityRequest =>
   }
 }

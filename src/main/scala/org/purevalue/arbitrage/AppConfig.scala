@@ -5,6 +5,7 @@ import java.util.concurrent.TimeUnit
 
 import akka.util.Timeout
 import com.typesafe.config.{Config, ConfigFactory}
+import org.purevalue.arbitrage.AppConfig.tradeRoomConfig
 
 import scala.collection.JavaConverters._
 import scala.concurrent.duration.FiniteDuration
@@ -15,25 +16,34 @@ case class ExchangeConfig(exchangeName: String,
                           takerFee: Double,
                           httpTimeout: FiniteDuration,
                           orderBooksEnabled: Boolean)
+case class OrderValidityGuard(maximumReasonableWinPerOrderBundleUSDT: Double,
+                              maxOrderLimitTickerVariance: Double,
+                              maxTickerAge: Duration)
 case class TradeRoomConfig(extendedTickerExchanges: List[String],
                            orderBooksEnabled: Boolean,
                            internalCommunicationTimeout: Timeout,
                            statsInterval: Duration,
-                           maximumReasonableWinPerOrderBundleUSDT: Double,
-                           maxOrderLimitTickerVariance: Double)
+                           orderValidityGuard: OrderValidityGuard
+                          )
 case class LiquidityManagerConfig(liquidityStoringAssets: List[Asset])
 
 object AppConfig {
   private val tradeRoomConfig: Config = ConfigFactory.load().getConfig("trade-room")
-  val tradeRoom: TradeRoomConfig =
+  val tradeRoom: TradeRoomConfig = {
     TradeRoomConfig(
       tradeRoomConfig.getStringList("reference-ticker-exchanges").asScala.toList,
       tradeRoomConfig.getBoolean("order-books-enabled"),
       Timeout.create(tradeRoomConfig.getDuration("internal-communication-timeout")),
       tradeRoomConfig.getDuration("stats-interval"),
-      tradeRoomConfig.getDouble("order-validity-check.max-reasonable-win-per-order-bundle-usdt"),
-      tradeRoomConfig.getDouble("order-validity-check.max-order-limit-ticker-variance")
+      tradeRoomConfig.getConfig("order-validity-guard") match {
+        case c: Config => OrderValidityGuard(
+          c.getDouble("max-reasonable-win-per-order-bundle-usdt"),
+          c.getDouble("max-order-limit-ticker-variance"),
+          c.getDuration("max-ticker-age")
+        )
+      }
     )
+  }
 
   def activeExchanges: Seq[String] = exchangesConfig.getStringList("active").asScala
 
@@ -45,6 +55,7 @@ object AppConfig {
   )
 
   private val exchangesConfig: Config = tradeRoomConfig.getConfig("exchange")
+
   private def exchangeConfig(name: String, c: Config) = ExchangeConfig(
     name,
     c.getStringList("assets").asScala.toSet,
