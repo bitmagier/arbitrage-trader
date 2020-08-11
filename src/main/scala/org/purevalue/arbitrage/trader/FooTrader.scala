@@ -35,6 +35,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
   var numSearchesTotal: Int = 0
   var numSearchesDiff: Int = 0
   var numSingleSearchesDiff: Int = 0
+  var shotsDelivered: Int = 0
   var lastLifeSign: Instant = Instant.now()
 
   val scheduleDelay: FiniteDuration = FiniteDuration(config.getDuration("schedule-delay").toNanos, TimeUnit.NANOSECONDS)
@@ -256,7 +257,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
   def lifeSign(): Unit = {
     val duration = Duration.between(lastLifeSign, Instant.now())
     if (duration.compareTo(config.getDuration("lifesign-interval")) > 0) {
-      log.info(s"${Emoji.Robot} FooTrader life sign: $numSearchesDiff search runs ($numSingleSearchesDiff single searches) done in last ${duration.toMinutes} minutes. Total search runs: $numSearchesTotal")
+      log.info(s"${Emoji.Robot} FooTrader life sign: $shotsDelivered shots delivered. $numSearchesDiff search runs ($numSingleSearchesDiff single searches) done in last ${duration.toMinutes} minutes. Total search runs: $numSearchesTotal")
       val tickerChoicesAggregated: Map[Int, Int] = tc.tickers
         .values
         .flatMap(_.keys)
@@ -291,6 +292,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
         numSearchesDiff += 1
         numSearchesTotal += 1
         findBestShots(maxOpenOrderBundles - pendingOrderBundles.size).foreach { b =>
+          shotsDelivered += 1
           // TODO pendingOrderBundles += (orderBundle.id -> orderBundle)
           tradeRoom ! b
         }

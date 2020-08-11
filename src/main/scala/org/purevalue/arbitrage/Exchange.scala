@@ -11,8 +11,7 @@ import scala.concurrent.duration.DurationInt
 
 
 
-case class Wallet(exchange: String,
-                  assets: Map[Asset, Double])
+case class AssetWallet(asset:Asset, available:Double, locked:Double)
 
 case class Fee(exchange: String,
                makerFee: Double,

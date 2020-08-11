@@ -207,6 +207,8 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   private val tickers: concurrent.Map[String, concurrent.Map[TradePair, Ticker]] = TrieMap()
   private val extendedTickers: concurrent.Map[String, concurrent.Map[TradePair, ExtendedTicker]] = TrieMap()
   private val orderBooks: concurrent.Map[String, concurrent.Map[TradePair, OrderBook]] = TrieMap()
+  private val balances: concurrent.Map[String, concurrent.Map[Asset, AssetWallet]] = TrieMap()
+
   private val fees: Map[String, Fee] = Map( // TODO
     "binance" -> Fee("binance", AppConfig.exchange("binance").makerFee, AppConfig.exchange("binance").takerFee),
     "bitfinex" -> Fee("bitfinex", AppConfig.exchange("bitfinex").makerFee, AppConfig.exchange("bitfinex").takerFee)

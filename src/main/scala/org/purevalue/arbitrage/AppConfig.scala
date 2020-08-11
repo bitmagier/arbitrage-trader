@@ -9,24 +9,25 @@ import com.typesafe.config.{Config, ConfigFactory}
 import scala.collection.JavaConverters._
 import scala.concurrent.duration.FiniteDuration
 
-case class ExchangeConfig(exchangeName:String,
+case class ExchangeConfig(exchangeName: String,
                           assets: Set[String],
                           makerFee: Double,
                           takerFee: Double,
                           httpTimeout: FiniteDuration,
-                          orderBooksEnabled:Boolean)
-case class TradeRoomConfig(extendedTickerExchanges: Seq[String],
+                          orderBooksEnabled: Boolean)
+case class TradeRoomConfig(extendedTickerExchanges: List[String],
                            orderBooksEnabled: Boolean,
                            internalCommunicationTimeout: Timeout,
                            statsInterval: Duration,
                            maximumReasonableWinPerOrderBundleUSDT: Double,
                            maxOrderLimitTickerVariance: Double)
+case class LiquidityManagerConfig(liquidityStoringAssets: List[Asset])
 
 object AppConfig {
   private val tradeRoomConfig: Config = ConfigFactory.load().getConfig("trade-room")
   val tradeRoom: TradeRoomConfig =
     TradeRoomConfig(
-      tradeRoomConfig.getStringList("extended-ticker-exchanges").asScala,
+      tradeRoomConfig.getStringList("reference-ticker-exchanges").asScala.toList,
       tradeRoomConfig.getBoolean("order-books-enabled"),
       Timeout.create(tradeRoomConfig.getDuration("internal-communication-timeout")),
       tradeRoomConfig.getDuration("stats-interval"),
@@ -34,12 +35,17 @@ object AppConfig {
       tradeRoomConfig.getDouble("order-validity-check.max-order-limit-ticker-variance")
     )
 
-  private val exchangesConfig: Config = tradeRoomConfig.getConfig("exchange")
-
   def activeExchanges: Seq[String] = exchangesConfig.getStringList("active").asScala
+
   def dataManagerInitTimeout: Duration = exchangesConfig.getDuration("data-manager-init-timeout")
 
-  private def exchangeConfig(name:String, c: Config) = ExchangeConfig(
+  private val liquidityManagerConfig: Config = tradeRoomConfig.getConfig("liquidity-manager")
+  val liquidityManager: LiquidityManagerConfig = LiquidityManagerConfig(
+    liquidityManagerConfig.getStringList("liquidity-storing-assets").asScala.map(e => Asset(e)).toList
+  )
+
+  private val exchangesConfig: Config = tradeRoomConfig.getConfig("exchange")
+  private def exchangeConfig(name: String, c: Config) = ExchangeConfig(
     name,
     c.getStringList("assets").asScala.toSet,
     c.getDouble("fee.maker"),
