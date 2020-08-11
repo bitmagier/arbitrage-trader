@@ -230,14 +230,14 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
 
   var noResultReasonStats: Map[NoResultReason, Int] = Map()
 
-  def findBestShots(maxCount: Int): Seq[OrderBundle] = {
+  def findBestShots(topN: Int): Seq[OrderBundle] = {
     var result: List[OrderBundle] = List()
-    for (tradePair: TradePair <- tc.orderBooks.values.flatMap(_.keys).toSet) {
-      if (tc.orderBooks.count(_._2.keySet.contains(tradePair)) > 1) {
+    for (tradePair: TradePair <- tc.tickers.values.flatMap(_.keys).toSet) {
+      if (tc.tickers.count(_._2.keySet.contains(tradePair)) > 1) {
         numSingleSearchesDiff += 1
         findBestShotBasedOnTicker(tradePair) match {
 
-          case (Some(shot), _) if result.size < maxCount =>
+          case (Some(shot), _) if result.size < topN =>
             result = shot :: result
 
           case (Some(shot), _) if shot.bill.sumUSDT > result.map(_.bill.sumUSDT).min =>
@@ -279,7 +279,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
     }
   }
 
-  log.info("FooTrader up and running ...")
+  log.info("FooTrader running ...")
 
   override def receive: Receive = {
     // from Scheduler
@@ -296,16 +296,16 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
         }
       }
 
-    case OrderBundlePlaced(orderBundleId) =>
-      val ob = pendingOrderBundles(orderBundleId)
-      pendingOrderBundles = pendingOrderBundles - orderBundleId
-      activeOrderBundles += (orderBundleId -> ob)
-      log.info(s"FooTrader: $ob")
-
-    case OrderBundleCompleted(ob) =>
-      activeOrderBundles -= ob.orderBundle.id
-      log.info(s"FooTrader: $ob")
-
+//    case OrderBundlePlaced(orderBundleId) =>
+//      val ob = pendingOrderBundles(orderBundleId)
+//      pendingOrderBundles = pendingOrderBundles - orderBundleId
+//      activeOrderBundles += (orderBundleId -> ob)
+//      log.info(s"FooTrader: $ob")
+//
+//    case OrderBundleCompleted(ob) =>
+//      activeOrderBundles -= ob.orderBundle.id
+//      log.info(s"FooTrader: $ob")
+//
     case Status.Failure(cause) => log.error("received failure", cause)
   }
 }

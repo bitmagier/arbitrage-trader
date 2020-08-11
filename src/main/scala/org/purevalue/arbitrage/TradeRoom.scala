@@ -338,11 +338,13 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
 
   def logStats(): Unit = {
-    log.info(s"${Emoji.Robot} TradeRoom stats (1/3) [exchanges / ticker / extended-ticker / orderbooks] : [" +
-      s"${exchanges.size} / " +
-      s"${tickers.values.map(_.values.count(_ => true))}" +
-      s"/ ${extendedTickers.values.map(_.values.count(_ => true))}" +
-      s"/ ${orderBooks.values.map(_.values.count(_ => true))}]")
+    def toEntriesPerExchange[T](m:Map[String, Map[TradePair, T]]): Seq[String] =
+      m.map(e => (e._1, e._2.values.count(_ => true))).toSeq.sortBy(_._1).map(e=> s"[${e._1}:${e._2})]}")
+
+    log.info(s"${Emoji.Robot} TradeRoom stats (1/3) : [" +
+      s" ticker:[${toEntriesPerExchange(tickers)}], " +
+      s"/ extendedTicker:[${toEntriesPerExchange(extendedTickers)}], " +
+      s"/ orderBooks:[${toEntriesPerExchange(orderBooks)}]]")
     val orderBookTop3 = orderBooks.flatMap(_._2.values)
       .map(e => (e.bids.size + e.asks.size, e))
       .toSeq
