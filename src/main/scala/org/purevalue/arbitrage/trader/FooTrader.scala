@@ -256,7 +256,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
   def lifeSign(): Unit = {
     val duration = Duration.between(lastLifeSign, Instant.now())
     if (duration.compareTo(config.getDuration("lifesign-interval")) > 0) {
-      log.info(s"${Emoji.Robot} FooTrader life sign: $numSearchesDiff search runs ($numSingleSearchesDiff single searches) done since $duration. Total search runs: $numSearchesTotal")
+      log.info(s"${Emoji.Robot} FooTrader life sign: $numSearchesDiff search runs ($numSingleSearchesDiff single searches) done in last ${duration.toMinutes} minutes. Total search runs: $numSearchesTotal")
       val tickerChoicesAggregated: Map[Int, Int] = tc.tickers
         .values
         .flatMap(_.keys)

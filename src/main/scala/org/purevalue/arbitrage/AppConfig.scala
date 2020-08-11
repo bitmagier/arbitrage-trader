@@ -16,6 +16,7 @@ case class ExchangeConfig(exchangeName:String,
                           httpTimeout: FiniteDuration,
                           orderBooksEnabled:Boolean)
 case class TradeRoomConfig(extendedTickerExchanges: Seq[String],
+                           orderBooksEnabled: Boolean,
                            internalCommunicationTimeout: Timeout,
                            statsInterval: Duration,
                            maximumReasonableWinPerOrderBundleUSDT: Double,
@@ -26,6 +27,7 @@ object AppConfig {
   val tradeRoom: TradeRoomConfig =
     TradeRoomConfig(
       tradeRoomConfig.getStringList("extended-ticker-exchanges").asScala,
+      tradeRoomConfig.getBoolean("order-books-enabled"),
       Timeout.create(tradeRoomConfig.getDuration("internal-communication-timeout")),
       tradeRoomConfig.getDuration("stats-interval"),
       tradeRoomConfig.getDouble("order-validity-check.max-reasonable-win-per-order-bundle-usdt"),

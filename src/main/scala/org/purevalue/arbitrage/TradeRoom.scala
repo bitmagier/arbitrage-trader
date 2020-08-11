@@ -247,7 +247,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     invoiceAggregated.map(e => CryptoValue(e._1, e._2)).toSeq
   }
 
-  def orderLimitCloseToTicker(order:Order): Boolean = {
+  def orderLimitCloseToTicker(order: Order): Boolean = {
     val ticker = tickers(order.exchange)(order.tradePair)
     val bestOfferPrice: Double = if (order.direction == TradeDirection.Buy) ticker.lowestAskPrice else ticker.highestBidPrice
     val diff = ((order.limit - bestOfferPrice) / bestOfferPrice).abs
@@ -338,30 +338,37 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
 
   def logStats(): Unit = {
-    def toEntriesPerExchange[T](m:Map[String, Map[TradePair, T]]): Seq[String] =
-      m.map(e => (e._1, e._2.values.count(_ => true))).toSeq.sortBy(_._1).map(e=> s"[${e._1}:${e._2})]}")
+    def toEntriesPerExchange[T](m: Map[String, Map[TradePair, T]]): String = {
+      m.map(e => (e._1, e._2.values.size))
+        .toSeq
+        .sortBy(_._1)
+        .map(e => s"${e._1}:${e._2}")
+        .mkString(", ")
+    }
 
-    log.info(s"${Emoji.Robot} TradeRoom stats (1/3) : [" +
-      s" ticker:[${toEntriesPerExchange(tickers)}], " +
+    log.info(s"${Emoji.Robot} TradeRoom stats: [general] " +
+      s"ticker:[${toEntriesPerExchange(tickers)}], " +
       s"/ extendedTicker:[${toEntriesPerExchange(extendedTickers)}], " +
-      s"/ orderBooks:[${toEntriesPerExchange(orderBooks)}]]")
-    val orderBookTop3 = orderBooks.flatMap(_._2.values)
-      .map(e => (e.bids.size + e.asks.size, e))
-      .toSeq
-      .sortBy(_._1)
-      .reverse
-      .take(3)
-      .map(e => s"[${e._2.bids.size} bids/${e._2.asks.size} asks: ${e._2.exchange}:${e._2.tradePair}] ")
-      .toList
-    log.info(s"${Emoji.Robot} TradeRoom stats (2/3) [biggest 3 orderbooks] : $orderBookTop3")
-    val orderBookBottom3 = orderBooks.flatMap(_._2.values)
-      .map(e => (e.bids.size + e.asks.size, e))
-      .toSeq
-      .sortBy(_._1)
-      .take(3)
-      .map(e => s"[${e._2.bids.size} bids/${e._2.asks.size} asks: ${e._2.exchange}:${e._2.tradePair}] ")
-      .toList
-    log.info(s"${Emoji.Robot} TradeRoom stats (3/3) [smallest 3 orderbooks] : $orderBookBottom3")
+      s"/ orderBooks:[${toEntriesPerExchange(orderBooks)}]")
+    if (config.orderBooksEnabled) {
+      val orderBookTop3 = orderBooks.flatMap(_._2.values)
+        .map(e => (e.bids.size + e.asks.size, e))
+        .toSeq
+        .sortBy(_._1)
+        .reverse
+        .take(3)
+        .map(e => s"[${e._2.bids.size} bids/${e._2.asks.size} asks: ${e._2.exchange}:${e._2.tradePair}] ")
+        .toList
+      log.info(s"${Emoji.Robot} TradeRoom stats: [biggest 3 orderbooks] : $orderBookTop3")
+      val orderBookBottom3 = orderBooks.flatMap(_._2.values)
+        .map(e => (e.bids.size + e.asks.size, e))
+        .toSeq
+        .sortBy(_._1)
+        .take(3)
+        .map(e => s"[${e._2.bids.size} bids/${e._2.asks.size} asks: ${e._2.exchange}:${e._2.tradePair}] ")
+        .toList
+      log.info(s"${Emoji.Robot} TradeRoom stats: [smallest 3 orderbooks] : $orderBookBottom3")
+    }
   }
 
 
