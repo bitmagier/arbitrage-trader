@@ -20,8 +20,7 @@ case class Ticker(exchange: String,
                   highestBidQuantity: Option[Double],
                   lowestAskPrice: Double,
                   lowestAskQuantity: Option[Double],
-                  lastPrice: Option[Double],
-                  lastUpdated: LocalDateTime) extends TPStreamData
+                  lastPrice: Option[Double]) extends TPStreamData
 case class ExtendedTicker(exchange: String,
                           tradePair: TradePair,
                           highestBidPrice: Double,
@@ -30,8 +29,7 @@ case class ExtendedTicker(exchange: String,
                           lowestAskQuantity: Double,
                           lastPrice: Double,
                           lastQuantity: Double,
-                          weightedAveragePrice: Double,
-                          lastUpdated: LocalDateTime) extends TPStreamData
+                          weightedAveragePrice: Double) extends TPStreamData
 case class OrderBookSnapshot(bids: Seq[Bid], asks: Seq[Ask]) extends TPStreamData
 case class OrderBookUpdate(bids: Seq[Bid], asks: Seq[Ask]) extends TPStreamData
 case class Balances(all: List[Balance]) extends TPStreamData
@@ -49,9 +47,7 @@ case class Ask(price: Double, quantity: Double) { // An ask is an offer to sell 
 case class OrderBook(exchange: String,
                      tradePair: TradePair,
                      bids: Map[Double, Bid], // price-level -> bid
-                     asks: Map[Double, Ask], // price-level -> ask
-                     lastUpdated: LocalDateTime) {
-
+                     asks: Map[Double, Ask]) {  // price-level -> ask
   def toCondensedString: String = {
     val bestBid = highestBid
     val bestAsk = lowestAsk
@@ -70,13 +66,19 @@ case class Balance(asset: Asset, amountAvailable: Double, amountLocked: Double) 
 
 case class Wallet(var balances: Map[Asset, Balance]) // we use a [var immutable map] instead of mutable one here, to be able to update the whole map at once without race a condition
 
+case class TPDataTimestamps(var tickerTS: Instant,
+                            var extendedTickerTS: Instant,
+                            var orderBookTS: Instant,
+                            var walletTS: Instant)
+
 /**
  * Exchange-part of the global data structure the TPDataManager shall write to
  */
 case class TPData(ticker: concurrent.Map[TradePair, Ticker],
                   extendedTicker: concurrent.Map[TradePair, ExtendedTicker],
                   orderBook: concurrent.Map[TradePair, OrderBook],
-                  wallet: Wallet)
+                  wallet: Wallet,
+                  age: TPDataTimestamps)
 
 object TPDataManager {
   case class InitCheck()
@@ -116,9 +118,11 @@ case class TPDataManager(config: ExchangeConfig, tradePair: TradePair, exchangeD
       data.foreach {
         case t: Ticker =>
           tpData.ticker += tradePair -> t
+          tpData.age.tickerTS = Instant.now
 
         case t: ExtendedTicker =>
           tpData.extendedTicker += tradePair -> t
+          tpData.age.extendedTickerTS = Instant.now
 
         case o: OrderBookSnapshot =>
           tpData.orderBook += tradePair ->
@@ -126,9 +130,9 @@ case class TPDataManager(config: ExchangeConfig, tradePair: TradePair, exchangeD
               config.exchangeName,
               tradePair,
               o.bids.filterNot(_.quantity == 0.0d).map(e => (e.price, e)).toMap,
-              o.asks.filterNot(_.quantity == 0.0d).map(e => (e.price, e)).toMap,
-              LocalDateTime.now
+              o.asks.filterNot(_.quantity == 0.0d).map(e => (e.price, e)).toMap
             )
+          tpData.age.orderBookTS = Instant.now
           orderBookInitialized = true
 
         case o: OrderBookUpdate =>
@@ -138,16 +142,16 @@ case class TPDataManager(config: ExchangeConfig, tradePair: TradePair, exchangeD
                 config.exchangeName,
                 tradePair,
                 (tpData.orderBook(tradePair).bids ++ o.bids.map(e => e.price -> e)).filterNot(_._2.quantity == 0.0d),
-                (tpData.orderBook(tradePair).asks ++ o.asks.map(e => e.price -> e)).filterNot(_._2.quantity == 0.0d),
-                LocalDateTime.now
+                (tpData.orderBook(tradePair).asks ++ o.asks.map(e => e.price -> e)).filterNot(_._2.quantity == 0.0d)
               )
+            tpData.age.orderBookTS = Instant.now
           } else {
             log.warn(s"$o received, but no OrderBook present yet")
           }
 
         case b: Balances =>
           tpData.wallet.balances = b.all.map(e => (e.asset, e)).toMap
-
+          tpData.age.walletTS = Instant.now
       }
       eventuallyInitialized()
   }

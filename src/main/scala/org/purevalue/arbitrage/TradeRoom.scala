@@ -1,6 +1,6 @@
 package org.purevalue.arbitrage
 
-import java.time.{Duration, LocalDateTime, ZonedDateTime}
+import java.time.{Duration, Instant, LocalDateTime, ZonedDateTime}
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -16,7 +16,6 @@ import org.slf4j.LoggerFactory
 
 import scala.collection._
 import scala.collection.concurrent.TrieMap
-import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.concurrent.{Await, ExecutionContextExecutor, TimeoutException}
 
@@ -203,6 +202,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   private val extendedTickers: concurrent.Map[String, concurrent.Map[TradePair, ExtendedTicker]] = TrieMap()
   private val orderBooks: concurrent.Map[String, concurrent.Map[TradePair, OrderBook]] = TrieMap()
   private val wallets: concurrent.Map[String, Wallet] = TrieMap()
+  private val dataAge: concurrent.Map[String, TPDataTimestamps] = TrieMap()
 
   private val fees: Map[String, Fee] = Map( // TODO
     "binance" -> Fee("binance", AppConfig.exchange("binance").makerFee, AppConfig.exchange("binance").takerFee),
@@ -210,6 +210,8 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   )
 
   private val tradeContext: TradeContext = TradeContext(tickers, extendedTickers, orderBooks, wallets, fees)
+
+  private val orderBundleValidityGuard = OrderBundleValidityGuard(config.orderBundleValidityGuard, tickers, dataAge)
 
   //  private var activeOrders: Map[UUID, Order] = Map() // orderId -> Order; orders, belonging to activeOrderBundles & active at the corresponding exchange
   //  private var tradesPerActiveOrderBundle: Map[UUID, ListBuffer[Trade]] = Map() // orderBundleId -> Trade; trades, belonging to activeOrderBundles & executed at an exchange
@@ -222,73 +224,8 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   val schedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(30.seconds, scheduleRate, self, LogStats())
 
 
-  def calculateBill(trades: List[Trade]): Seq[CryptoValue] = {
-    val rawInvoice = ArrayBuffer[(Asset, Double)]()
-    for (trade <- trades) {
-      val feeRate = if (trade.wasMaker) trade.fee.makerFee else trade.fee.takerFee
-      if (trade.direction == TradeSide.Buy) {
-        rawInvoice += ((trade.tradePair.baseAsset, trade.amountBaseAsset.abs))
-        rawInvoice += ((trade.tradePair.quoteAsset, -trade.amountQuoteAsset.abs))
-        rawInvoice += ((trade.tradePair.quoteAsset, -(trade.amountQuoteAsset.abs * feeRate)))
-      } else if (trade.direction == TradeSide.Sell) {
-        rawInvoice += ((trade.tradePair.baseAsset, -trade.amountBaseAsset.abs))
-        rawInvoice += ((trade.tradePair.baseAsset, -(trade.amountBaseAsset.abs * feeRate)))
-        rawInvoice += ((trade.tradePair.quoteAsset, trade.amountQuoteAsset.abs))
-      }
-    }
-
-    var invoiceAggregated = Map[Asset, Double]()
-    rawInvoice.foreach { e =>
-      invoiceAggregated += (e._1 -> (e._2 + invoiceAggregated.getOrElse(e._1, 0.0d)))
-    }
-    invoiceAggregated.map(e => CryptoValue(e._1, e._2)).toSeq
-  }
-
-  def orderLimitCloseToTicker(order: Order): Boolean = {
-    val ticker = tickers(order.exchange)(order.tradePair)
-    val bestOfferPrice: Double = if (order.direction == TradeSide.Buy) ticker.lowestAskPrice else ticker.highestBidPrice
-    val diff = ((order.limit - bestOfferPrice) / bestOfferPrice).abs
-    val valid = diff < config.orderValidityGuard.maxOrderLimitTickerVariance
-    if (!valid) {
-      log.warn(s"${Emoji.Disagree} Got OrderBundle where a order limit is too far away ($diff) from ticker value " +
-        s"(max variance=${formatDecimal(config.orderValidityGuard.maxOrderLimitTickerVariance)})")
-      log.debug(s"$order, $ticker")
-    }
-    valid
-  }
-
-  def tickerDataUpToDate(o: Order): Boolean = {
-    val r = Duration.between(
-      tickers(o.exchange)(o.tradePair).lastUpdated,
-      LocalDateTime.now
-    ).compareTo(config.orderValidityGuard.maxTickerAge) < 0
-    if (!r) {
-      log.warn(s"${Emoji.NoSupport} Sorry, can't let that order through, because we don't have an up-to-date ticker here for ${o.exchange} ${o.tradePair} here.")
-      log.debug(s"${Emoji.NoSupport} $o")
-    }
-    r
-  }
-
-  def validityGuard(t: OrderBundle): Boolean = {
-    if (t.bill.sumUSDT <= 0) {
-      log.warn(s"${Emoji.Disagree} Got OrderBundle with negative balance: ${t.bill.sumUSDT}. I will not execute that one!")
-      log.debug(s"$t")
-      false
-    } else if (!t.orders.forall(tickerDataUpToDate)) {
-      false
-    } else if (t.bill.sumUSDT >= config.orderValidityGuard.maximumReasonableWinPerOrderBundleUSDT) {
-      log.warn(s"${Emoji.Disagree} Got OrderBundle with unbelievable high estimated win of ${formatDecimal(t.bill.sumUSDT)} USDT. I will rather not execute that one - seem to be a bug!")
-      log.debug(s"${Emoji.Disagree} $t")
-      false
-    } else if (!t.orders.forall(orderLimitCloseToTicker)) {
-      false
-    } else {
-      true
-    }
-  }
-
   def placeOrderBundleOrders(t: OrderBundle): Unit = {
-    if (validityGuard(t)) {
+    if (orderBundleValidityGuard.isValid(t)) {
       log.info(s"${Emoji.Excited} [simulated] Placing OrderBundle: $t")
     }
   }
@@ -299,6 +236,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     extendedTickers += exchangeName -> concurrent.TrieMap[TradePair, ExtendedTicker]()
     orderBooks += exchangeName -> concurrent.TrieMap[TradePair, OrderBook]()
     wallets += exchangeName -> Wallet(Map())
+    dataAge += exchangeName -> TPDataTimestamps(Instant.MIN, Instant.MIN, Instant.MIN, Instant.MIN)
 
     exchanges += exchangeName -> context.actorOf(
       Exchange.props(
@@ -310,7 +248,8 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
           tickers(exchangeName),
           extendedTickers(exchangeName),
           orderBooks(exchangeName),
-          wallets(exchangeName)
+          wallets(exchangeName),
+          dataAge(exchangeName)
         )
       ), camelName)
   }
@@ -374,10 +313,15 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     }
     log.info(s"Total available balances: ")
 
+    val now = Instant.now
+    val freshestTicker = dataAge.maxBy(_._2.tickerTS.toEpochMilli)
+    val oldestTicker = dataAge.minBy(_._2.tickerTS.toEpochMilli)
     log.info(s"${Emoji.Robot} TradeRoom stats: [general] " +
-      s"ticker:[${toEntriesPerExchange(tickers)}], " +
-      s"/ extendedTicker:[${toEntriesPerExchange(extendedTickers)}], " +
-      s"/ orderBooks:[${toEntriesPerExchange(orderBooks)}]")
+      s"ticker:[${toEntriesPerExchange(tickers)}]," +
+      s" oldest: ${oldestTicker._1} ${Duration.between(oldestTicker._2.tickerTS, now).toMillis} ms," +
+      s" freshest: ${freshestTicker._1} ${Duration.between(freshestTicker._2.tickerTS, now).toMillis} ms," +
+      s" / extendedTicker:[${toEntriesPerExchange(extendedTickers)}], " +
+      s" / orderBooks:[${toEntriesPerExchange(orderBooks)}]")
     if (config.orderBooksEnabled) {
       val orderBookTop3 = orderBooks.flatMap(_._2.values)
         .map(e => (e.bids.size + e.asks.size, e))

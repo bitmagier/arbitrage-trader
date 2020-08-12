@@ -101,7 +101,7 @@ case class RawTickerEntryJson(bid: Double, // Price of last highest bid
                               high: Double, // Daily high
                               low: Double) { // Daily low
   def toTicker(exchange: String, tradePair: TradePair): Ticker =
-    Ticker(exchange, tradePair, bid, None, ask, None, Some(lastPrice), LocalDateTime.now)
+    Ticker(exchange, tradePair, bid, None, ask, None, Some(lastPrice))
 }
 object RawTickerEntryJson {
   def apply(v: Array[Double]): RawTickerEntryJson =

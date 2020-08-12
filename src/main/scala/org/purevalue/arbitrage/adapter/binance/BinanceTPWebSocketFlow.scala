@@ -191,7 +191,7 @@ case class RawExtendedTickerJson(e: String, // e == "24hrTicker"
                                  n: Long // total number of trades
                                 ) extends DecodedBinanceMessage {
   def toExtendedTicker(exchange: String, tradePair: TradePair): ExtendedTicker =
-    ExtendedTicker(exchange, tradePair, b.toDouble, B.toDouble, a.toDouble, A.toDouble, c.toDouble, Q.toDouble, w.toDouble, LocalDateTime.now)
+    ExtendedTicker(exchange, tradePair, b.toDouble, B.toDouble, a.toDouble, A.toDouble, c.toDouble, Q.toDouble, w.toDouble)
 }
 
 case class RawBookTickerJson(u: Long, // order book updateId
@@ -202,7 +202,7 @@ case class RawBookTickerJson(u: Long, // order book updateId
                              A: String // best ask quantity
                             ) extends DecodedBinanceMessage {
   def toTicker(exchange: String, tradePair: TradePair): Ticker =
-    Ticker(exchange, tradePair, b.toDouble, Some(B.toDouble), a.toDouble, Some(A.toDouble), None, LocalDateTime.now)
+    Ticker(exchange, tradePair, b.toDouble, Some(B.toDouble), a.toDouble, Some(A.toDouble), None)
 }
 
 object WebSocketJsonProtocoll extends DefaultJsonProtocol {
