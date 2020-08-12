@@ -9,7 +9,7 @@ import akka.http.scaladsl.model.ws.{TextMessage, _}
 import akka.stream.scaladsl._
 import akka.{Done, NotUsed}
 import org.purevalue.arbitrage._
-import org.purevalue.arbitrage.adapter.binance.BinanceDataChannel.{toAsk, toBid}
+import org.purevalue.arbitrage.adapter.binance.BinancePublicDataChannel.{toAsk, toBid}
 import org.purevalue.arbitrage.adapter.binance.BinanceTPWebSocketFlow.StartStreamRequest
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
@@ -42,7 +42,7 @@ case class BinanceTPWebSocketFlow(config: ExchangeConfig, tradePair: BinanceTrad
   val downStreamFlow: Flow[Message, Option[DecodedBinanceMessage], NotUsed] = Flow.fromFunction {
     case msg: TextMessage =>
       val f: Future[Option[DecodedBinanceMessage]] = {
-        msg.toStrict(config.httpTimeout)
+        msg.toStrict(AppConfig.httpTimeout)
           .map(_.getStrictText)
           .map(s => JsonParser(s).asJsObject())
           .map {
@@ -69,7 +69,7 @@ case class BinanceTPWebSocketFlow(config: ExchangeConfig, tradePair: BinanceTrad
         }
       }
       try {
-        Await.result(f, config.httpTimeout)
+        Await.result(f, AppConfig.httpTimeout)
       } catch {
         case e: Exception => throw new RuntimeException(s"While decoding WebSocket stream event: $msg", e)
       }
@@ -144,7 +144,7 @@ case class StreamSubscribeRequestJson(method: String = "SUBSCRIBE", params: Seq[
 case class StreamSubscribeResponseJson(result: JsValue, id: Int) extends DecodedBinanceMessage
 
 case class RawPartialOrderBookJson(lastUpdateId: Int, bids: Seq[Seq[String]], asks: Seq[Seq[String]]) extends DecodedBinanceMessage {
-  def toOrderBookSnapshot: TPStreamData =
+  def toOrderBookSnapshot: ExchangeTPStreamData =
     OrderBookSnapshot(
       bids.map(toBid),
       asks.map(toAsk)

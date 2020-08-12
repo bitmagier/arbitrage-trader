@@ -235,8 +235,9 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     tickers += exchangeName -> concurrent.TrieMap[TradePair, Ticker]()
     extendedTickers += exchangeName -> concurrent.TrieMap[TradePair, ExtendedTicker]()
     orderBooks += exchangeName -> concurrent.TrieMap[TradePair, OrderBook]()
+    dataAge += exchangeName -> TPDataTimestamps(Instant.MIN, Instant.MIN, Instant.MIN)
+
     wallets += exchangeName -> Wallet(Map())
-    dataAge += exchangeName -> TPDataTimestamps(Instant.MIN, Instant.MIN, Instant.MIN, Instant.MIN)
 
     exchanges += exchangeName -> context.actorOf(
       Exchange.props(
@@ -244,12 +245,14 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
         AppConfig.exchange(exchangeName),
         context.actorOf(exchangeInit.dataChannelProps.apply(), s"$camelName-Exchange"),
         exchangeInit.tpDataChannelProps,
-        TPData(
+        ExchangeTPData(
           tickers(exchangeName),
           extendedTickers(exchangeName),
           orderBooks(exchangeName),
-          wallets(exchangeName),
           dataAge(exchangeName)
+        ),
+        ExchangeAccountData(
+          wallets(exchangeName)
         )
       ), camelName)
   }

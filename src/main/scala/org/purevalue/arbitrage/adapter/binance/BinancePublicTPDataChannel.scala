@@ -7,20 +7,21 @@ import akka.util.Timeout
 import akka.{Done, NotUsed}
 import org.purevalue.arbitrage.TPDataManager.StartStreamRequest
 import org.purevalue.arbitrage._
-import org.purevalue.arbitrage.adapter.binance.BinanceDataChannel.GetBinanceTradePair
+import org.purevalue.arbitrage.adapter.binance.BinancePublicDataChannel.GetBinanceTradePair
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.{Await, ExecutionContextExecutor, Future}
 
-object BinanceTPDataChannel {
+object BinancePublicTPDataChannel {
   def props(config: ExchangeConfig, tradePair: TradePair, binanceDataChannel: ActorRef): Props =
-    Props(new BinanceTPDataChannel(config, tradePair, binanceDataChannel))
+    Props(new BinancePublicTPDataChannel(config, tradePair, binanceDataChannel))
 }
 /**
  * Binance TradePair-based data channel
+ * Converts Raw TradePair-based data to unified ExchangeTPStreamData
  */
-class BinanceTPDataChannel(config: ExchangeConfig, tradePair: TradePair, binanceDataChannel: ActorRef) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[BinanceTPDataChannel])
+class BinancePublicTPDataChannel(config: ExchangeConfig, tradePair: TradePair, binanceDataChannel: ActorRef) extends Actor {
+  private val log = LoggerFactory.getLogger(classOf[BinancePublicTPDataChannel])
   implicit val system: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = system.dispatcher
 
@@ -30,11 +31,11 @@ class BinanceTPDataChannel(config: ExchangeConfig, tradePair: TradePair, binance
 
   private var sink: Sink[DecodedBinanceMessage, NotUsed] = _
 
-  def createSinkTo(downstreamSink: Sink[Seq[TPStreamData], Future[Done]]): Sink[DecodedBinanceMessage, NotUsed] = {
+  def createSinkTo(downstreamSink: Sink[Seq[ExchangeTPStreamData], Future[Done]]): Sink[DecodedBinanceMessage, NotUsed] = {
     Flow.fromFunction(streamMapping).toMat(downstreamSink)(Keep.none)
   }
 
-  def streamMapping(in: DecodedBinanceMessage): Seq[TPStreamData] = in match {
+  def streamMapping(in: DecodedBinanceMessage): Seq[ExchangeTPStreamData] = in match {
 
     case t: RawBookTickerJson =>
       Seq(t.toTicker(config.exchangeName, tradePair))
@@ -74,3 +75,4 @@ class BinanceTPDataChannel(config: ExchangeConfig, tradePair: TradePair, binance
       log.error("received failure", cause)
   }
 }
+// TODO [refactoring] merge this 'Durchlauferhitzer' with BinanceTPWebSocketFlow

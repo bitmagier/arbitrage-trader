@@ -10,13 +10,6 @@ import scala.concurrent.ExecutionContextExecutor
 import scala.concurrent.duration.DurationInt
 
 
-
-
-case class Fee(exchange: String,
-               makerFee: Double,
-               takerFee: Double)
-
-
 object Exchange {
   case class IsInitialized()
   case class IsInitializedResponse(initialized: Boolean)
@@ -27,16 +20,17 @@ object Exchange {
             config: ExchangeConfig,
             exchangeDataChannel: ActorRef,
             tpDataChannelPropsInit: Function1[TPDataChannelPropsParams, Props],
-            tpData: TPData
-           ): Props =
-    Props(new Exchange(exchangeName, config, exchangeDataChannel, tpDataChannelPropsInit, tpData))
+            tpData: ExchangeTPData,
+            accountData: ExchangeAccountData): Props =
+    Props(new Exchange(exchangeName, config, exchangeDataChannel, tpDataChannelPropsInit, tpData, accountData))
 }
 
 case class Exchange(exchangeName: String,
                     config: ExchangeConfig,
                     exchangeDataChannel: ActorRef,
                     tpDataChannelPropsInit: Function1[TPDataChannelPropsParams, Props],
-                    tpData: TPData) extends Actor {
+                    tpData: ExchangeTPData,
+                    accountData: ExchangeAccountData) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[Exchange])
   implicit val system: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = system.dispatcher
@@ -45,10 +39,11 @@ case class Exchange(exchangeName: String,
   var tradePairs: Set[TradePair] = _
   var tpDataManagers: Map[TradePair, ActorRef] = Map()
   var tpDataInitPending: Set[TradePair] = _
+  var accountDataManager: ActorRef = _
 
   def initialized: Boolean = tpDataInitPending != null && tpDataInitPending.isEmpty
 
-  def initTradePairBasedData(): Unit = {
+  def initTradePairBasedDataManagers(): Unit = {
     tpDataInitPending = tradePairs
     for (tp <- tradePairs) {
       tpDataManagers = tpDataManagers +
@@ -57,6 +52,12 @@ case class Exchange(exchangeName: String,
           s"$exchangeName.TPDataManager-${tp.baseAsset.officialSymbol}-${tp.quoteAsset.officialSymbol}"))
     }
   }
+
+  def initAccountDataManager(): Unit = {
+    accountDataManager = context.actorOf(ExchangeAccountDataManager.props(config, accountData),
+      s"${config.exchangeName}.AccountDataManager")
+  }
+
 
   override val supervisorStrategy: OneForOneStrategy =
     OneForOneStrategy(maxNrOfRetries = 5, withinTimeRange = 10.minutes, loggingEnabled = true) {
@@ -84,7 +85,8 @@ case class Exchange(exchangeName: String,
     case TradePairs(t) =>
       tradePairs = t
       log.info(s"$exchangeName: ${tradePairs.size} TradePairs: $tradePairs")
-      initTradePairBasedData()
+      initTradePairBasedDataManagers()
+      initAccountDataManager()
 
     // Messages from TradePairDataManager
 

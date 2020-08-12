@@ -1,6 +1,6 @@
 package org.purevalue.arbitrage
 
-import java.time.{Duration, Instant, LocalDateTime}
+import java.time.{Duration, Instant}
 
 import akka.Done
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, Props, Status}
@@ -13,14 +13,14 @@ import scala.collection._
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{ExecutionContextExecutor, Future}
 
-trait TPStreamData
+trait ExchangeTPStreamData
 case class Ticker(exchange: String,
                   tradePair: TradePair,
                   highestBidPrice: Double,
                   highestBidQuantity: Option[Double],
                   lowestAskPrice: Double,
                   lowestAskQuantity: Option[Double],
-                  lastPrice: Option[Double]) extends TPStreamData
+                  lastPrice: Option[Double]) extends ExchangeTPStreamData
 case class ExtendedTicker(exchange: String,
                           tradePair: TradePair,
                           highestBidPrice: Double,
@@ -29,10 +29,10 @@ case class ExtendedTicker(exchange: String,
                           lowestAskQuantity: Double,
                           lastPrice: Double,
                           lastQuantity: Double,
-                          weightedAveragePrice: Double) extends TPStreamData
-case class OrderBookSnapshot(bids: Seq[Bid], asks: Seq[Ask]) extends TPStreamData
-case class OrderBookUpdate(bids: Seq[Bid], asks: Seq[Ask]) extends TPStreamData
-case class Balances(all: List[Balance]) extends TPStreamData
+                          weightedAveragePrice: Double) extends ExchangeTPStreamData
+case class OrderBookSnapshot(bids: Seq[Bid], asks: Seq[Ask]) extends ExchangeTPStreamData
+case class OrderBookUpdate(bids: Seq[Bid], asks: Seq[Ask]) extends ExchangeTPStreamData
+case class Balances(all: List[Balance]) extends ExchangeTPStreamData
 
 //////////////////////
 
@@ -60,33 +60,25 @@ case class OrderBook(exchange: String,
   def lowestAsk: Ask = asks(asks.keySet.min)
 }
 
-case class Balance(asset: Asset, amountAvailable: Double, amountLocked: Double) {
-  def toCryptoValue: CryptoValue = CryptoValue(asset, amountAvailable)
-}
-
-case class Wallet(var balances: Map[Asset, Balance]) // we use a [var immutable map] instead of mutable one here, to be able to update the whole map at once without race a condition
-
 case class TPDataTimestamps(var tickerTS: Instant,
                             var extendedTickerTS: Instant,
-                            var orderBookTS: Instant,
-                            var walletTS: Instant)
+                            var orderBookTS: Instant)
 
 /**
  * Exchange-part of the global data structure the TPDataManager shall write to
  */
-case class TPData(ticker: concurrent.Map[TradePair, Ticker],
-                  extendedTicker: concurrent.Map[TradePair, ExtendedTicker],
-                  orderBook: concurrent.Map[TradePair, OrderBook],
-                  wallet: Wallet,
-                  age: TPDataTimestamps)
+case class ExchangeTPData(ticker: concurrent.Map[TradePair, Ticker],
+                          extendedTicker: concurrent.Map[TradePair, ExtendedTicker],
+                          orderBook: concurrent.Map[TradePair, OrderBook],
+                          age: TPDataTimestamps)
 
 object TPDataManager {
   case class InitCheck()
   case class Initialized(tradePair: TradePair)
-  case class StartStreamRequest(sink: Sink[Seq[TPStreamData], Future[Done]])
+  case class StartStreamRequest(sink: Sink[Seq[ExchangeTPStreamData], Future[Done]])
 
   def props(config: ExchangeConfig, tradePair: TradePair, exchangeDataChannel: ActorRef, exchange: ActorRef,
-            tpDataChannelInit: Function1[TPDataChannelPropsParams, Props], tpDataSink: TPData): Props =
+            tpDataChannelInit: Function1[TPDataChannelPropsParams, Props], tpDataSink: ExchangeTPData): Props =
     Props(new TPDataManager(config, tradePair, exchangeDataChannel, exchange, tpDataChannelInit, tpDataSink))
 }
 
@@ -95,7 +87,7 @@ object TPDataManager {
  */
 case class TPDataManager(config: ExchangeConfig, tradePair: TradePair, exchangeDataChannel: ActorRef, exchange: ActorRef,
                          tpDataChannelInit: Function1[TPDataChannelPropsParams, Props],
-                         tpData: TPData) extends Actor {
+                         tpData: ExchangeTPData) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[TPDataManager])
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
@@ -113,8 +105,8 @@ case class TPDataManager(config: ExchangeConfig, tradePair: TradePair, exchangeD
     tpData.ticker.isDefinedAt(tradePair) &&
       (if (config.orderBooksEnabled) orderBookInitialized else true)
 
-  val sink: Sink[Seq[TPStreamData], Future[Done]] = Sink.foreach[Seq[TPStreamData]] {
-    data: Seq[TPStreamData] =>
+  val sink: Sink[Seq[ExchangeTPStreamData], Future[Done]] = Sink.foreach[Seq[ExchangeTPStreamData]] {
+    data: Seq[ExchangeTPStreamData] =>
       data.foreach {
         case t: Ticker =>
           tpData.ticker += tradePair -> t
@@ -149,9 +141,7 @@ case class TPDataManager(config: ExchangeConfig, tradePair: TradePair, exchangeD
             log.warn(s"$o received, but no OrderBook present yet")
           }
 
-        case b: Balances =>
-          tpData.wallet.balances = b.all.map(e => (e.asset, e)).toMap
-          tpData.age.walletTS = Instant.now
+        case _ => throw new NotImplementedError
       }
       eventuallyInitialized()
   }

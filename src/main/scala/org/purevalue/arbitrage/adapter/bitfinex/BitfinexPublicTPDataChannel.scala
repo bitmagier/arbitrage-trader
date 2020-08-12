@@ -13,16 +13,17 @@ import org.slf4j.LoggerFactory
 import scala.concurrent.{Await, Future}
 
 
-object BitfinexTPDataChannel {
+object BitfinexPublicTPDataChannel {
   def props(config: ExchangeConfig, tradePair: TradePair, bitfinexDataChannel: ActorRef): Props =
-    Props(new BitfinexTPDataChannel(config, tradePair, bitfinexDataChannel))
+    Props(new BitfinexPublicTPDataChannel(config, tradePair, bitfinexDataChannel))
 }
 
 /**
  * Bitfinex TradePair-based data channel
+ * Converts Raw TradePair-based data to unified ExchangeTPStreamData
  */
-class BitfinexTPDataChannel(config: ExchangeConfig, tradePair: TradePair, bitfinexDataChannel:ActorRef) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[BitfinexTPDataChannel])
+class BitfinexPublicTPDataChannel(config: ExchangeConfig, tradePair: TradePair, bitfinexDataChannel:ActorRef) extends Actor {
+  private val log = LoggerFactory.getLogger(classOf[BitfinexPublicTPDataChannel])
   implicit val system: ActorSystem = Main.actorSystem
 
   private var bitfinexTradePair: BitfinexTradePair = _
@@ -30,11 +31,11 @@ class BitfinexTPDataChannel(config: ExchangeConfig, tradePair: TradePair, bitfin
 
   private var sink: Sink[DecodedBitfinexMessage, NotUsed] = _
 
-  def createSinkTo(downstreamSink: Sink[Seq[TPStreamData], Future[Done]]): Sink[DecodedBitfinexMessage, NotUsed] = {
+  def createSinkTo(downstreamSink: Sink[Seq[ExchangeTPStreamData], Future[Done]]): Sink[DecodedBitfinexMessage, NotUsed] = {
     Flow.fromFunction(streamMapping).toMat(downstreamSink)(Keep.none)
   }
 
-  def streamMapping(in: DecodedBitfinexMessage): Seq[TPStreamData] = in match {
+  def streamMapping(in: DecodedBitfinexMessage): Seq[ExchangeTPStreamData] = in match {
     case t: RawTickerJson =>
       Seq(t.value.toTicker(config.exchangeName, tradePair))
 
@@ -71,3 +72,4 @@ class BitfinexTPDataChannel(config: ExchangeConfig, tradePair: TradePair, bitfin
       log.error("Failure received", cause)
   }
 }
+// TODO [refactoring] merge this 'Durchlauferhitzer' with BitfinexTPWebSocketFlow

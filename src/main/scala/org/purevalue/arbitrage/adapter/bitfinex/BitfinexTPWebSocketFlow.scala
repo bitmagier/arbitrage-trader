@@ -224,7 +224,7 @@ case class BitfinexTPWebSocketFlow(config: ExchangeConfig, tradePair: BitfinexTr
   val downStreamFlow: Flow[Message, Option[DecodedBitfinexMessage], NotUsed] = Flow.fromFunction {
     case msg: TextMessage =>
       val f: Future[Option[DecodedBitfinexMessage]] = {
-        msg.toStrict(config.httpTimeout)
+        msg.toStrict(AppConfig.httpTimeout)
           .map(_.getStrictText)
           .map {
             case s: String if s.startsWith("{") => decodeJson(s)
@@ -247,7 +247,7 @@ case class BitfinexTPWebSocketFlow(config: ExchangeConfig, tradePair: BitfinexTr
         }
       }
       try {
-        Await.result(f, config.httpTimeout)
+        Await.result(f, AppConfig.httpTimeout)
       } catch {
         case e: Exception => throw new RuntimeException(s"While decoding WebSocket stream event: $msg", e)
       }

@@ -4,7 +4,7 @@ import akka.actor.{Actor, ActorSystem, Props, Status}
 import org.purevalue.arbitrage.Exchange.{GetTradePairs, TradePairs}
 import org.purevalue.arbitrage.Utils.queryJson
 import org.purevalue.arbitrage._
-import org.purevalue.arbitrage.adapter.binance.BinanceDataChannel._
+import org.purevalue.arbitrage.adapter.binance.BinancePublicDataChannel._
 import org.slf4j.LoggerFactory
 import spray.json._
 
@@ -28,7 +28,7 @@ import scala.concurrent.{Await, ExecutionContextExecutor}
 
 case class BinanceTradePair(baseAsset: Asset, quoteAsset: Asset, symbol: String) extends TradePair
 
-object BinanceDataChannel {
+object BinancePublicDataChannel {
   case class GetBinanceTradePair(tradePair: TradePair)
 
   def toBid(e: Seq[String]): Bid = {
@@ -47,16 +47,16 @@ object BinanceDataChannel {
     )
   }
 
-  val baseEndpoint = "https://api.binance.com"
+  val BaseEndpoint = "https://api.binance.com"
 
-  def props(config: ExchangeConfig): Props = Props(new BinanceDataChannel(config))
+  def props(config: ExchangeConfig): Props = Props(new BinancePublicDataChannel(config))
 }
 
 /**
- * Binance exchange data channel
+ * Binance exchange - account data channel
  */
-class BinanceDataChannel(config: ExchangeConfig) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[BinanceDataChannel])
+class BinancePublicDataChannel(config: ExchangeConfig) extends Actor {
+  private val log = LoggerFactory.getLogger(classOf[BinancePublicDataChannel])
   implicit val system: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = system.dispatcher
 
@@ -68,7 +68,7 @@ class BinanceDataChannel(config: ExchangeConfig) extends Actor {
   override def preStart(): Unit = {
     import BinanceJsonProtocol._
 
-    exchangeInfo = Await.result(queryJson[RawBinanceExchangeInformationJson](s"$baseEndpoint/api/v3/exchangeInfo", config.httpTimeout), config.httpTimeout)
+    exchangeInfo = Await.result(queryJson[RawBinanceExchangeInformationJson](s"$BaseEndpoint/api/v3/exchangeInfo"), AppConfig.httpTimeout)
     binanceTradePairs = exchangeInfo.symbols
       .filter(s => s.status == "TRADING" && s.orderTypes.contains("LIMIT") /* && s.orderTypes.contains("LIMIT_MAKER")*/ && s.permissions.contains("SPOT"))
       .filter(s => config.assets.contains(s.baseAsset) && config.assets.contains(s.quoteAsset))
@@ -78,7 +78,7 @@ class BinanceDataChannel(config: ExchangeConfig) extends Actor {
   }
 
   override def receive: Receive = {
-
+    // Messages from Exchange
     case GetTradePairs() =>
       sender() ! TradePairs(tradePairs)
 

@@ -4,7 +4,7 @@ import akka.actor.{Actor, ActorSystem, Props, Status}
 import org.purevalue.arbitrage.Exchange.{GetTradePairs, TradePairs}
 import org.purevalue.arbitrage.Utils.queryJson
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexDataChannel.GetBitfinexTradePair
-import org.purevalue.arbitrage.{Asset, ExchangeConfig, GlobalConfig, Main, TradePair}
+import org.purevalue.arbitrage.{AppConfig, Asset, ExchangeConfig, GlobalConfig, Main, TradePair}
 import org.slf4j.LoggerFactory
 import spray.json._
 
@@ -39,7 +39,7 @@ class BitfinexDataChannel(config: ExchangeConfig) extends Actor {
     import DefaultJsonProtocol._
 
     val apiSymbolToOfficialCurrencySymbolMapping: Map[String, String] =
-      Await.result(queryJson[List[List[Tuple2[String, String]]]](s"$baseRestEndpointPublic/v2/conf/pub:map:currency:sym", config.httpTimeout), config.httpTimeout)
+      Await.result(queryJson[List[List[Tuple2[String, String]]]](s"$baseRestEndpointPublic/v2/conf/pub:map:currency:sym"), AppConfig.httpTimeout)
       .head
       .map(e => (e._1, e._2.toUpperCase))
       .toMap
@@ -47,8 +47,8 @@ class BitfinexDataChannel(config: ExchangeConfig) extends Actor {
 
     // currency->name
     val currencies: Map[String, String] =
-      Await.result(queryJson[List[List[Tuple2[String, String]]]](s"$baseRestEndpointPublic/v2/conf/pub:map:currency:label", config.httpTimeout),
-      config.httpTimeout)
+      Await.result(queryJson[List[List[Tuple2[String, String]]]](s"$baseRestEndpointPublic/v2/conf/pub:map:currency:label"),
+      AppConfig.httpTimeout)
       .head
       .map(e => (e._1, e._2))
       .toMap
@@ -63,7 +63,7 @@ class BitfinexDataChannel(config: ExchangeConfig) extends Actor {
     if (log.isTraceEnabled) log.trace(s"bitfinexAssets: $bitfinexAssets")
 
     val tradePairs: List[String] =
-      Await.result(queryJson[List[List[String]]](s"$baseRestEndpointPublic/v2/conf/pub:list:pair:exchange", config.httpTimeout), config.httpTimeout)
+      Await.result(queryJson[List[List[String]]](s"$baseRestEndpointPublic/v2/conf/pub:list:pair:exchange"), AppConfig.httpTimeout)
       .head
     if (log.isTraceEnabled) log.trace(s"tradepairs: $tradePairs")
 
@@ -89,9 +89,11 @@ class BitfinexDataChannel(config: ExchangeConfig) extends Actor {
   }
 
   override def receive: Receive = {
+    // Messages from Exchange
     case GetTradePairs() =>
       sender() ! TradePairs(tradePairs)
 
+    // Messages from BitfinexTPDataChannel
     case GetBitfinexTradePair(tp) =>
       sender() ! bitfinexTradePairs.find(e => e.baseAsset==tp.baseAsset && e.quoteAsset==tp.quoteAsset).get
 

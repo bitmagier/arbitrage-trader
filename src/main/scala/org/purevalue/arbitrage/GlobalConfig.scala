@@ -1,8 +1,8 @@
 package org.purevalue.arbitrage
 
 import akka.actor.{ActorRef, Props}
-import org.purevalue.arbitrage.adapter.binance.{BinanceDataChannel, BinanceTPDataChannel}
-import org.purevalue.arbitrage.adapter.bitfinex.{BitfinexDataChannel, BitfinexTPDataChannel}
+import org.purevalue.arbitrage.adapter.binance.{BinancePublicDataChannel, BinancePublicTPDataChannel}
+import org.purevalue.arbitrage.adapter.bitfinex.{BitfinexDataChannel, BitfinexPublicTPDataChannel}
 import org.slf4j.LoggerFactory
 
 // Crypto asset / coin.
@@ -63,20 +63,20 @@ object GlobalConfig {
   // all exchanges - used for init routine
   val AllExchanges: Map[String, ExchangeInitStuff] = Map(
     "binance" -> ExchangeInitStuff(
-      () => BinanceDataChannel.props(AppConfig.exchange("binance")),
+      () => BinancePublicDataChannel.props(AppConfig.exchange("binance")),
       (p: TPDataChannelPropsParams) =>
-        BinanceTPDataChannel.props(AppConfig.exchange("binance"), p.tp, p.exchangeDataChannel)),
+        BinancePublicTPDataChannel.props(AppConfig.exchange("binance"), p.tp, p.exchangeDataChannel)),
     "bitfinex" -> ExchangeInitStuff(
       () => BitfinexDataChannel.props(AppConfig.exchange("bitfinex")),
       (p: TPDataChannelPropsParams) =>
-        BitfinexTPDataChannel.props(AppConfig.exchange("bitfinex"), p.tp, p.exchangeDataChannel))
+        BitfinexPublicTPDataChannel.props(AppConfig.exchange("bitfinex"), p.tp, p.exchangeDataChannel))
   )
 
   // this is the reference to know exactly about which asset (or coin) we are talking at each Exchange
   val AllAssets: Map[String, Asset] = Seq(
     Asset("BTC", "Bitcoin"),
     Asset("ETH", "Ethereum"),
-    //    Asset("XRP", "Ripple"),
+    Asset("XRP", "Ripple"),
     Asset("USDT", "Tether"),
     Asset("BCH", "Bitcoin Cash"),
     Asset("BSV", "Bitcoin SV"),
