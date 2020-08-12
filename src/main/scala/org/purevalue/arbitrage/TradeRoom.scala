@@ -211,7 +211,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
   private val tradeContext: TradeContext = TradeContext(tickers, extendedTickers, orderBooks, wallets, fees)
 
-  private val orderBundleValidityGuard = OrderBundleValidityGuard(config.orderBundleValidityGuard, tickers, dataAge)
+  private val orderBundleSafetyGuard = OrderBundleSafetyGuard(config.orderBundleSafetyGuard, tickers, dataAge)
 
   //  private var activeOrders: Map[UUID, Order] = Map() // orderId -> Order; orders, belonging to activeOrderBundles & active at the corresponding exchange
   //  private var tradesPerActiveOrderBundle: Map[UUID, ListBuffer[Trade]] = Map() // orderBundleId -> Trade; trades, belonging to activeOrderBundles & executed at an exchange
@@ -225,7 +225,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
 
   def placeOrderBundleOrders(t: OrderBundle): Unit = {
-    if (orderBundleValidityGuard.isValid(t)) {
+    if (orderBundleSafetyGuard.isSafe(t)) {
       log.info(s"${Emoji.Excited} [simulated] Placing OrderBundle: $t")
     }
   }

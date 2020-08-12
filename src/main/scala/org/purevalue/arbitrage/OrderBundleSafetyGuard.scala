@@ -8,10 +8,10 @@ import org.slf4j.LoggerFactory
 
 import scala.collection._
 
-case class OrderBundleValidityGuard(config: OrderBundleValidityGuardConfig,
-                                    tickers: Map[String, concurrent.Map[TradePair, Ticker]],
-                                    dataAge: Map[String, TPDataTimestamps]) {
-  private val log = LoggerFactory.getLogger(classOf[OrderBundleValidityGuard])
+case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
+                                  tickers: Map[String, concurrent.Map[TradePair, Ticker]],
+                                  dataAge: Map[String, TPDataTimestamps]) {
+  private val log = LoggerFactory.getLogger(classOf[OrderBundleSafetyGuard])
 
   private def orderLimitCloseToTicker(order: Order): Boolean = {
     val ticker = tickers(order.exchange)(order.tradePair)
@@ -30,13 +30,13 @@ case class OrderBundleValidityGuard(config: OrderBundleValidityGuardConfig,
     val age = Duration.between(dataAge(o.exchange).tickerTS, Instant.now)
     val r = age.compareTo(config.maxTickerAge) < 0
     if (!r) {
-      log.warn(s"${Emoji.NoSupport} Sorry, can't let that order through, because we don't have an aged ticker (${age.toSeconds} s) for ${o.exchange} here.")
+      log.warn(s"${Emoji.NoSupport} Sorry, can't let that order through, because we have an aged ticker (${age.toSeconds} s) for ${o.exchange} here.")
       log.debug(s"${Emoji.NoSupport} $o")
     }
     r
   }
 
-  def isValid(t: OrderBundle): Boolean = {
+  def isSafe(t: OrderBundle): Boolean = {
     if (t.bill.sumUSDT <= 0) {
       log.warn(s"${Emoji.Disagree} Got OrderBundle with negative balance: ${t.bill.sumUSDT}. I will not execute that one!")
       log.debug(s"$t")

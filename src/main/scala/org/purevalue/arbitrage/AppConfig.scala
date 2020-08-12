@@ -16,14 +16,14 @@ case class ExchangeConfig(exchangeName: String,
                           takerFee: Double,
                           httpTimeout: FiniteDuration,
                           orderBooksEnabled: Boolean)
-case class OrderBundleValidityGuardConfig(maximumReasonableWinPerOrderBundleUSDT: Double,
-                                          maxOrderLimitTickerVariance: Double,
-                                          maxTickerAge: Duration)
+case class OrderBundleSafetyGuardConfig(maximumReasonableWinPerOrderBundleUSDT: Double,
+                                        maxOrderLimitTickerVariance: Double,
+                                        maxTickerAge: Duration)
 case class TradeRoomConfig(extendedTickerExchanges: List[String],
                            orderBooksEnabled: Boolean,
                            internalCommunicationTimeout: Timeout,
                            statsInterval: Duration,
-                           orderBundleValidityGuard: OrderBundleValidityGuardConfig
+                           orderBundleSafetyGuard: OrderBundleSafetyGuardConfig
                           )
 case class LiquidityManagerConfig(liquidityStoringAssets: List[Asset])
 
@@ -35,8 +35,8 @@ object AppConfig {
       tradeRoomConfig.getBoolean("order-books-enabled"),
       Timeout.create(tradeRoomConfig.getDuration("internal-communication-timeout")),
       tradeRoomConfig.getDuration("stats-interval"),
-      tradeRoomConfig.getConfig("order-bundle-validity-guard") match {
-        case c: Config => OrderBundleValidityGuardConfig(
+      tradeRoomConfig.getConfig("order-bundle-safety-guard") match {
+        case c: Config => OrderBundleSafetyGuardConfig(
           c.getDouble("max-reasonable-win-per-order-bundle-usdt"),
           c.getDouble("max-order-limit-ticker-variance"),
           c.getDuration("max-ticker-age")
