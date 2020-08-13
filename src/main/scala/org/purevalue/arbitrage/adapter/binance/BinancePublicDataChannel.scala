@@ -2,7 +2,7 @@ package org.purevalue.arbitrage.adapter.binance
 
 import akka.actor.{Actor, ActorSystem, Props, Status}
 import org.purevalue.arbitrage.Exchange.{GetTradePairs, TradePairs}
-import org.purevalue.arbitrage.Utils.queryJson
+import org.purevalue.arbitrage.HttpUtils.queryJson
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataChannel._
 import org.slf4j.LoggerFactory

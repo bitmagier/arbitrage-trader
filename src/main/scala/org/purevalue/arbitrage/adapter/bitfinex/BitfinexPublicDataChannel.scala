@@ -2,8 +2,8 @@ package org.purevalue.arbitrage.adapter.bitfinex
 
 import akka.actor.{Actor, ActorSystem, Props, Status}
 import org.purevalue.arbitrage.Exchange.{GetTradePairs, TradePairs}
-import org.purevalue.arbitrage.Utils.queryJson
-import org.purevalue.arbitrage.adapter.bitfinex.BitfinexDataChannel.GetBitfinexTradePair
+import org.purevalue.arbitrage.HttpUtils.queryJson
+import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataChannel.GetBitfinexTradePair
 import org.purevalue.arbitrage.{AppConfig, Asset, ExchangeConfig, GlobalConfig, Main, TradePair}
 import org.slf4j.LoggerFactory
 import spray.json._
@@ -13,17 +13,17 @@ import scala.concurrent.{Await, ExecutionContextExecutor}
 case class BitfinexSymbol(currencySymbol: Asset, apiSymbol: String)
 case class BitfinexTradePair(baseAsset: Asset, quoteAsset: Asset, apiSymbol: String) extends TradePair
 
-object BitfinexDataChannel {
+object BitfinexPublicDataChannel {
   case class GetBitfinexTradePair(tp:TradePair)
 
-  def props(config: ExchangeConfig): Props = Props(new BitfinexDataChannel(config))
+  def props(config: ExchangeConfig): Props = Props(new BitfinexPublicDataChannel(config))
 }
 
 /**
  * Bitfinex exchange data channel
  */
-class BitfinexDataChannel(config: ExchangeConfig) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[BitfinexDataChannel])
+class BitfinexPublicDataChannel(config: ExchangeConfig) extends Actor {
+  private val log = LoggerFactory.getLogger(classOf[BitfinexPublicDataChannel])
   implicit val system:ActorSystem = Main.actorSystem
   implicit val executor: ExecutionContextExecutor = system.dispatcher
 

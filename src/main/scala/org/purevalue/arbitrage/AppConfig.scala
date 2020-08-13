@@ -9,7 +9,11 @@ import com.typesafe.config.{Config, ConfigFactory}
 import scala.collection.JavaConverters._
 import scala.concurrent.duration.FiniteDuration
 
+case class SecretsConfig(apiKey: String,
+                         apiSecretKey: String)
 case class ExchangeConfig(exchangeName: String,
+                          tradingSecrets: SecretsConfig,
+                          withdrawalSecrets: SecretsConfig,
                           assets: Set[String],
                           makerFee: Double,
                           takerFee: Double,
@@ -48,8 +52,14 @@ object AppConfig {
   val dataManagerInitTimeout: Duration = exchangesConfig.getDuration("data-manager-init-timeout")
   val httpTimeout: FiniteDuration = FiniteDuration(exchangesConfig.getDuration("http-timeout").toMillis, TimeUnit.MILLISECONDS)
 
+  private def secretsConfig(c:Config) = SecretsConfig(
+    c.getString("api-key"),
+    c.getString("api-secret-key")
+  )
   private def exchangeConfig(name: String, c: Config) = ExchangeConfig(
     name,
+    secretsConfig(c.getConfig("secrets.trading")),
+    secretsConfig(c.getConfig("secrets.withdrawal")),
     c.getStringList("assets").asScala.toSet,
     c.getDouble("fee.maker"),
     c.getDouble("fee.taker"),
@@ -65,3 +75,4 @@ object AppConfig {
 
   def trader(name: String): Config = tradeRoomConfig.getConfig(s"trader.$name")
 }
+

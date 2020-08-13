@@ -3,7 +3,6 @@ package org.purevalue.arbitrage
 import akka.Done
 import akka.actor.{Actor, ActorRef, Props}
 import akka.stream.scaladsl.Sink
-import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.StartStreamRequest
 
 import scala.collection.{Map, Seq}
 import scala.concurrent.Future
@@ -40,10 +39,12 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
   }
 
   override def preStart(): Unit = {
-    accountDataChannel = context.actorOf(???, s"${config.exchangeName}.AccountDataChannel")
-    accountDataChannel ! StartStreamRequest(sink)
+//    accountDataChannel = context.actorOf(???, s"${config.exchangeName}.AccountDataChannel")
+//    accountDataChannel ! StartStreamRequest(sink)
   }
 
-  override def receive: Receive = ???
-
+  override def receive: Receive = {
+    case _ =>
+  }
 }
+// work in progress

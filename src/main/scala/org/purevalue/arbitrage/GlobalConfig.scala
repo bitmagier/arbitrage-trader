@@ -2,7 +2,7 @@ package org.purevalue.arbitrage
 
 import akka.actor.{ActorRef, Props}
 import org.purevalue.arbitrage.adapter.binance.{BinancePublicDataChannel, BinancePublicTPDataChannel}
-import org.purevalue.arbitrage.adapter.bitfinex.{BitfinexDataChannel, BitfinexPublicTPDataChannel}
+import org.purevalue.arbitrage.adapter.bitfinex.{BitfinexPublicDataChannel, BitfinexPublicTPDataChannel}
 import org.slf4j.LoggerFactory
 
 // Crypto asset / coin.
@@ -54,7 +54,7 @@ object TradePair {
   }
 }
 
-case class TPDataChannelPropsParams(tp: TradePair, exchangeDataChannel: ActorRef, tpDataManager: ActorRef)
+case class TPDataChannelPropsParams(tp: TradePair, exchangePublicDataChannel: ActorRef, tpDataManager: ActorRef)
 case class ExchangeInitStuff(dataChannelProps: Function0[Props], tpDataChannelProps: Function1[TPDataChannelPropsParams, Props])
 
 object GlobalConfig {
@@ -65,11 +65,11 @@ object GlobalConfig {
     "binance" -> ExchangeInitStuff(
       () => BinancePublicDataChannel.props(AppConfig.exchange("binance")),
       (p: TPDataChannelPropsParams) =>
-        BinancePublicTPDataChannel.props(AppConfig.exchange("binance"), p.tp, p.exchangeDataChannel)),
+        BinancePublicTPDataChannel.props(AppConfig.exchange("binance"), p.tp, p.exchangePublicDataChannel)),
     "bitfinex" -> ExchangeInitStuff(
-      () => BitfinexDataChannel.props(AppConfig.exchange("bitfinex")),
+      () => BitfinexPublicDataChannel.props(AppConfig.exchange("bitfinex")),
       (p: TPDataChannelPropsParams) =>
-        BitfinexPublicTPDataChannel.props(AppConfig.exchange("bitfinex"), p.tp, p.exchangeDataChannel))
+        BitfinexPublicTPDataChannel.props(AppConfig.exchange("bitfinex"), p.tp, p.exchangePublicDataChannel))
   )
 
   // this is the reference to know exactly about which asset (or coin) we are talking at each Exchange

@@ -101,3 +101,4 @@ case class Exchange(exchangeName: String,
       log.error("received failure", cause)
   }
 }
+// TODO restart ExchangeTPDataManager when ticker data gets much too old (like 30 sec)

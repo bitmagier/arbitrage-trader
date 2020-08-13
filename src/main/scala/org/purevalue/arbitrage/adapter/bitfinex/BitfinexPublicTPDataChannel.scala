@@ -6,7 +6,7 @@ import akka.pattern.ask
 import akka.stream.scaladsl.{Flow, Keep, Sink}
 import akka.util.Timeout
 import org.purevalue.arbitrage.TPDataManager.StartStreamRequest
-import org.purevalue.arbitrage.adapter.bitfinex.BitfinexDataChannel.GetBitfinexTradePair
+import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataChannel.GetBitfinexTradePair
 import org.purevalue.arbitrage._
 import org.slf4j.LoggerFactory
 
