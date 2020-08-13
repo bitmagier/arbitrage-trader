@@ -133,24 +133,6 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
 
 
   def findBestShotBasedOnOrderBook(tradePair: TradePair): (Option[OrderBundle], Option[NoResultReason]) = {
-    //    val minBalanceBeforeTradeInUSDT = config.getDouble("order-bundle.min-balance-before-trade-in-usdt")
-    //    val whatsSpendablePerExchange: Map[String, Set[Asset]] =
-    //      tc.wallets
-    //        .map(pair => (
-    //          pair._1,
-    //          pair._2.assets
-    //            .filter(a => {
-    //              val usdt = convertToUSDT(a._2, a._1, dc);
-    //              usdt.isDefined && usdt.get >= minBalanceBeforeTradeInUSDT
-    //            })
-    //            .keySet))
-    //
-    //    val books4Buy = dc.orderBooks(tradePair).values
-    //      .filter(b => whatsSpendablePerExchange(b.exchange).contains(b.tradePair.quoteAsset))
-    //
-    //    val books4Sell = dc.orderBooks(tradePair).values
-    //      .filter(b => whatsSpendablePerExchange(b.exchange).contains(b.tradePair.baseAsset))
-
     // ignore wallet for now
     val books4Buy: Iterable[OrderBook] = tc.orderBooks.map(_._2(tradePair))
     val books4Sell: Iterable[OrderBook] = tc.orderBooks.map(_._2(tradePair))

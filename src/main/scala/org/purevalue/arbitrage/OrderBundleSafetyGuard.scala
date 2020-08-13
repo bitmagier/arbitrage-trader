@@ -36,6 +36,19 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
     r
   }
 
+  /**
+   * Because the liquidity providing and returning to reserve liquidity transactions (done by the Liquidity Manager)
+   * may ruin the plan to make a win out of the arbitrage trade bundle,
+   * we simulate the following transactions:
+   * - Providing Altcoins for the transaction(s) from a non-involved Reserve Asset on the same exchange
+   * - Transforming the bought Altcoins back to that Reserve Asset on the same exchange
+   * and then calculate the balance compared to the same 2 transactions done via the rate of the reference ticker
+   */
+  def balanceOfLiquidityTransformationCompensationTransactionsInUSDT(t: OrderBundle): Double = {
+    // TODO implement
+    0.0
+  }
+
   def isSafe(t: OrderBundle): Boolean = {
     if (t.bill.sumUSDT <= 0) {
       log.warn(s"${Emoji.Disagree} Got OrderBundle with negative balance: ${t.bill.sumUSDT}. I will not execute that one!")
@@ -48,6 +61,9 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
       log.debug(s"${Emoji.Disagree} $t")
       false
     } else if (!t.orders.forall(orderLimitCloseToTicker)) {
+      false
+    } else if ((t.bill.sumUSDT + balanceOfLiquidityTransformationCompensationTransactionsInUSDT(t)) < config.minTotalGainInUSDT) {
+      log.warn(s"${Emoji.LookingDown} Got interesting OrderBundle, but the costs of the necessary liquidity transformation transactions speak against it.")
       false
     } else {
       true

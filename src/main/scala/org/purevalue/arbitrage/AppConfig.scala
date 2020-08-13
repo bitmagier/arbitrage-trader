@@ -20,14 +20,14 @@ case class ExchangeConfig(exchangeName: String,
                           orderBooksEnabled: Boolean)
 case class OrderBundleSafetyGuardConfig(maximumReasonableWinPerOrderBundleUSDT: Double,
                                         maxOrderLimitTickerVariance: Double,
-                                        maxTickerAge: Duration)
+                                        maxTickerAge: Duration,
+                                        minTotalGainInUSDT: Double)
 case class TradeRoomConfig(extendedTickerExchanges: List[String],
                            orderBooksEnabled: Boolean,
                            internalCommunicationTimeout: Timeout,
                            statsInterval: Duration,
-                           orderBundleSafetyGuard: OrderBundleSafetyGuardConfig
-                          )
-case class LiquidityManagerConfig(liquidityStoringAssets: List[Asset])
+                           orderBundleSafetyGuard: OrderBundleSafetyGuardConfig)
+case class LiquidityManagerConfig(reserveAssets: List[Asset])
 
 object AppConfig {
   private val tradeRoomConfig: Config = ConfigFactory.load().getConfig("trade-room")
@@ -41,7 +41,8 @@ object AppConfig {
         case c: Config => OrderBundleSafetyGuardConfig(
           c.getDouble("max-reasonable-win-per-order-bundle-usdt"),
           c.getDouble("max-order-limit-ticker-variance"),
-          c.getDuration("max-ticker-age")
+          c.getDuration("max-ticker-age"),
+          c.getDouble("min-total-gain-in-usdt")
         )
       }
     )
@@ -70,7 +71,7 @@ object AppConfig {
 
   private val liquidityManagerConfig: Config = tradeRoomConfig.getConfig("liquidity-manager")
   val liquidityManager: LiquidityManagerConfig = LiquidityManagerConfig(
-    liquidityManagerConfig.getStringList("liquidity-storing-assets").asScala.map(e => Asset(e)).toList
+    liquidityManagerConfig.getStringList("reserve-assets").asScala.map(e => Asset(e)).toList
   )
 
   def trader(name: String): Config = tradeRoomConfig.getConfig(s"trader.$name")
