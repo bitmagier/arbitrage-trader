@@ -18,7 +18,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
     val diff = ((order.limit - bestOfferPrice) / bestOfferPrice).abs
     val valid = diff < config.maxOrderLimitTickerVariance
     if (!valid) {
-      log.warn(s"${Emoji.Disagree} Got OrderBundle where a order limit is too far away ($diff) from ticker value " +
+      log.warn(s"${Emoji.Disagree} Got OrderBundle where an order limit is too far away ($diff) from ticker value " +
         s"(max variance=${formatDecimal(config.maxOrderLimitTickerVariance)})")
       log.debug(s"$order, $ticker")
     }
@@ -120,8 +120,8 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
     val b: Option[Double] = balanceOfLiquidityTransformationCompensationTransactionsInUSDT(t)
     if (b.isEmpty) return false
     if ((t.bill.sumUSDT + b.get) < config.minTotalGainInUSDT) {
-      log.warn(s"${Emoji.LookingDown} Got interesting OrderBundle, but the sum of costs (${b.get} USDT) of the necessary " +
-        s"liquidity transformation transactions makes the whole thing uneconomic (total gain: ${t.bill.sumUSDT + b.get} USDT = lower than threshold ${config.minTotalGainInUSDT} USDT).")
+      log.debug(s"${Emoji.LookingDown} Got interesting $t, but the sum of costs (${formatDecimal(b.get)} USDT) of the necessary " +
+        s"liquidity transformation transactions makes the whole thing uneconomic (total gain: ${formatDecimal(t.bill.sumUSDT + b.get)} USDT = lower than threshold ${config.minTotalGainInUSDT} USDT).")
       false
     } else true
   }

@@ -113,12 +113,12 @@ object OrderBill {
    */
   def calcBalanceSheet(order: Order): Seq[CryptoValue] = {
     val result = ArrayBuffer[CryptoValue]()
-      order.calcIncomingLiquidity match {
-        case v: LocalCryptoValue => result.append(CryptoValue(v.asset, v.amount))
-      }
-      order.calcOutgoingLiquidity match {
-        case v: LocalCryptoValue => result.append(CryptoValue(v.asset, -v.amount))
-     }
+    order.calcIncomingLiquidity match {
+      case v: LocalCryptoValue => result.append(CryptoValue(v.asset, v.amount))
+    }
+    order.calcOutgoingLiquidity match {
+      case v: LocalCryptoValue => result.append(CryptoValue(v.asset, -v.amount))
+    }
     result
   }
 
@@ -342,25 +342,26 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
         .mkString(", ")
     }
 
-    wallets.map { case (exchange, b) => (
-      exchange,
-      CryptoValue(
-        Bitcoin, // conversion to BTC is expected to work ALWAYS!
-        b.balances
-          .map(e => CryptoValue(e._2.asset, e._2.amountAvailable).convertTo(Bitcoin, tradeContext).get)
-          .map(_.amount)
-          .sum
-      ))
-    }
-    log.info(s"Total available balances: ")
+    val liquidityPerExchange: Map[String, CryptoValue] =
+      wallets.map { case (exchange, b) => (
+        exchange,
+        CryptoValue(
+          Bitcoin, // conversion to BTC is expected to work ALWAYS!
+          b.balances
+            .map(e => CryptoValue(e._2.asset, e._2.amountAvailable).convertTo(Bitcoin, tradeContext).get)
+            .map(_.amount)
+            .sum
+        ))
+      }.toMap
+    log.info(s"Available liquidity: $liquidityPerExchange")
 
     val freshestTicker = dataAge.maxBy(_._2.tickerTS.toEpochMilli)
     val oldestTicker = dataAge.minBy(_._2.tickerTS.toEpochMilli)
     log.info(s"${Emoji.Robot} TradeRoom stats: [general] " +
-      s"ticker:[${toEntriesPerExchange(tickers)}]," +
-      s" oldest: ${oldestTicker._1} ${Duration.between(oldestTicker._2.tickerTS, Instant.now).toMillis} ms," +
-      s" freshest: ${freshestTicker._1} ${Duration.between(freshestTicker._2.tickerTS, Instant.now).toMillis} ms," +
-      s" / ExtendedTicker:[${toEntriesPerExchange(extendedTickers)}], " +
+      s"ticker:[${toEntriesPerExchange(tickers)}]" +
+      s" (oldest: ${oldestTicker._1} ${Duration.between(oldestTicker._2.tickerTS, Instant.now).toMillis} ms," +
+      s" freshest: ${freshestTicker._1} ${Duration.between(freshestTicker._2.tickerTS, Instant.now).toMillis} ms)" +
+      s" / ExtendedTicker:[${toEntriesPerExchange(extendedTickers)}]" +
       s" / OrderBooks:[${toEntriesPerExchange(orderBooks)}]")
     if (config.orderBooksEnabled) {
       val orderBookTop3 = orderBooks.flatMap(_._2.values)
@@ -405,4 +406,3 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
 // TODO shudown app in case of serious exceptions
 // TODO add feature Exchange-PlatformStatus to cover Maintainance periods
-// TODO later check order books of opposide trade direction - assure we have exactly one order book per exchange and 2 assets
