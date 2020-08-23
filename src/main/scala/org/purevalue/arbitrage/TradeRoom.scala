@@ -353,7 +353,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
             .sum
         ))
       }.map(e => s"${e._1}: ${e._2}").mkString(", ")
-    log.info(s"Available liquidity: ${liquidityPerExchange}")
+    log.info(s"${Emoji.Robot}  Available liquidity sums: ${liquidityPerExchange}")
 
     val freshestTicker = dataAge.maxBy(_._2.tickerTS.toEpochMilli)
     val oldestTicker = dataAge.minBy(_._2.tickerTS.toEpochMilli)
