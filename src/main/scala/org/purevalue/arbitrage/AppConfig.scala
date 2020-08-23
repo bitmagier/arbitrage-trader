@@ -5,6 +5,7 @@ import java.util.concurrent.TimeUnit
 
 import akka.util.Timeout
 import com.typesafe.config.{Config, ConfigFactory}
+import org.slf4j.LoggerFactory
 
 import scala.collection.JavaConverters._
 import scala.concurrent.duration.FiniteDuration
@@ -30,7 +31,9 @@ case class TradeRoomConfig(extendedTickerExchanges: List[String],
 case class LiquidityManagerConfig(reserveAssets: List[Asset])
 
 object AppConfig {
-  private val tradeRoomConfig: Config = ConfigFactory.load().getConfig("trade-room")
+  private val log = LoggerFactory.getLogger("AppConfig")
+  private val config = ConfigFactory.load()
+  private val tradeRoomConfig: Config = config.getConfig("trade-room")
   val tradeRoom: TradeRoomConfig = {
     TradeRoomConfig(
       tradeRoomConfig.getStringList("reference-ticker-exchanges").asScala.toList,
@@ -69,11 +72,14 @@ object AppConfig {
 
   def exchange(name: String): ExchangeConfig = exchangeConfig(name, exchangesConfig.getConfig(name))
 
-  private val liquidityManagerConfig: Config = tradeRoomConfig.getConfig("liquidity-manager")
+  private val liquidityManagerConfig: Config = config.getConfig("liquidity-manager")
   val liquidityManager: LiquidityManagerConfig = LiquidityManagerConfig(
     liquidityManagerConfig.getStringList("reserve-assets").asScala.map(e => Asset(e)).toList
   )
 
-  def trader(name: String): Config = tradeRoomConfig.getConfig(s"trader.$name")
+  def trader(name: String): Config = config.getConfig(s"trader.$name")
+
+  log.info(s"Reserve Assets: ${liquidityManager.reserveAssets}")
 }
+
 

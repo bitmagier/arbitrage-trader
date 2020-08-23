@@ -4,7 +4,7 @@ import akka.actor.{Actor, ActorSystem, Props, Status}
 import org.purevalue.arbitrage.Exchange.{GetTradePairs, TradePairs}
 import org.purevalue.arbitrage.HttpUtils.queryJson
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataChannel.GetBitfinexTradePair
-import org.purevalue.arbitrage.{AppConfig, Asset, ExchangeConfig, GlobalConfig, Main, TradePair}
+import org.purevalue.arbitrage._
 import org.slf4j.LoggerFactory
 import spray.json._
 

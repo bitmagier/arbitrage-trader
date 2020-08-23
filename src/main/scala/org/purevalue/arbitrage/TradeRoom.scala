@@ -14,8 +14,8 @@ import org.purevalue.arbitrage.Utils.formatDecimal
 import org.purevalue.arbitrage.trader.FooTrader
 import org.slf4j.LoggerFactory
 
-import scala.collection._
 import scala.collection.concurrent.TrieMap
+import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.concurrent.{Await, ExecutionContextExecutor, TimeoutException}
 
@@ -28,24 +28,24 @@ object TradeSide extends TradeSide {
 case class CryptoValue(asset: Asset, amount: Double) {
   override def toString: String = s"${formatDecimal(amount)} ${asset.officialSymbol}"
 
-  def convertTo(targetAsset: Asset, tc: TradeContext): Option[CryptoValue] = {
+  def convertTo(targetAsset: Asset, findConversionRate: TradePair => Option[Double]): Option[CryptoValue] = {
     if (this.asset == targetAsset)
       Some(this)
     else {
       // try direct conversion first
-      tc.findReferenceTicker(TradePair.of(this.asset, targetAsset)) match {
-        case Some(ticker) =>
-          Some(CryptoValue(targetAsset, amount * ticker.weightedAveragePrice))
+      findConversionRate(TradePair.of(this.asset, targetAsset)) match {
+        case Some(rate) =>
+          Some(CryptoValue(targetAsset, amount * rate))
         case None =>
-          tc.findReferenceTicker(TradePair.of(targetAsset, this.asset)) match {
-            case Some(ticker) =>
-              Some(CryptoValue(targetAsset, amount / ticker.weightedAveragePrice))
-            case None =>
+          findConversionRate(TradePair.of(targetAsset, this.asset)) match { // try reverse ticker
+            case Some(rate) =>
+              Some(CryptoValue(targetAsset, amount / rate))
+            case None => // try conversion via BTC as last option
               None
               if ((this.asset != Bitcoin && targetAsset != Bitcoin)
-                && tc.findReferenceTicker(TradePair.of(this.asset, Bitcoin)).isDefined
-                && tc.findReferenceTicker(TradePair.of(targetAsset, Bitcoin)).isDefined) {
-                this.convertTo(Bitcoin, tc).get.convertTo(targetAsset, tc)
+                && findConversionRate(TradePair.of(this.asset, Bitcoin)).isDefined
+                && findConversionRate(TradePair.of(targetAsset, Bitcoin)).isDefined) {
+                this.convertTo(Bitcoin, findConversionRate).get.convertTo(targetAsset, findConversionRate)
               } else {
                 None
               }
@@ -53,19 +53,40 @@ case class CryptoValue(asset: Asset, amount: Double) {
       }
     }
   }
+
+  def convertTo(targetAsset: Asset, tc: TradeContext): Option[CryptoValue] =
+    convertTo(targetAsset, tp => tc.findReferenceTicker(tp).map(_.weightedAveragePrice))
 }
+/**
+ * CryptoValue on a specific exchange
+ */
+case class LocalCryptoValue(exchange: String, asset: Asset, amount: Double)
 
 /** Order: a single trade request before it's execution */
 case class Order(id: UUID,
                  orderBundleId: UUID,
                  exchange: String,
                  tradePair: TradePair,
-                 direction: TradeSide,
+                 tradeSide: TradeSide,
                  fee: Fee,
                  amountBaseAsset: Double,
                  limit: Double) {
-  override def toString: String = s"Order($id, orderBundleId:$orderBundleId, $exchange, $tradePair, $direction, $fee, " +
+  override def toString: String = s"Order($id, orderBundleId:$orderBundleId, $exchange, $tradePair, $tradeSide, $fee, " +
     s"amountBaseAsset:${formatDecimal(amountBaseAsset)}, limit:${formatDecimal(limit)})"
+
+  // absolute (positive) amount minus fees
+  def calcOutgoingLiquidity: LocalCryptoValue = tradeSide match {
+    case TradeSide.Buy => LocalCryptoValue(exchange, tradePair.quoteAsset, limit * amountBaseAsset * (1.0 + fee.takerFee))
+    case TradeSide.Sell => LocalCryptoValue(exchange, tradePair.baseAsset, amountBaseAsset)
+    case _ => throw new IllegalArgumentException
+  }
+
+  // absolute (positive) amount minus fees
+  def calcIncomingLiquidity: LocalCryptoValue = tradeSide match {
+    case TradeSide.Buy => LocalCryptoValue(exchange, tradePair.baseAsset, amountBaseAsset)
+    case TradeSide.Sell => LocalCryptoValue(exchange, tradePair.quoteAsset, limit * amountBaseAsset * (1.0 - fee.takerFee))
+    case _ => throw new IllegalArgumentException
+  }
 }
 
 /** Trade: a successfully executed Order */
@@ -86,34 +107,37 @@ case class OrderBill(balanceSheet: Seq[CryptoValue], sumUSDT: Double) {
   override def toString: String = s"OrderBill(balanceSheet:$balanceSheet, sumUSDT:${formatDecimal(sumUSDT)})"
 }
 object OrderBill {
+  /**
+   * Calculates the balance sheet of that order
+   * incoming value have positive amount; outgoing value have negative amount
+   */
   def calcBalanceSheet(order: Order): Seq[CryptoValue] = {
-    if (order.direction == TradeSide.Buy)
-      Seq(
-        CryptoValue(order.tradePair.baseAsset, order.amountBaseAsset),
-        CryptoValue(order.tradePair.quoteAsset, -(1.0d + order.fee.takerFee) * order.amountBaseAsset * order.limit),
-      )
-    else if (order.direction == TradeSide.Sell) {
-      Seq(
-        CryptoValue(order.tradePair.baseAsset, -order.amountBaseAsset),
-        CryptoValue(order.tradePair.quoteAsset, (1.0d - order.fee.takerFee) * order.amountBaseAsset * order.limit)
-      )
-    } else throw new IllegalArgumentException()
+    val result = ArrayBuffer[CryptoValue]()
+      order.calcIncomingLiquidity match {
+        case v: LocalCryptoValue => result.append(CryptoValue(v.asset, v.amount))
+      }
+      order.calcOutgoingLiquidity match {
+        case v: LocalCryptoValue => result.append(CryptoValue(v.asset, -v.amount))
+     }
+    result
   }
 
-  def aggregateValues(balanceSheet: Seq[CryptoValue], targetAsset: Asset, tc: TradeContext): Double = {
+  def aggregateValues(balanceSheet: Iterable[CryptoValue], targetAsset: Asset, findReferenceRate: TradePair => Option[Double]): Double = {
     val sumByAsset: Iterable[CryptoValue] = balanceSheet
       .groupBy(_.asset)
       .map(e => CryptoValue(e._1, e._2.map(_.amount).sum))
 
     sumByAsset.map { v =>
-      v.convertTo(targetAsset, tc) match {
+      v.convertTo(targetAsset, findReferenceRate) match {
         case Some(v) => v.amount
         case None =>
-          val conversionOptions: Set[TradePair] = tc.extendedTickers.values.flatMap(_.keySet).toSet
-          throw new RuntimeException(s"Unable to convert ${v.asset} to $targetAsset. Here are our total conversion options: $conversionOptions")
+          throw new RuntimeException(s"Unable to convert ${v.asset} to $targetAsset")
       }
     }.sum
   }
+
+  def aggregateValues(balanceSheet: Iterable[CryptoValue], targetAsset: Asset, tc: TradeContext): Double =
+    aggregateValues(balanceSheet, targetAsset, tp => tc.findReferenceTicker(tp).map(_.weightedAveragePrice))
 
   def calc(orders: Seq[Order], tc: TradeContext): OrderBill = {
     val balanceSheet: Seq[CryptoValue] = orders.flatMap(calcBalanceSheet)
@@ -134,27 +158,13 @@ object TradeRoom {
    * An always-uptodate view on the TradeRoom Pre-Trade Data.
    * Modification of the content is NOT permitted by users of the TRadeContext (even if technically possible)!
    */
-  case class TradeContext(tickers: Map[String, Map[TradePair, Ticker]],
-                          extendedTickers: Map[String, Map[TradePair, ExtendedTicker]],
-                          orderBooks: Map[String, Map[TradePair, OrderBook]],
-                          balances: Map[String, Wallet],
-                          fees: Map[String, Fee]) {
+  case class TradeContext(tickers: scala.collection.Map[String, scala.collection.Map[TradePair, Ticker]],
+                          extendedTickers: scala.collection.Map[String, scala.collection.Map[TradePair, ExtendedTicker]],
+                          orderBooks: scala.collection.Map[String, scala.collection.Map[TradePair, OrderBook]],
+                          balances: scala.collection.Map[String, Wallet],
+                          fees: scala.collection.Map[String, Fee]) {
 
-    /**
-     * find the best ticker stats for the tradepair prioritized by exchange via config
-     */
-    def findReferenceTicker(tradePair: TradePair): Option[ExtendedTicker] = {
-      for (exchange <- AppConfig.tradeRoom.extendedTickerExchanges) {
-        extendedTickers.get(exchange) match {
-          case Some(eTickers) => eTickers.get(tradePair) match {
-            case Some(ticker) => return Some(ticker)
-            case _ =>
-          }
-          case _ =>
-        }
-      }
-      None
-    }
+    def findReferenceTicker(tp: TradePair): Option[ExtendedTicker] = TradeRoom.findReferenceTicker(tp, extendedTickers)
   }
 
   /** High level order bundle, covering 2 or more trader orders */
@@ -180,6 +190,23 @@ object TradeRoom {
 
   case class LogStats()
 
+
+  /**
+   * find the best ticker stats for the tradepair prioritized by exchange via config
+   */
+  def findReferenceTicker(tradePair: TradePair, extendedTickers: scala.collection.Map[String, scala.collection.Map[TradePair, ExtendedTicker]]): Option[ExtendedTicker] = {
+    for (exchange <- AppConfig.tradeRoom.extendedTickerExchanges) {
+      extendedTickers.get(exchange) match {
+        case Some(eTickers) => eTickers.get(tradePair) match {
+          case Some(ticker) => return Some(ticker)
+          case _ =>
+        }
+        case _ =>
+      }
+    }
+    None
+  }
+
   def props(config: TradeRoomConfig): Props = Props(new TradeRoom(config))
 }
 
@@ -198,11 +225,12 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   private var traders: Map[String, ActorRef] = Map()
 
   // a map per exchange
-  private val tickers: concurrent.Map[String, concurrent.Map[TradePair, Ticker]] = TrieMap()
-  private val extendedTickers: concurrent.Map[String, concurrent.Map[TradePair, ExtendedTicker]] = TrieMap()
-  private val orderBooks: concurrent.Map[String, concurrent.Map[TradePair, OrderBook]] = TrieMap()
-  private val wallets: concurrent.Map[String, Wallet] = TrieMap()
-  private val dataAge: concurrent.Map[String, TPDataTimestamps] = TrieMap()
+  type ConcurrentMap[A, B] = scala.collection.concurrent.Map[A, B]
+  private val tickers: ConcurrentMap[String, ConcurrentMap[TradePair, Ticker]] = TrieMap()
+  private val extendedTickers: ConcurrentMap[String, ConcurrentMap[TradePair, ExtendedTicker]] = TrieMap()
+  private val orderBooks: ConcurrentMap[String, ConcurrentMap[TradePair, OrderBook]] = TrieMap()
+  private val wallets: ConcurrentMap[String, Wallet] = TrieMap()
+  private val dataAge: ConcurrentMap[String, TPDataTimestamps] = TrieMap()
 
   private val fees: Map[String, Fee] = Map( // TODO
     "binance" -> Fee("binance", AppConfig.exchange("binance").makerFee, AppConfig.exchange("binance").takerFee),
@@ -211,7 +239,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
   private val tradeContext: TradeContext = TradeContext(tickers, extendedTickers, orderBooks, wallets, fees)
 
-  private val orderBundleSafetyGuard = OrderBundleSafetyGuard(config.orderBundleSafetyGuard, tickers, dataAge)
+  private val orderBundleSafetyGuard = OrderBundleSafetyGuard(config.orderBundleSafetyGuard, tickers, extendedTickers, dataAge)
 
   //  private var activeOrders: Map[UUID, Order] = Map() // orderId -> Order; orders, belonging to activeOrderBundles & active at the corresponding exchange
   //  private var tradesPerActiveOrderBundle: Map[UUID, ListBuffer[Trade]] = Map() // orderBundleId -> Trade; trades, belonging to activeOrderBundles & executed at an exchange
@@ -224,17 +252,27 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   val schedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(30.seconds, scheduleRate, self, LogStats())
 
 
+  def checkAndLockRequiredLiquidity(values: Iterable[LocalCryptoValue]): Boolean = {
+    true // TODO ask liquidity manager to lock that amount of CryptoValue on the specified exchanges for us
+  }
+
   def placeOrderBundleOrders(t: OrderBundle): Unit = {
     if (orderBundleSafetyGuard.isSafe(t)) {
-      log.info(s"${Emoji.Excited} [simulated] Placing OrderBundle: $t")
+      val requiredLiquidity: Seq[LocalCryptoValue] = t.orders.map(_.calcOutgoingLiquidity)
+      if (checkAndLockRequiredLiquidity(requiredLiquidity)) {
+        log.info(s"${Emoji.Excited} [simulated] Placing checked $t")
+        // TODO don't forget to unlock requested liquidity after order is completed
+      } else {
+        log.info(s"${Emoji.Robot} [simulated] Requesting liquidity for $t: $requiredLiquidity")
+      }
     }
   }
 
   def initExchange(exchangeName: String, exchangeInit: ExchangeInitStuff): Unit = {
     val camelName = exchangeName.substring(0, 1).toUpperCase + exchangeName.substring(1)
-    tickers += exchangeName -> concurrent.TrieMap[TradePair, Ticker]()
-    extendedTickers += exchangeName -> concurrent.TrieMap[TradePair, ExtendedTicker]()
-    orderBooks += exchangeName -> concurrent.TrieMap[TradePair, OrderBook]()
+    tickers += exchangeName -> TrieMap[TradePair, Ticker]()
+    extendedTickers += exchangeName -> TrieMap[TradePair, ExtendedTicker]()
+    orderBooks += exchangeName -> TrieMap[TradePair, OrderBook]()
     dataAge += exchangeName -> TPDataTimestamps(Instant.MIN, Instant.MIN, Instant.MIN)
 
     wallets += exchangeName -> Wallet(Map())
@@ -296,7 +334,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
 
   def logStats(): Unit = {
-    def toEntriesPerExchange[T](m: Map[String, Map[TradePair, T]]): String = {
+    def toEntriesPerExchange[T](m: scala.collection.Map[String, scala.collection.Map[TradePair, T]]): String = {
       m.map(e => (e._1, e._2.values.size))
         .toSeq
         .sortBy(_._1)
@@ -316,15 +354,14 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     }
     log.info(s"Total available balances: ")
 
-    val now = Instant.now
     val freshestTicker = dataAge.maxBy(_._2.tickerTS.toEpochMilli)
     val oldestTicker = dataAge.minBy(_._2.tickerTS.toEpochMilli)
     log.info(s"${Emoji.Robot} TradeRoom stats: [general] " +
       s"ticker:[${toEntriesPerExchange(tickers)}]," +
-      s" oldest: ${oldestTicker._1} ${Duration.between(oldestTicker._2.tickerTS, now).toMillis} ms," +
-      s" freshest: ${freshestTicker._1} ${Duration.between(freshestTicker._2.tickerTS, now).toMillis} ms," +
-      s" / extendedTicker:[${toEntriesPerExchange(extendedTickers)}], " +
-      s" / orderBooks:[${toEntriesPerExchange(orderBooks)}]")
+      s" oldest: ${oldestTicker._1} ${Duration.between(oldestTicker._2.tickerTS, Instant.now).toMillis} ms," +
+      s" freshest: ${freshestTicker._1} ${Duration.between(freshestTicker._2.tickerTS, Instant.now).toMillis} ms," +
+      s" / ExtendedTicker:[${toEntriesPerExchange(extendedTickers)}], " +
+      s" / OrderBooks:[${toEntriesPerExchange(orderBooks)}]")
     if (config.orderBooksEnabled) {
       val orderBookTop3 = orderBooks.flatMap(_._2.values)
         .map(e => (e.bids.size + e.asks.size, e))
@@ -334,7 +371,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
         .take(3)
         .map(e => s"[${e._2.bids.size} bids/${e._2.asks.size} asks: ${e._2.exchange}:${e._2.tradePair}] ")
         .toList
-      log.info(s"${Emoji.Robot} TradeRoom stats: [biggest 3 orderbooks] : $orderBookTop3")
+      log.info(s"${Emoji.Robot} TradeRoom stats: [biggest 3 OrderBooks] : $orderBookTop3")
       val orderBookBottom3 = orderBooks.flatMap(_._2.values)
         .map(e => (e.bids.size + e.asks.size, e))
         .toSeq
@@ -342,7 +379,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
         .take(3)
         .map(e => s"[${e._2.bids.size} bids/${e._2.asks.size} asks: ${e._2.exchange}:${e._2.tradePair}] ")
         .toList
-      log.info(s"${Emoji.Robot} TradeRoom stats: [smallest 3 orderbooks] : $orderBookBottom3")
+      log.info(s"${Emoji.Robot} TradeRoom stats: [smallest 3 OrderBooks] : $orderBookBottom3")
     }
   }
 

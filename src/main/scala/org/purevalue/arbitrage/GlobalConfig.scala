@@ -72,7 +72,7 @@ object GlobalConfig {
         BitfinexPublicTPDataChannel.props(AppConfig.exchange("bitfinex"), p.tp, p.exchangePublicDataChannel))
   )
 
-  // this is the reference to know exactly about which asset (or coin) we are talking at each Exchange
+  // this is the reference to know exactly about which asset (or coin) we are talking (no matter at which exchange)
   val AllAssets: Map[String, Asset] = Seq(
     Asset("BTC", "Bitcoin"),
     Asset("ETH", "Ethereum"),
@@ -90,7 +90,7 @@ object GlobalConfig {
     Asset("XLM", "Stellar"),
     Asset("XMR", "Monero"),
     Asset("TRX", "TRON"),
-    //    Asset("USDC", "USD Coin"),
+    Asset("USDC", "USD Coin"),
     Asset("HT", "Huobi Token"),
     Asset("VET", "VeChain"),
     Asset("NEO", "Neo"),
@@ -118,22 +118,22 @@ object GlobalConfig {
     Asset("ZRX", "0x"),
     Asset("THETA", "THETA"),
     Asset("BTT", "BitTorrent"),
-    Asset("ALGO", "Algorand")
-    //    Asset("HYN", "Hyperion"),
-    //    Asset("QTUM", "Qtum"),
-    //    Asset("PAX", "Paxos Standard"),
-    //    Asset("OMG", "OMG Network"),
-    //    Asset("REP", "Augur"),
-    //    Asset("HBAR", "Hedera Hashgraph"),
-    //    Asset("TUSD", "TrueUSD"),
-    //    Asset("ICX", "ICON"),
-    //    Asset("ZIL", "Zilliqa"),
-    //    Asset("DCR", "Decred"),
-    //    Asset("BTG", "Bitcoin Gold"),
-    //    Asset("BCD", "Bitcoin Diamond"),
-    //    Asset("LSK", "Lisk"),
-    //    Asset("WAVES", "Waves"),
-    //    Asset("SXP", "Swipe")
+    Asset("ALGO", "Algorand"),
+    Asset("HYN", "Hyperion"),
+    Asset("QTUM", "Qtum"),
+    Asset("PAX", "Paxos Standard"),
+    Asset("OMG", "OMG Network"),
+    Asset("REP", "Augur"),
+    Asset("HBAR", "Hedera Hashgraph"),
+    Asset("TUSD", "TrueUSD"),
+    Asset("ICX", "ICON"),
+    Asset("ZIL", "Zilliqa"),
+    Asset("DCR", "Decred"),
+    // Asset("BTG", "Bitcoin Gold"),
+    Asset("BCD", "Bitcoin Diamond"),
+    Asset("LSK", "Lisk"),
+    Asset("WAVES", "Waves"),
+    Asset("SXP", "Swipe")
   ).map(a => (a.officialSymbol, a)).toMap
 
   log.info(s"Total available assets: ${AllAssets.keys}")

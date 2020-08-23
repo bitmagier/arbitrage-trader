@@ -6,16 +6,15 @@ import org.purevalue.arbitrage.TradeRoom.OrderBundle
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.slf4j.LoggerFactory
 
-import scala.collection._
-
 case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
-                                  tickers: Map[String, concurrent.Map[TradePair, Ticker]],
-                                  dataAge: Map[String, TPDataTimestamps]) {
+                                  tickers: scala.collection.Map[String, scala.collection.concurrent.Map[TradePair, Ticker]],
+                                  extendedTicker: scala.collection.Map[String, scala.collection.Map[TradePair, ExtendedTicker]],
+                                  dataAge: scala.collection.Map[String, TPDataTimestamps]) {
   private val log = LoggerFactory.getLogger(classOf[OrderBundleSafetyGuard])
 
   private def orderLimitCloseToTicker(order: Order): Boolean = {
     val ticker = tickers(order.exchange)(order.tradePair)
-    val bestOfferPrice: Double = if (order.direction == TradeSide.Buy) ticker.lowestAskPrice else ticker.highestBidPrice
+    val bestOfferPrice: Double = if (order.tradeSide == TradeSide.Buy) ticker.lowestAskPrice else ticker.highestBidPrice
     val diff = ((order.limit - bestOfferPrice) / bestOfferPrice).abs
     val valid = diff < config.maxOrderLimitTickerVariance
     if (!valid) {
@@ -42,11 +41,89 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
    * we simulate the following transactions:
    * - Providing Altcoins for the transaction(s) from a non-involved Reserve Asset on the same exchange
    * - Transforming the bought Altcoins back to that Reserve Asset on the same exchange
-   * and then calculate the balance compared to the same 2 transactions done via the rate of the reference ticker
+   * and then calculate the balance
+   *
+   * For instance:
+   * Liquidity reserve Assets are: BTC und USDT
+   * TradeBundleTrades are: Exchange1: ETC:BTC Buy   und Exchange2: ETC:BTC Sell  amount=3.5 ETC
+   * Altcoin liquidity providing: On Exchange2: Buy 3.5 ETC from USDT         => + 3.5 ETC - 3.5 * (1.0 + fee) * (Rate[ETC:USDT] on Exchange2) USDT
+   * Reserve liquidity back-conversion: On Exchange1: Buy USDT from 3.5 ETC   => - 3.5 ETC + 3.5 * (1.0 + fee) * (Rate[ETC:USDT] on Exchange1) USDT
+   *
+   * It is possible to use different Liquidity reserve assets for different involved assets/trades
    */
-  def balanceOfLiquidityTransformationCompensationTransactionsInUSDT(t: OrderBundle): Double = {
-    // TODO implement
-    0.0
+  def balanceOfLiquidityTransformationCompensationTransactionsInUSDT(t: OrderBundle): Option[Double] = {
+    val allReserveAssets: List[Asset] = AppConfig.liquidityManager.reserveAssets
+    val involvedAssets: Set[Asset] = t.orders.flatMap(e => Seq(e.tradePair.baseAsset, e.tradePair.quoteAsset)).toSet
+    val uninvolvedReserveAssets: List[Asset] = allReserveAssets.filterNot(involvedAssets.contains)
+
+    val toProvide: Iterable[LocalCryptoValue] = t.orders.map(_.calcOutgoingLiquidity).filterNot(allReserveAssets.contains)
+    val toConvertBack: Iterable[LocalCryptoValue] = t.orders.map(_.calcIncomingLiquidity).filterNot(allReserveAssets.contains)
+
+    def findUsableReserveAsset(exchange: String, coin: Asset, possibleReserveAssets: List[Asset]): Option[Asset] = {
+      possibleReserveAssets.find(r => tickers(exchange).contains(TradePair.of(coin, r)))
+    }
+
+    val unableToProvideConversionForCoin: Option[LocalCryptoValue] = {
+      (toProvide ++ toConvertBack).find(v => findUsableReserveAsset(v.exchange, v.asset, uninvolvedReserveAssets).isEmpty)
+    }
+    if (unableToProvideConversionForCoin.isDefined) {
+      log.warn(s"${Emoji.EyeRoll} Sorry, no suitable reserve asset found to support reserve liquidity conversion from/to ${unableToProvideConversionForCoin.get.asset} on ${unableToProvideConversionForCoin.get.exchange}")
+      return None
+    }
+
+    val transactions =
+      toProvide.map(e => {
+        val tradePair = TradePair.of(e.asset, findUsableReserveAsset(e.exchange, e.asset, uninvolvedReserveAssets).get)
+        Order(null, null,
+          e.exchange,
+          tradePair,
+          TradeSide.Buy,
+          Fee(e.exchange, AppConfig.exchange(e.exchange).makerFee, AppConfig.exchange(e.exchange).takerFee), // TODO take real values
+          e.amount,
+          tickers(e.exchange)(tradePair).priceEstimate
+        )
+      }) ++ toConvertBack.map(e => {
+          val tradePair = TradePair.of(e.asset, findUsableReserveAsset(e.exchange, e.asset, uninvolvedReserveAssets).get)
+          Order(null, null,
+            e.exchange,
+            tradePair,
+            TradeSide.Sell,
+            Fee(e.exchange, AppConfig.exchange(e.exchange).makerFee, AppConfig.exchange(e.exchange).takerFee), // TODO take real values
+            e.amount,
+            tickers(e.exchange)(tradePair).priceEstimate
+          )
+        })
+
+    val balanceSheet: Iterable[CryptoValue] = transactions.flatMap(OrderBill.calcBalanceSheet)
+
+    // self check
+    val groupedAndCleanedUpBalanceSheet: Iterable[CryptoValue] =
+      balanceSheet
+        .groupBy(_.asset)
+        .map(e => CryptoValue(e._1, e._2.map(_.amount).sum)) // summed up values of same asset
+        .filterNot(_.amount == 0.0d) // ignore zeros
+
+    if (!groupedAndCleanedUpBalanceSheet.forall(v => allReserveAssets.contains(v.asset))) {
+      log.error(s"Cleaned up balance sheet should contain reserve asset values only! Instead it is found: $groupedAndCleanedUpBalanceSheet")
+      None
+    }
+
+    Some(
+      OrderBill.aggregateValues(
+        groupedAndCleanedUpBalanceSheet,
+        Asset.USDT,
+        tp => TradeRoom.findReferenceTicker(tp, extendedTicker).map(_.weightedAveragePrice)))
+  }
+
+
+  def totalTransactionCostsInRage(t: OrderBundle): Boolean = {
+    val b: Option[Double] = balanceOfLiquidityTransformationCompensationTransactionsInUSDT(t)
+    if (b.isEmpty) return false
+    if ((t.bill.sumUSDT + b.get) < config.minTotalGainInUSDT) {
+      log.warn(s"${Emoji.LookingDown} Got interesting OrderBundle, but the sum of costs (${b.get} USDT) of the necessary " +
+        s"liquidity transformation transactions makes the whole thing uneconomic (total gain: ${t.bill.sumUSDT + b.get} USDT = lower than threshold ${config.minTotalGainInUSDT} USDT).")
+      false
+    } else true
   }
 
   def isSafe(t: OrderBundle): Boolean = {
@@ -60,14 +137,9 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
       log.warn(s"${Emoji.Disagree} Got OrderBundle with unbelievable high estimated win of ${formatDecimal(t.bill.sumUSDT)} USDT. I will rather not execute that one - seem to be a bug!")
       log.debug(s"${Emoji.Disagree} $t")
       false
-    } else if (!t.orders.forall(orderLimitCloseToTicker)) {
-      false
-    } else if ((t.bill.sumUSDT + balanceOfLiquidityTransformationCompensationTransactionsInUSDT(t)) < config.minTotalGainInUSDT) {
-      log.warn(s"${Emoji.LookingDown} Got interesting OrderBundle, but the costs of the necessary liquidity transformation transactions speak against it.")
-      false
     } else {
-      true
+      t.orders.forall(orderLimitCloseToTicker) &&
+        totalTransactionCostsInRage(t)
     }
   }
-
 }

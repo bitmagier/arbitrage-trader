@@ -1,7 +1,5 @@
 package org.purevalue.arbitrage.adapter.bitfinex
 
-import java.time.LocalDateTime
-
 import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model._

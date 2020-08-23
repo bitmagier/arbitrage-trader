@@ -4,7 +4,7 @@ import akka.Done
 import akka.actor.{Actor, ActorRef, Props}
 import akka.stream.scaladsl.Sink
 
-import scala.collection.{Map, Seq}
+import scala.collection.Map
 import scala.concurrent.Future
 
 trait ExchangeAccountStreamData

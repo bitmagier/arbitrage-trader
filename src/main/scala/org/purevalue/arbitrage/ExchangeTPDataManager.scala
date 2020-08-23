@@ -20,7 +20,9 @@ case class Ticker(exchange: String,
                   highestBidQuantity: Option[Double],
                   lowestAskPrice: Double,
                   lowestAskQuantity: Option[Double],
-                  lastPrice: Option[Double]) extends ExchangeTPStreamData
+                  lastPrice: Option[Double]) extends ExchangeTPStreamData {
+  def priceEstimate: Double = lastPrice.getOrElse((highestBidPrice+lowestAskPrice)/2)
+}
 case class ExtendedTicker(exchange: String,
                           tradePair: TradePair,
                           highestBidPrice: Double,

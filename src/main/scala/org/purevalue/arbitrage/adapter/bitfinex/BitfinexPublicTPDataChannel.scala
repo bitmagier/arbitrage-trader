@@ -1,13 +1,13 @@
 package org.purevalue.arbitrage.adapter.bitfinex
 
-import akka.{Done, NotUsed}
 import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
 import akka.pattern.ask
 import akka.stream.scaladsl.{Flow, Keep, Sink}
 import akka.util.Timeout
+import akka.{Done, NotUsed}
 import org.purevalue.arbitrage.TPDataManager.StartStreamRequest
-import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataChannel.GetBitfinexTradePair
 import org.purevalue.arbitrage._
+import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataChannel.GetBitfinexTradePair
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.{Await, Future}
