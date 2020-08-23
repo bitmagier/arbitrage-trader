@@ -111,7 +111,7 @@ object GlobalConfig {
     Asset("DAI", "Dai"),
     Asset("COMP", "Compound"),
     Asset("SNX", "Synthetix Network Token"),
-    Asset("DGB", "DigiByte"),
+  //  Asset("DGB", "DigiByte"),
     Asset("FTT", "FTX Token"),
     Asset("KNC", "Kyber Network"),
     Asset("ERD", "Elrond"),

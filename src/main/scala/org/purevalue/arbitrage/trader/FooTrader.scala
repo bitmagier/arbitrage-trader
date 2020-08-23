@@ -80,7 +80,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
     }
 
     if (highestBid._1 == lowestAsk._1) {
-      log.warn(s"${Emoji.SadAndConfused} [$tradePair] found highest bid $highestBid and lowest ask $lowestAsk on the same exchange.")
+      log.warn(s"${Emoji.SadAndConfused}  [$tradePair] found highest bid $highestBid and lowest ask $lowestAsk on the same exchange.")
       return (None, Some(Confused()))
     }
 
@@ -89,7 +89,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
     val amountBaseAsset: Double = CryptoValue(Asset("USDT"), tradeQuantityUSDT).convertTo(tradePair.baseAsset, tc) match {
       case Some(v) => v.amount
       case None =>
-        log.warn(s"${Emoji.NoSupport} Unable to convert ${tradePair.baseAsset} to USDT")
+        log.warn(s"${Emoji.NoSupport}  Unable to convert ${tradePair.baseAsset} to USDT")
         return (None, Some(NoUSDTConversion(tradePair.baseAsset))) // only want to have assets convertible to USDT here
     }
 
@@ -162,7 +162,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
     }
 
     if (highestBid._1 == lowestAsk._1) {
-      log.warn(s"${Emoji.SadAndConfused} [$tradePair] found highest bid $highestBid and lowest ask $lowestAsk on the same exchange.")
+      log.warn(s"${Emoji.SadAndConfused}  [$tradePair] found highest bid $highestBid and lowest ask $lowestAsk on the same exchange.")
       return (None, Some(Confused()))
     }
 
@@ -171,7 +171,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
     val amountBaseAsset: Double = CryptoValue(Asset("USDT"), tradeQuantityUSDT).convertTo(tradePair.baseAsset, tc) match {
       case Some(v) => v.amount
       case None =>
-        log.warn(s"${Emoji.NoSupport} Unable to convert ${tradePair.baseAsset} to USDT")
+        log.warn(s"${Emoji.NoSupport}  Unable to convert ${tradePair.baseAsset} to USDT")
         return (None, Some(NoUSDTConversion(tradePair.baseAsset))) // only want to have assets convertible to USDT here
     }
 
@@ -241,7 +241,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
   def lifeSign(): Unit = {
     val duration = Duration.between(lastLifeSign, Instant.now())
     if (duration.compareTo(config.getDuration("lifesign-interval")) > 0) {
-      log.info(s"${Emoji.Robot} FooTrader life sign: $shotsDelivered shots delivered. $numSearchesDiff search runs ($numSingleSearchesDiff single searches) done in last ${duration.toMinutes} minutes. Total search runs: $numSearchesTotal")
+      log.info(s"${Emoji.Robot}  FooTrader life sign: $shotsDelivered shots delivered. $numSearchesDiff search runs ($numSingleSearchesDiff single searches) done in last ${duration.toMinutes} minutes. Total search runs: $numSearchesTotal")
       val tickerChoicesAggregated: Map[Int, Int] = tc.tickers
         .values
         .flatMap(_.keys)
@@ -256,8 +256,8 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
         .values
         .foldLeft(Map[Int, Int]())((a, b) => a + (b -> (a.getOrElse(b, 0) + 1)))
 
-      log.info(s"${Emoji.Robot} FooTrader TradeContext: TickerChoicesAggregated: $tickerChoicesAggregated, OrderBookChoicesAggregated: $orderBookChoicesAggregated")
-      log.info(s"${Emoji.Robot} FooTrader no-result-reasons: $noResultReasonStats")
+      log.info(s"${Emoji.Robot}  FooTrader TradeContext: TickerChoicesAggregated: $tickerChoicesAggregated, OrderBookChoicesAggregated: $orderBookChoicesAggregated")
+      log.info(s"${Emoji.Robot}  FooTrader no-result-reasons: $noResultReasonStats")
       lastLifeSign = Instant.now()
       numSingleSearchesDiff = 0
       numSearchesDiff = 0

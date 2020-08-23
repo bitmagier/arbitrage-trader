@@ -260,10 +260,10 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     if (orderBundleSafetyGuard.isSafe(t)) {
       val requiredLiquidity: Seq[LocalCryptoValue] = t.orders.map(_.calcOutgoingLiquidity)
       if (checkAndLockRequiredLiquidity(requiredLiquidity)) {
-        log.info(s"${Emoji.Excited} [simulated] Placing checked $t")
+        log.info(s"${Emoji.Excited}  [simulated] Placing checked $t")
         // TODO don't forget to unlock requested liquidity after order is completed
       } else {
-        log.info(s"${Emoji.Robot} [simulated] Requesting liquidity for $t: $requiredLiquidity")
+        log.info(s"${Emoji.Robot}  [simulated] Requesting liquidity for $t: $requiredLiquidity")
       }
     }
   }
@@ -312,7 +312,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       }
       log.info(s"Initialized exchanges: (${in.size}/${exchanges.keySet.size}) : succeded: $in")
     } while (in != exchanges.keySet)
-    log.info(s"${Emoji.Satisfied} All exchanges initialized")
+    log.info(s"${Emoji.Satisfied}  All exchanges initialized")
   }
 
   def initExchanges(): Unit = {
@@ -342,7 +342,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
         .mkString(", ")
     }
 
-    val liquidityPerExchange: Map[String, CryptoValue] =
+    val liquidityPerExchange: String =
       wallets.map { case (exchange, b) => (
         exchange,
         CryptoValue(
@@ -352,12 +352,12 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
             .map(_.amount)
             .sum
         ))
-      }.toMap
-    log.info(s"Available liquidity: $liquidityPerExchange")
+      }.map(e => s"${e._1}: ${e._2}").mkString(", ")
+    log.info(s"Available liquidity: ${liquidityPerExchange}")
 
     val freshestTicker = dataAge.maxBy(_._2.tickerTS.toEpochMilli)
     val oldestTicker = dataAge.minBy(_._2.tickerTS.toEpochMilli)
-    log.info(s"${Emoji.Robot} TradeRoom stats: [general] " +
+    log.info(s"${Emoji.Robot}  TradeRoom stats: [general] " +
       s"ticker:[${toEntriesPerExchange(tickers)}]" +
       s" (oldest: ${oldestTicker._1} ${Duration.between(oldestTicker._2.tickerTS, Instant.now).toMillis} ms," +
       s" freshest: ${freshestTicker._1} ${Duration.between(freshestTicker._2.tickerTS, Instant.now).toMillis} ms)" +
@@ -372,7 +372,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
         .take(3)
         .map(e => s"[${e._2.bids.size} bids/${e._2.asks.size} asks: ${e._2.exchange}:${e._2.tradePair}] ")
         .toList
-      log.info(s"${Emoji.Robot} TradeRoom stats: [biggest 3 OrderBooks] : $orderBookTop3")
+      log.info(s"${Emoji.Robot}  TradeRoom stats: [biggest 3 OrderBooks] : $orderBookTop3")
       val orderBookBottom3 = orderBooks.flatMap(_._2.values)
         .map(e => (e.bids.size + e.asks.size, e))
         .toSeq
@@ -380,7 +380,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
         .take(3)
         .map(e => s"[${e._2.bids.size} bids/${e._2.asks.size} asks: ${e._2.exchange}:${e._2.tradePair}] ")
         .toList
-      log.info(s"${Emoji.Robot} TradeRoom stats: [smallest 3 OrderBooks] : $orderBookBottom3")
+      log.info(s"${Emoji.Robot}  TradeRoom stats: [smallest 3 OrderBooks] : $orderBookBottom3")
     }
   }
 

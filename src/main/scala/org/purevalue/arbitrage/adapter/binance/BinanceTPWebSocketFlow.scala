@@ -62,7 +62,7 @@ case class BinanceTPWebSocketFlow(config: ExchangeConfig, tradePair: BinanceTrad
             if (log.isTraceEnabled) log.trace(s"received $m")
             Some(m)
           case other =>
-            log.warn(s"${Emoji.Confused} Unhandled object (for $tradePair). Message: $other")
+            log.warn(s"${Emoji.Confused}  Unhandled object (for $tradePair). Message: $other")
             None
         }
       }

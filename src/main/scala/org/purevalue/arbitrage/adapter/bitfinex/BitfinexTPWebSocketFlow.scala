@@ -211,10 +211,10 @@ case class BitfinexTPWebSocketFlow(config: ExchangeConfig, tradePair: BitfinexTr
                   case None => JsonParser(s).convertTo[RawOrderBookUpdateJson]
                 }
               case id =>
-                log.error(s"${Emoji.SadAndConfused} [bitfinex:$tradePair] data message with unknown channelId $id received.")
+                log.error(s"${Emoji.SadAndConfused}  [bitfinex:$tradePair] data message with unknown channelId $id received.")
                 UnknownChannelDataMessage(s)
             }
-          case None => throw new RuntimeException(s"${Emoji.SadAndConfused} Unable to decode bifinex data message:\n$s")
+          case None => throw new RuntimeException(s"${Emoji.SadAndConfused}  Unable to decode bifinex data message:\n$s")
         }
     }
   }
@@ -240,7 +240,7 @@ case class BitfinexTPWebSocketFlow(config: ExchangeConfig, tradePair: BitfinexTr
             if (log.isTraceEnabled) log.trace(s"received: $m")
             Some(m)
           case other =>
-            log.warn(s"${Emoji.Confused} Unhandled object (for $tradePair). Message: $other")
+            log.warn(s"${Emoji.Confused}  Unhandled object (for $tradePair). Message: $other")
             None
         }
       }

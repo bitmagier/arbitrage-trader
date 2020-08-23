@@ -18,7 +18,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
     val diff = ((order.limit - bestOfferPrice) / bestOfferPrice).abs
     val valid = diff < config.maxOrderLimitTickerVariance
     if (!valid) {
-      log.warn(s"${Emoji.Disagree} Got OrderBundle where an order limit is too far away ($diff) from ticker value " +
+      log.warn(s"${Emoji.Disagree}  Got OrderBundle where an order limit is too far away ($diff) from ticker value " +
         s"(max variance=${formatDecimal(config.maxOrderLimitTickerVariance)})")
       log.debug(s"$order, $ticker")
     }
@@ -29,8 +29,8 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
     val age = Duration.between(dataAge(o.exchange).tickerTS, Instant.now)
     val r = age.compareTo(config.maxTickerAge) < 0
     if (!r) {
-      log.warn(s"${Emoji.NoSupport} Sorry, can't let that order through, because we have an aged ticker (${age.toSeconds} s) for ${o.exchange} here.")
-      log.debug(s"${Emoji.NoSupport} $o")
+      log.warn(s"${Emoji.NoSupport}  Sorry, can't let that order through, because we have an aged ticker (${age.toSeconds} s) for ${o.exchange} here.")
+      log.debug(s"${Emoji.NoSupport}  $o")
     }
     r
   }
@@ -67,7 +67,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
       (toProvide ++ toConvertBack).find(v => findUsableReserveAsset(v.exchange, v.asset, uninvolvedReserveAssets).isEmpty)
     }
     if (unableToProvideConversionForCoin.isDefined) {
-      log.warn(s"${Emoji.EyeRoll} Sorry, no suitable reserve asset found to support reserve liquidity conversion from/to ${unableToProvideConversionForCoin.get.asset} on ${unableToProvideConversionForCoin.get.exchange}")
+      log.warn(s"${Emoji.EyeRoll}  Sorry, regarding no suitable reserve asset found to support reserve liquidity conversion from/to ${unableToProvideConversionForCoin.get.asset} on ${unableToProvideConversionForCoin.get.exchange}. Concerns $t")
       return None
     }
 
@@ -120,7 +120,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
     val b: Option[Double] = balanceOfLiquidityTransformationCompensationTransactionsInUSDT(t)
     if (b.isEmpty) return false
     if ((t.bill.sumUSDT + b.get) < config.minTotalGainInUSDT) {
-      log.debug(s"${Emoji.LookingDown} Got interesting $t, but the sum of costs (${formatDecimal(b.get)} USDT) of the necessary " +
+      log.debug(s"${Emoji.LookingDown}  Got interesting $t, but the sum of costs (${formatDecimal(b.get)} USDT) of the necessary " +
         s"liquidity transformation transactions makes the whole thing uneconomic (total gain: ${formatDecimal(t.bill.sumUSDT + b.get)} USDT = lower than threshold ${config.minTotalGainInUSDT} USDT).")
       false
     } else true
@@ -128,14 +128,14 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
 
   def isSafe(t: OrderBundle): Boolean = {
     if (t.bill.sumUSDT <= 0) {
-      log.warn(s"${Emoji.Disagree} Got OrderBundle with negative balance: ${t.bill.sumUSDT}. I will not execute that one!")
+      log.warn(s"${Emoji.Disagree}  Got OrderBundle with negative balance: ${t.bill.sumUSDT}. I will not execute that one!")
       log.debug(s"$t")
       false
     } else if (!t.orders.forall(tickerDataUpToDate)) {
       false
     } else if (t.bill.sumUSDT >= config.maximumReasonableWinPerOrderBundleUSDT) {
-      log.warn(s"${Emoji.Disagree} Got OrderBundle with unbelievable high estimated win of ${formatDecimal(t.bill.sumUSDT)} USDT. I will rather not execute that one - seem to be a bug!")
-      log.debug(s"${Emoji.Disagree} $t")
+      log.warn(s"${Emoji.Disagree}  Got OrderBundle with unbelievable high estimated win of ${formatDecimal(t.bill.sumUSDT)} USDT. I will rather not execute that one - seem to be a bug!")
+      log.debug(s"${Emoji.Disagree}  $t")
       false
     } else {
       t.orders.forall(orderLimitCloseToTicker) &&
