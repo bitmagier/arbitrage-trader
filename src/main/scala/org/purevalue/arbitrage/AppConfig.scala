@@ -13,8 +13,7 @@ import scala.concurrent.duration.FiniteDuration
 case class SecretsConfig(apiKey: String,
                          apiSecretKey: String)
 case class ExchangeConfig(exchangeName: String,
-                          tradingSecrets: SecretsConfig,
-                          withdrawalSecrets: SecretsConfig,
+                          secrets: SecretsConfig,
                           assets: Set[String],
                           makerFee: Double,
                           takerFee: Double,
@@ -62,8 +61,7 @@ object AppConfig {
   )
   private def exchangeConfig(name: String, c: Config) = ExchangeConfig(
     name,
-    secretsConfig(c.getConfig("secrets.trading")),
-    secretsConfig(c.getConfig("secrets.withdrawal")),
+    secretsConfig(c.getConfig("secrets")),
     c.getStringList("assets").asScala.toSet,
     c.getDouble("fee.maker"),
     c.getDouble("fee.taker"),
