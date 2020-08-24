@@ -56,8 +56,8 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
     val involvedAssets: Set[Asset] = t.orders.flatMap(e => Seq(e.tradePair.baseAsset, e.tradePair.quoteAsset)).toSet
     val uninvolvedReserveAssets: List[Asset] = allReserveAssets.filterNot(involvedAssets.contains)
 
-    val toProvide: Iterable[LocalCryptoValue] = t.orders.map(_.calcOutgoingLiquidity).filterNot(allReserveAssets.contains)
-    val toConvertBack: Iterable[LocalCryptoValue] = t.orders.map(_.calcIncomingLiquidity).filterNot(allReserveAssets.contains)
+    val toProvide: Iterable[LocalCryptoValue] = t.orders.map(_.calcOutgoingLiquidity).filterNot(e => allReserveAssets.contains(e.asset))
+    val toConvertBack: Iterable[LocalCryptoValue] = t.orders.map(_.calcIncomingLiquidity).filterNot(e => allReserveAssets.contains(e.asset))
 
     def findUsableReserveAsset(exchange: String, coin: Asset, possibleReserveAssets: List[Asset]): Option[Asset] = {
       possibleReserveAssets.find(r => tickers(exchange).contains(TradePair.of(coin, r)))
@@ -67,7 +67,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
       (toProvide ++ toConvertBack).find(v => findUsableReserveAsset(v.exchange, v.asset, uninvolvedReserveAssets).isEmpty)
     }
     if (unableToProvideConversionForCoin.isDefined) {
-      log.warn(s"${Emoji.EyeRoll}  Sorry, regarding no suitable reserve asset found to support reserve liquidity conversion from/to ${unableToProvideConversionForCoin.get.asset} on ${unableToProvideConversionForCoin.get.exchange}. Concerns $t")
+      log.warn(s"${Emoji.EyeRoll}  Sorry, no suitable reserve asset found to support reserve liquidity conversion from/to ${unableToProvideConversionForCoin.get.asset} on ${unableToProvideConversionForCoin.get.exchange}. Concerns $t")
       return None
     }
 
@@ -125,6 +125,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
       false
     } else true
   }
+  // ^^^ TODO instead of taking only the first possible one, better try all alternatives of reserve liquidity asset conversion before giving up here
 
   def isSafe(t: OrderBundle): Boolean = {
     if (t.bill.sumUSDT <= 0) {
@@ -143,3 +144,4 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
     }
   }
 }
+

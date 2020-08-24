@@ -404,5 +404,9 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   }
 }
 
+// TODO TradePair cleanup 1: remove TradePair (channel+data) on exchange, where no alternative reserve-asset Tradepair than ...:BTC is available
+// TODO TradePair cleanup 2: remove TradePair (channel+data), which exists only on one exchange
+// TODO restart whole exchange channels, when the ticker is aged (3 minutes)
+
 // TODO shudown app in case of serious exceptions
 // TODO add feature Exchange-PlatformStatus to cover Maintainance periods
