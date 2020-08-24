@@ -25,6 +25,7 @@ case class OrderBundleSafetyGuardConfig(maximumReasonableWinPerOrderBundleUSDT: 
 case class TradeRoomConfig(extendedTickerExchanges: List[String],
                            orderBooksEnabled: Boolean,
                            internalCommunicationTimeout: Timeout,
+                           gracefulStopTimeout: Timeout,
                            statsInterval: Duration,
                            orderBundleSafetyGuard: OrderBundleSafetyGuardConfig)
 case class LiquidityManagerConfig(reserveAssets: List[Asset])
@@ -37,7 +38,8 @@ object AppConfig {
     TradeRoomConfig(
       tradeRoomConfig.getStringList("reference-ticker-exchanges").asScala.toList,
       tradeRoomConfig.getBoolean("order-books-enabled"),
-      Timeout.create(tradeRoomConfig.getDuration("internal-communication-timeout")),
+      Timeout.create(tradeRoomConfig.getDuration("internal-communication-timeout")), // TODO move to root-level
+      Timeout.create(tradeRoomConfig.getDuration("graceful-stop-timeout")),
       tradeRoomConfig.getDuration("stats-interval"),
       tradeRoomConfig.getConfig("order-bundle-safety-guard") match {
         case c: Config => OrderBundleSafetyGuardConfig(

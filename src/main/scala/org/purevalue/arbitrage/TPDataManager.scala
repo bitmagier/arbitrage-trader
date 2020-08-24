@@ -1,10 +1,13 @@
 package org.purevalue.arbitrage
 
 import java.time.{Duration, Instant}
+import java.util.concurrent.atomic.AtomicBoolean
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, PoisonPill, Props, Status}
+import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.Sink
+import akka.util.Timeout
 import org.purevalue.arbitrage.TPDataManager._
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.slf4j.LoggerFactory
@@ -21,7 +24,7 @@ case class Ticker(exchange: String,
                   lowestAskPrice: Double,
                   lowestAskQuantity: Option[Double],
                   lastPrice: Option[Double]) extends ExchangeTPStreamData {
-  def priceEstimate: Double = lastPrice.getOrElse((highestBidPrice+lowestAskPrice)/2)
+  def priceEstimate: Double = lastPrice.getOrElse((highestBidPrice + lowestAskPrice) / 2)
 }
 case class ExtendedTicker(exchange: String,
                           tradePair: TradePair,
@@ -49,7 +52,7 @@ case class Ask(price: Double, quantity: Double) { // An ask is an offer to sell 
 case class OrderBook(exchange: String,
                      tradePair: TradePair,
                      bids: Map[Double, Bid], // price-level -> bid
-                     asks: Map[Double, Ask]) {  // price-level -> ask
+                     asks: Map[Double, Ask]) { // price-level -> ask
   def toCondensedString: String = {
     val bestBid = highestBid
     val bestAsk = lowestAsk
@@ -78,6 +81,7 @@ object TPDataManager {
   case class InitCheck()
   case class Initialized(tradePair: TradePair)
   case class StartStreamRequest(sink: Sink[Seq[ExchangeTPStreamData], Future[Done]])
+  case class Stop()
 
   def props(config: ExchangeConfig, tradePair: TradePair, exchangeDataChannel: ActorRef, exchange: ActorRef,
             tpDataChannelInit: Function1[TPDataChannelPropsParams, Props], tpDataSink: ExchangeTPData): Props =
@@ -87,7 +91,10 @@ object TPDataManager {
 /**
  * Manages all kind of data of one tradepair at one exchange
  */
-case class TPDataManager(config: ExchangeConfig, tradePair: TradePair, exchangeDataChannel: ActorRef, exchange: ActorRef,
+case class TPDataManager(config: ExchangeConfig,
+                         tradePair: TradePair,
+                         exchangeDataChannel: ActorRef,
+                         exchange: ActorRef,
                          tpDataChannelInit: Function1[TPDataChannelPropsParams, Props],
                          tpData: ExchangeTPData) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[TPDataManager])
@@ -100,6 +107,7 @@ case class TPDataManager(config: ExchangeConfig, tradePair: TradePair, exchangeD
   private var orderBookInitialized = false
 
   private var initTime: Instant = _
+  private val stopData:AtomicBoolean = new AtomicBoolean(false)
 
   val initCheckSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(1.seconds, 1.seconds, self, InitCheck())
 
@@ -109,43 +117,45 @@ case class TPDataManager(config: ExchangeConfig, tradePair: TradePair, exchangeD
 
   val sink: Sink[Seq[ExchangeTPStreamData], Future[Done]] = Sink.foreach[Seq[ExchangeTPStreamData]] {
     data: Seq[ExchangeTPStreamData] =>
-      data.foreach {
-        case t: Ticker =>
-          tpData.ticker += tradePair -> t
-          tpData.age.tickerTS = Instant.now
+      if (!stopData.get()) {
+        data.foreach {
+          case t: Ticker =>
+            tpData.ticker += tradePair -> t
+            tpData.age.tickerTS = Instant.now
 
-        case t: ExtendedTicker =>
-          tpData.extendedTicker += tradePair -> t
-          tpData.age.extendedTickerTS = Instant.now
+          case t: ExtendedTicker =>
+            tpData.extendedTicker += tradePair -> t
+            tpData.age.extendedTickerTS = Instant.now
 
-        case o: OrderBookSnapshot =>
-          tpData.orderBook += tradePair ->
-            OrderBook(
-              config.exchangeName,
-              tradePair,
-              o.bids.filterNot(_.quantity == 0.0d).map(e => (e.price, e)).toMap,
-              o.asks.filterNot(_.quantity == 0.0d).map(e => (e.price, e)).toMap
-            )
-          tpData.age.orderBookTS = Instant.now
-          orderBookInitialized = true
-
-        case o: OrderBookUpdate =>
-          if (tpData.orderBook.isDefinedAt(tradePair)) {
+          case o: OrderBookSnapshot =>
             tpData.orderBook += tradePair ->
               OrderBook(
                 config.exchangeName,
                 tradePair,
-                (tpData.orderBook(tradePair).bids ++ o.bids.map(e => e.price -> e)).filterNot(_._2.quantity == 0.0d),
-                (tpData.orderBook(tradePair).asks ++ o.asks.map(e => e.price -> e)).filterNot(_._2.quantity == 0.0d)
+                o.bids.filterNot(_.quantity == 0.0d).map(e => (e.price, e)).toMap,
+                o.asks.filterNot(_.quantity == 0.0d).map(e => (e.price, e)).toMap
               )
             tpData.age.orderBookTS = Instant.now
-          } else {
-            log.warn(s"$o received, but no OrderBook present yet")
-          }
+            orderBookInitialized = true
 
-        case _ => throw new NotImplementedError
+          case o: OrderBookUpdate =>
+            if (tpData.orderBook.isDefinedAt(tradePair)) {
+              tpData.orderBook += tradePair ->
+                OrderBook(
+                  config.exchangeName,
+                  tradePair,
+                  (tpData.orderBook(tradePair).bids ++ o.bids.map(e => e.price -> e)).filterNot(_._2.quantity == 0.0d),
+                  (tpData.orderBook(tradePair).asks ++ o.asks.map(e => e.price -> e)).filterNot(_._2.quantity == 0.0d)
+                )
+              tpData.age.orderBookTS = Instant.now
+            } else {
+              log.warn(s"$o received, but no OrderBook present yet")
+            }
+
+          case _ => throw new NotImplementedError
+        }
+        eventuallyInitialized()
       }
-      eventuallyInitialized()
   }
 
 
@@ -175,6 +185,10 @@ case class TPDataManager(config: ExchangeConfig, tradePair: TradePair, exchangeD
           self ! Kill // TODO graceful shutdown of tradepair-channel via parent actor
         }
       }
+
+    case Stop() =>
+      stopData.set(true)
+      self ! PoisonPill
 
     case Status.Failure(cause) =>
       log.error("received failure", cause)

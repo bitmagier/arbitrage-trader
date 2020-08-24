@@ -9,6 +9,7 @@ import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, OneForOneStrategy,
 import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage.Asset.Bitcoin
+import org.purevalue.arbitrage.Exchange.{GetTradePairs, RemoveTradePair}
 import org.purevalue.arbitrage.TradeRoom.{LogStats, OrderBundle, TradeContext}
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.purevalue.arbitrage.trader.FooTrader
@@ -17,7 +18,7 @@ import org.slf4j.LoggerFactory
 import scala.collection.concurrent.TrieMap
 import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
-import scala.concurrent.{Await, ExecutionContextExecutor, TimeoutException}
+import scala.concurrent.{Await, ExecutionContextExecutor}
 
 sealed trait TradeSide
 object TradeSide extends TradeSide {
@@ -146,11 +147,6 @@ object OrderBill {
   }
 }
 
-case class CompletedOrderBundle(orderBundle: OrderBundle,
-                                executedAsInstructed: Boolean,
-                                executedTrades: Seq[Trade],
-                                cancelledOrders: Seq[Order],
-                                bill: OrderBill)
 
 object TradeRoom {
 
@@ -177,17 +173,7 @@ object TradeRoom {
     override def toString: String = s"OrderBundle($id, $traderName, creationTime:$creationTime, orders:$orders, $bill)"
   }
 
-  case class OrderBundlePlaced(orderBundleId: UUID)
-  case class OrderBundleCompleted(orderBundle: CompletedOrderBundle)
-
-  // communication with exchange INCOMING
-  case class OrderPlaced(orderId: UUID, placementTime: ZonedDateTime)
-  case class OrderExecuted(orderId: UUID, trade: Trade)
-  case class OrderCancelled(orderId: UUID)
-  // communication with exchange OUTGOING
-  case class PlaceOrder(order: Order)
-  case class CancelOrder()
-
+  // communication with ourselfs
   case class LogStats()
 
 
@@ -222,6 +208,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
   private var exchanges: Map[String, ActorRef] = Map()
+  private var initializedExchanges: Set[String] = Set()
   private var traders: Map[String, ActorRef] = Map()
 
   // a map per exchange
@@ -241,13 +228,6 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
   private val orderBundleSafetyGuard = OrderBundleSafetyGuard(config.orderBundleSafetyGuard, tickers, extendedTickers, dataAge)
 
-  //  private var activeOrders: Map[UUID, Order] = Map() // orderId -> Order; orders, belonging to activeOrderBundles & active at the corresponding exchange
-  //  private var tradesPerActiveOrderBundle: Map[UUID, ListBuffer[Trade]] = Map() // orderBundleId -> Trade; trades, belonging to activeOrderBundles & executed at an exchange
-  //  private var activeOrderBundles: Map[UUID, OrderBundle] = Map()
-
-  // TODO buffer+persist completed order bundles to a database instead (cassandra?)
-  //  private var completedOrderBundles: Map[UUID, CompletedOrderBundle] = Map() // orderBundleID -> CompletedOrderBundle
-
   val scheduleRate: FiniteDuration = FiniteDuration(config.statsInterval.toNanos, TimeUnit.NANOSECONDS)
   val schedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(30.seconds, scheduleRate, self, LogStats())
 
@@ -266,70 +246,6 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
         log.info(s"${Emoji.Robot}  [simulated] Requesting liquidity for $t: $requiredLiquidity")
       }
     }
-  }
-
-  def initExchange(exchangeName: String, exchangeInit: ExchangeInitStuff): Unit = {
-    val camelName = exchangeName.substring(0, 1).toUpperCase + exchangeName.substring(1)
-    tickers += exchangeName -> TrieMap[TradePair, Ticker]()
-    extendedTickers += exchangeName -> TrieMap[TradePair, ExtendedTicker]()
-    orderBooks += exchangeName -> TrieMap[TradePair, OrderBook]()
-    dataAge += exchangeName -> TPDataTimestamps(Instant.MIN, Instant.MIN, Instant.MIN)
-
-    wallets += exchangeName -> Wallet(Map())
-
-    exchanges += exchangeName -> context.actorOf(
-      Exchange.props(
-        exchangeName,
-        AppConfig.exchange(exchangeName),
-        context.actorOf(exchangeInit.dataChannelProps.apply(), s"$camelName-Exchange"),
-        exchangeInit.tpDataChannelProps,
-        ExchangeTPData(
-          tickers(exchangeName),
-          extendedTickers(exchangeName),
-          orderBooks(exchangeName),
-          dataAge(exchangeName)
-        ),
-        ExchangeAccountData(
-          wallets(exchangeName)
-        )
-      ), camelName)
-  }
-
-  def waitUntilExchangesRunning(): Unit = {
-    implicit val timeout: Timeout = config.internalCommunicationTimeout
-    var in: Set[String] = null
-    do {
-      Thread.sleep(1000)
-      in = Set()
-      for (name <- exchanges.keys) {
-        try {
-          if (Await.result((exchanges(name) ? Exchange.IsInitialized).mapTo[Exchange.IsInitializedResponse], timeout.duration).initialized) {
-            in += name
-          }
-        } catch {
-          case e: TimeoutException => // ignore
-        }
-      }
-      log.info(s"Initialized exchanges: (${in.size}/${exchanges.keySet.size}) : succeded: $in")
-    } while (in != exchanges.keySet)
-    log.info(s"${Emoji.Satisfied}  All exchanges initialized")
-  }
-
-  def initExchanges(): Unit = {
-    for (name: String <- AppConfig.activeExchanges) {
-      initExchange(name, GlobalConfig.AllExchanges(name))
-    }
-  }
-
-  def initTraders(): Unit = {
-    traders += "FooTrader" -> context.actorOf(
-      FooTrader.props(AppConfig.trader("foo-trader"), self, tradeContext),
-      "FooTrader")
-  }
-
-  override def preStart(): Unit = {
-    initExchanges()
-    initTraders()
   }
 
 
@@ -384,6 +300,98 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     }
   }
 
+
+  def removeTradePairSync(exchangeName: String, tp: TradePair): Unit = {
+    implicit val timeout: Timeout = AppConfig.tradeRoom.gracefulStopTimeout
+    Await.result(exchanges(exchangeName) ? RemoveTradePair(tp), timeout.duration)
+  }
+
+  /**
+   * Here we remove non-reserve-asset-tradepairs which can only be traded against BTC or another single (reserve) asset,
+   * because it is impossible for them to be provided via another reserve-asset than the one in a desired trade.
+   * (see ExchangeLiquidityManager concept)
+   *
+   * This method runs non-parallel and synchronously to finish together with all actions finished
+   * Parallel optimization is possible but not necessary for this small task
+   */
+  def removeSingleConversionOptionOnlyTradePairsSync(): Unit = {
+    implicit val timeout: Timeout = AppConfig.tradeRoom.internalCommunicationTimeout
+    for (e: String <- exchanges.keys) {
+      val tradePairs: Set[TradePair] = Await.result((exchanges(e) ? GetTradePairs()).mapTo[Set[TradePair]], timeout.duration)
+      val toRemove: Set[TradePair] =
+        tradePairs
+          .filterNot(tp => AppConfig.liquidityManager.reserveAssets.contains(tp.baseAsset)) // don't select reserve-assets
+          .filterNot(tp => tradePairs.count(_.baseAsset == tp.baseAsset) > 1) // don't select assets with multiple conversion options
+      for (tp <- toRemove) {
+        log.debug(s"${Emoji.Robot}  Removing TradePair $tp on $e because there we have only a single trade option with that base asset")
+        removeTradePairSync(e, tp)
+      }
+    }
+  }
+
+
+  def removeTradePairsListedOnlyAtASingleExchange(): Unit = {
+    var tpExchanges: Map[TradePair, Set[String]] = Map()
+    implicit val timeout: Timeout = AppConfig.tradeRoom.internalCommunicationTimeout
+    for (e: String <- exchanges.keys) {
+      Await.result((exchanges(e) ? GetTradePairs()).mapTo[Set[TradePair]], timeout.duration).foreach { tp =>
+        tpExchanges = tpExchanges + (tp -> (tpExchanges.getOrElse(tp, Set()) + e))
+      }
+    }
+    tpExchanges
+      .filter(_._2.size == 1)
+      .foreach { tpe =>
+        val tp = tpe._1
+        val e = tpe._2.head
+        log.debug(s"${Emoji.Robot}  Removing TradePair $tp on $e because it is listed only on that exchange and nowhere else")
+        removeTradePairSync(e, tp)
+      }
+  }
+
+  def startExchange(exchangeName: String, exchangeInit: ExchangeInitStuff): Unit = {
+    val camelName = exchangeName.substring(0, 1).toUpperCase + exchangeName.substring(1)
+    tickers += exchangeName -> TrieMap[TradePair, Ticker]()
+    extendedTickers += exchangeName -> TrieMap[TradePair, ExtendedTicker]()
+    orderBooks += exchangeName -> TrieMap[TradePair, OrderBook]()
+    dataAge += exchangeName -> TPDataTimestamps(Instant.MIN, Instant.MIN, Instant.MIN)
+
+    wallets += exchangeName -> Wallet(Map())
+
+    exchanges += exchangeName -> context.actorOf(
+      Exchange.props(
+        exchangeName,
+        AppConfig.exchange(exchangeName),
+        self,
+        context.actorOf(exchangeInit.dataChannelProps.apply(), s"$camelName-Exchange"),
+        exchangeInit.tpDataChannelProps,
+        ExchangeTPData(
+          tickers(exchangeName),
+          extendedTickers(exchangeName),
+          orderBooks(exchangeName),
+          dataAge(exchangeName)
+        ),
+        ExchangeAccountData(
+          wallets(exchangeName)
+        )
+      ), camelName)
+  }
+
+  def startExchanges(): Unit = {
+    for (name: String <- AppConfig.activeExchanges) {
+      startExchange(name, GlobalConfig.AllExchanges(name))
+    }
+  }
+
+  def startTraders(): Unit = {
+    traders += "FooTrader" -> context.actorOf(
+      FooTrader.props(AppConfig.trader("foo-trader"), self, tradeContext),
+      "FooTrader")
+  }
+
+  override def preStart(): Unit = {
+    startExchanges()
+  }
+
   override val supervisorStrategy: OneForOneStrategy =
     OneForOneStrategy(maxNrOfRetries = 3, withinTimeRange = 10.minutes, loggingEnabled = true) {
       case _ => Restart
@@ -391,22 +399,34 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
   def receive: Receive = {
 
-    // messages from Trader
+    // messages from Exchanges
+    case Exchange.Initialized(exchange) =>
+      initializedExchanges = initializedExchanges + exchange
+      if (exchanges.keySet == initializedExchanges) {
+        log.info(s"${Emoji.Satisfied}  All exchanges initialized")
+        removeSingleConversionOptionOnlyTradePairsSync()
+        removeTradePairsListedOnlyAtASingleExchange()
+        log.info(s"${Emoji.Robot}  Finished cleanup of unusable trade pairs")
+        self ! LogStats()
+        startTraders()
+      }
+
+    // messages from Traders
 
     case ob: OrderBundle =>
       placeOrderBundleOrders(ob)
 
+    // messages from outself
+
     case LogStats() =>
-      logStats()
+      if (exchanges.keySet == initializedExchanges)
+        logStats()
 
     case Status.Failure(cause) =>
       log.error("received failure", cause)
   }
 }
 
-// TODO TradePair cleanup 1: remove TradePair (channel+data) on exchange, where no alternative reserve-asset Tradepair than ...:BTC is available
-// TODO TradePair cleanup 2: remove TradePair (channel+data), which exists only on one exchange
 // TODO restart whole exchange channels, when the ticker is aged (3 minutes)
-
 // TODO shudown app in case of serious exceptions
 // TODO add feature Exchange-PlatformStatus to cover Maintainance periods

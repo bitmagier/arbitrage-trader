@@ -10,7 +10,7 @@ import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataChannel.GetBitfinexTradePair
 import org.slf4j.LoggerFactory
 
-import scala.concurrent.{Await, Future}
+import scala.concurrent.{Await, ExecutionContextExecutor, Future}
 
 
 object BitfinexPublicTPDataChannel {
@@ -25,6 +25,7 @@ object BitfinexPublicTPDataChannel {
 class BitfinexPublicTPDataChannel(config: ExchangeConfig, tradePair: TradePair, bitfinexDataChannel:ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BitfinexPublicTPDataChannel])
   implicit val system: ActorSystem = Main.actorSystem
+  implicit val executionContext: ExecutionContextExecutor = system.dispatcher
 
   private var bitfinexTradePair: BitfinexTradePair = _
   private var bitfinexTPWebSocketFlow: ActorRef = _
