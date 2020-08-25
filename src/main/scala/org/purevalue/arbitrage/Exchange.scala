@@ -2,8 +2,9 @@ package org.purevalue.arbitrage
 
 import akka.actor.SupervisorStrategy.Restart
 import akka.actor.{Actor, ActorRef, ActorSystem, OneForOneStrategy, PoisonPill, Props, Status}
-import akka.pattern.gracefulStop
-import org.purevalue.arbitrage.Exchange.{GetTradePairs, RemoveTradePair, TradePairs}
+import akka.pattern.{ask, gracefulStop}
+import akka.util.Timeout
+import org.purevalue.arbitrage.Exchange.{GetTradePairs, RemoveRunningTradePair, RemoveTradePair, StartStreaming, TradePairs}
 import org.slf4j.LoggerFactory
 
 import scala.collection._
@@ -12,10 +13,12 @@ import scala.concurrent.{Await, ExecutionContextExecutor, Future}
 
 
 object Exchange {
+  case class StartStreaming()
   case class Initialized(exchange:String)
   case class GetTradePairs()
   case class TradePairs(value: Set[TradePair])
   case class RemoveTradePair(tradePair: TradePair)
+  case class RemoveRunningTradePair(tradePair: TradePair)
 
   def props(exchangeName: String,
             config: ExchangeConfig,
@@ -61,7 +64,13 @@ case class Exchange(exchangeName: String,
       s"${config.exchangeName}.AccountDataManager")
   }
 
-  def removeTradePair(tp: TradePair): Unit = {
+  def removeTradePairBeforeInitialized(tp:TradePair): Unit = {
+    if (initialized) throw new RuntimeException("bad timing")
+    tradePairs = tradePairs - tp
+  }
+
+  def removeRunningTradePair(tp: TradePair): Unit = {
+    if (!initialized) throw new RuntimeException("bad timing")
     try {
       val stopped: Future[Boolean] = gracefulStop(tpDataManagers(tp), AppConfig.tradeRoom.gracefulStopTimeout.duration, TPDataManager.Stop())
       Await.result(stopped, AppConfig.tradeRoom.gracefulStopTimeout.duration)
@@ -88,28 +97,31 @@ case class Exchange(exchangeName: String,
 
   override def preStart(): Unit = {
     log.info(s"Initializing Exchange $exchangeName")
-    exchangeDataChannel ! GetTradePairs()
+    implicit val timeout: Timeout = AppConfig.tradeRoom.internalCommunicationTimeout
+    tradePairs = Await.result((exchangeDataChannel ? GetTradePairs()).mapTo[TradePairs], timeout.duration).value
+    log.info(s"$exchangeName: ${tradePairs.size} TradePairs: $tradePairs")
+
   }
 
   override def receive: Receive = {
 
     // Messages from TradeRoom
     case GetTradePairs() =>
-      if (!initialized) throw new RuntimeException("bad timing")
       sender() ! tradePairs
 
+    // removes tradepair before streaming has started
     case RemoveTradePair(tp) =>
-      if (!initialized) throw new RuntimeException("bad timing")
-      removeTradePair(tp)
-      sender() ! true
+        removeTradePairBeforeInitialized(tp)
+        sender() ! true
 
-    // Messages from ExchangeDataChannel
-
-    case TradePairs(t) =>
-      tradePairs = t
-      log.info(s"$exchangeName: ${tradePairs.size} TradePairs: $tradePairs")
+    case StartStreaming() =>
       initTradePairBasedDataManagers()
       initAccountDataManager()
+
+    // tested, but currently unused - maybe we need that later
+    case RemoveRunningTradePair(tp) =>
+      removeRunningTradePair(tp)
+      sender() ! true
 
     // Messages from TradePairDataManager
 

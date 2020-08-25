@@ -9,7 +9,7 @@ import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, OneForOneStrategy,
 import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage.Asset.{Bitcoin, USDT}
-import org.purevalue.arbitrage.Exchange.{GetTradePairs, RemoveTradePair}
+import org.purevalue.arbitrage.Exchange.{GetTradePairs, RemoveRunningTradePair, RemoveTradePair, StartStreaming}
 import org.purevalue.arbitrage.TradeRoom.{LogStats, OrderBundle, TradeContext}
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.purevalue.arbitrage.trader.FooTrader
@@ -302,7 +302,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
 
   def removeTradePairSync(exchangeName: String, tp: TradePair): Unit = {
-    implicit val timeout: Timeout = AppConfig.tradeRoom.gracefulStopTimeout
+    implicit val timeout: Timeout = AppConfig.tradeRoom.internalCommunicationTimeout
     Await.result(exchanges(exchangeName) ? RemoveTradePair(tp), timeout.duration)
   }
 
@@ -378,20 +378,34 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       ), camelName)
   }
 
-  def runExchanges(): Unit = {
+  def startExchanges(): Unit = {
     for (name: String <- AppConfig.activeExchanges) {
       runExchange(name, GlobalConfig.AllExchanges(name))
     }
   }
 
-  def runTraders(): Unit = {
+  def startTraders(): Unit = {
     traders += "FooTrader" -> context.actorOf(
       FooTrader.props(AppConfig.trader("foo-trader"), self, tradeContext),
       "FooTrader")
   }
 
+  def cleanupTradePairs(): Unit = {
+    removeSingleConversionOptionOnlyTradePairsSync()
+    removeTradePairsListedOnlyAtASingleExchangeSync()
+    log.info(s"${Emoji.Robot}  Finished cleanup of unusable trade pairs")
+  }
+
+  def startStreaming(): Unit = {
+    for (exchange:ActorRef <- exchanges.values) {
+      exchange ! StartStreaming()
+    }
+  }
+
   override def preStart(): Unit = {
-    runExchanges()
+    startExchanges()
+    cleanupTradePairs()
+    startStreaming()
   }
 
   override val supervisorStrategy: OneForOneStrategy =
@@ -406,11 +420,8 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       initializedExchanges = initializedExchanges + exchange
       if (exchanges.keySet == initializedExchanges) {
         log.info(s"${Emoji.Satisfied}  All exchanges initialized")
-        removeSingleConversionOptionOnlyTradePairsSync()
-        removeTradePairsListedOnlyAtASingleExchangeSync()
-        log.info(s"${Emoji.Robot}  Finished cleanup of unusable trade pairs")
         self ! LogStats()
-        runTraders()
+        startTraders()
       }
 
     // messages from Traders

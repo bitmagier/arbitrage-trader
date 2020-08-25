@@ -5,9 +5,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 import akka.Done
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, PoisonPill, Props, Status}
-import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.Sink
-import akka.util.Timeout
 import org.purevalue.arbitrage.TPDataManager._
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.slf4j.LoggerFactory
