@@ -8,7 +8,7 @@ import akka.actor.SupervisorStrategy.Restart
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, OneForOneStrategy, Props, Status}
 import akka.pattern.ask
 import akka.util.Timeout
-import org.purevalue.arbitrage.Asset.Bitcoin
+import org.purevalue.arbitrage.Asset.{Bitcoin, USDT}
 import org.purevalue.arbitrage.Exchange.{GetTradePairs, RemoveTradePair}
 import org.purevalue.arbitrage.TradeRoom.{LogStats, OrderBundle, TradeContext}
 import org.purevalue.arbitrage.Utils.formatDecimal
@@ -322,6 +322,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
         tradePairs
           .filterNot(tp => AppConfig.liquidityManager.reserveAssets.contains(tp.baseAsset)) // don't select reserve-assets
           .filterNot(tp => tradePairs.count(_.baseAsset == tp.baseAsset) > 1) // don't select assets with multiple conversion options
+          .filterNot(_.quoteAsset == USDT) // never remove X:USDT (required for conversion calculations)
       for (tp <- toRemove) {
         log.debug(s"${Emoji.Robot}  Removing TradePair $tp on $e because there we have only a single trade option with that base asset")
         removeTradePairSync(e, tp)
@@ -330,7 +331,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   }
 
 
-  def removeTradePairsListedOnlyAtASingleExchange(): Unit = {
+  def removeTradePairsListedOnlyAtASingleExchangeSync(): Unit = {
     var tpExchanges: Map[TradePair, Set[String]] = Map()
     implicit val timeout: Timeout = AppConfig.tradeRoom.internalCommunicationTimeout
     for (e: String <- exchanges.keys) {
@@ -338,8 +339,9 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
         tpExchanges = tpExchanges + (tp -> (tpExchanges.getOrElse(tp, Set()) + e))
       }
     }
-    tpExchanges
-      .filter(_._2.size == 1)
+    tpExchanges // map[TradePair -> Set[exchanges]]
+      .filter(_._2.size == 1) // select TP listed only on a single exchange
+      .filterNot(_._1.quoteAsset == USDT) // never remove X:USDT (required for conversion calculations)
       .foreach { tpe =>
         val tp = tpe._1
         val e = tpe._2.head
@@ -348,7 +350,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       }
   }
 
-  def startExchange(exchangeName: String, exchangeInit: ExchangeInitStuff): Unit = {
+  def runExchange(exchangeName: String, exchangeInit: ExchangeInitStuff): Unit = {
     val camelName = exchangeName.substring(0, 1).toUpperCase + exchangeName.substring(1)
     tickers += exchangeName -> TrieMap[TradePair, Ticker]()
     extendedTickers += exchangeName -> TrieMap[TradePair, ExtendedTicker]()
@@ -376,20 +378,20 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       ), camelName)
   }
 
-  def startExchanges(): Unit = {
+  def runExchanges(): Unit = {
     for (name: String <- AppConfig.activeExchanges) {
-      startExchange(name, GlobalConfig.AllExchanges(name))
+      runExchange(name, GlobalConfig.AllExchanges(name))
     }
   }
 
-  def startTraders(): Unit = {
+  def runTraders(): Unit = {
     traders += "FooTrader" -> context.actorOf(
       FooTrader.props(AppConfig.trader("foo-trader"), self, tradeContext),
       "FooTrader")
   }
 
   override def preStart(): Unit = {
-    startExchanges()
+    runExchanges()
   }
 
   override val supervisorStrategy: OneForOneStrategy =
@@ -405,10 +407,10 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       if (exchanges.keySet == initializedExchanges) {
         log.info(s"${Emoji.Satisfied}  All exchanges initialized")
         removeSingleConversionOptionOnlyTradePairsSync()
-        removeTradePairsListedOnlyAtASingleExchange()
+        removeTradePairsListedOnlyAtASingleExchangeSync()
         log.info(s"${Emoji.Robot}  Finished cleanup of unusable trade pairs")
         self ! LogStats()
-        startTraders()
+        runTraders()
       }
 
     // messages from Traders
