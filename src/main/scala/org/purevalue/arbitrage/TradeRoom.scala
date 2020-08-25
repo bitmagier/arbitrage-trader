@@ -5,12 +5,12 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 import akka.actor.SupervisorStrategy.Restart
-import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, OneForOneStrategy, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, OneForOneStrategy, Props, Status}
 import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage.Asset.{Bitcoin, USDT}
 import org.purevalue.arbitrage.Exchange.{GetTradePairs, RemoveTradePair, StartStreaming}
-import org.purevalue.arbitrage.TradeRoom.{LogStats, OrderBundle, TradeContext}
+import org.purevalue.arbitrage.TradeRoom.{DeathWatch, LogStats, OrderBundle, TradeContext}
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.purevalue.arbitrage.trader.FooTrader
 import org.slf4j.LoggerFactory
@@ -175,7 +175,7 @@ object TradeRoom {
 
   // communication with ourselfs
   case class LogStats()
-
+  case class DeathWatch()
 
   /**
    * find the best ticker stats for the tradepair prioritized by exchange via config
@@ -228,9 +228,10 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
   private val orderBundleSafetyGuard = OrderBundleSafetyGuard(config.orderBundleSafetyGuard, tickers, extendedTickers, dataAge)
 
-  val scheduleRate: FiniteDuration = FiniteDuration(config.statsInterval.toNanos, TimeUnit.NANOSECONDS)
-  val schedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(30.seconds, scheduleRate, self, LogStats())
+  val logScheduleRate: FiniteDuration = FiniteDuration(config.statsInterval.toNanos, TimeUnit.NANOSECONDS)
+  val logSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(30.seconds, logScheduleRate, self, LogStats())
 
+  val deathWatchSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(3.minutes, 1.minute, self, DeathWatch())
 
   def checkAndLockRequiredLiquidity(values: Iterable[LocalCryptoValue]): Boolean = {
     true // TODO ask liquidity manager to lock that amount of CryptoValue on the specified exchanges for us
@@ -397,10 +398,12 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   }
 
   def startStreaming(): Unit = {
-    for (exchange:ActorRef <- exchanges.values) {
+    for (exchange: ActorRef <- exchanges.values) {
       exchange ! StartStreaming()
     }
   }
+
+  def initialized: Boolean = exchanges.keySet == initializedExchanges
 
   override def preStart(): Unit = {
     startExchanges()
@@ -413,12 +416,24 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       case _ => Restart
     }
 
+  /**
+   * Watches for stale data and will trigger a restart of the TradeRoom
+   */
+  def deathWatch(): Unit = {
+    dataAge.keys.foreach { e =>
+      if (Duration.between(dataAge(e).tickerTS, Instant.now).compareTo(config.restartWhenASingleTickerIsOlderThan) > 0) {
+        log.info(s"${Emoji.Robot}  Killing TradeRoom actor because of outdated ticker data from $e")
+        self ! Kill
+      }
+    }
+  }
+
   def receive: Receive = {
 
     // messages from Exchanges
     case Exchange.Initialized(exchange) =>
       initializedExchanges = initializedExchanges + exchange
-      if (exchanges.keySet == initializedExchanges) {
+      if (initialized) {
         log.info(s"${Emoji.Satisfied}  All exchanges initialized")
         self ! LogStats()
         startTraders()
@@ -432,8 +447,12 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     // messages from outself
 
     case LogStats() =>
-      if (exchanges.keySet == initializedExchanges)
+      if (initialized)
         logStats()
+
+    case DeathWatch() =>
+      if (initialized)
+        deathWatch()
 
     case Status.Failure(cause) =>
       log.error("received failure", cause)
