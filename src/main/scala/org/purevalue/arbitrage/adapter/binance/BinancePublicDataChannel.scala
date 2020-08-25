@@ -2,7 +2,7 @@ package org.purevalue.arbitrage.adapter.binance
 
 import akka.actor.{Actor, ActorSystem, Props, Status}
 import org.purevalue.arbitrage.Exchange.{GetTradePairs, TradePairs}
-import org.purevalue.arbitrage.HttpUtils.queryJson
+import org.purevalue.arbitrage.HttpUtils.httpGetJson
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataChannel._
 import org.slf4j.LoggerFactory
@@ -68,7 +68,7 @@ class BinancePublicDataChannel(config: ExchangeConfig) extends Actor {
   override def preStart(): Unit = {
     import BinanceJsonProtocol._
 
-    exchangeInfo = Await.result(queryJson[RawBinanceExchangeInformationJson](s"$BaseRestEndpoint/api/v3/exchangeInfo"), Config.httpTimeout)
+    exchangeInfo = Await.result(httpGetJson[RawBinanceExchangeInformationJson](s"$BaseRestEndpoint/api/v3/exchangeInfo"), Config.httpTimeout)
     binanceTradePairs = exchangeInfo.symbols
       .filter(s => s.status == "TRADING" && s.orderTypes.contains("LIMIT") /* && s.orderTypes.contains("LIMIT_MAKER")*/ && s.permissions.contains("SPOT"))
       .filter(s => config.assets.contains(s.baseAsset) && config.assets.contains(s.quoteAsset))

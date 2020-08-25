@@ -31,19 +31,19 @@ object HttpUtils {
     convertBytesToLowerCaseHex(hash)
   }
 
-  def queryBinanceHmaxSha256(uri: String, entity: String, apiKeys: SecretsConfig)
-                            (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[HttpEntity.Strict] = {
+  def httpRequestBinanceHmaxSha256(method: HttpMethod, uri: String, entity: String, apiKeys: SecretsConfig)
+                                  (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[HttpEntity.Strict] = {
     Http().singleRequest(
       HttpRequest(
-        method = HttpMethods.GET,
+        method,
         uri = uri,
         headers = List(headers.RawHeader("X-MBX-APIKEY", apiKeys.apiKey)),
         entity = HttpEntity(entity + s"&signature=${sha256Signature(entity, apiKeys.apiSecretKey)}")
       )).flatMap(_.entity.toStrict(Config.httpTimeout))
   }
 
-  def queryPureJson(uri: String)
-                   (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[JsValue] = {
+  def httpGetPureJson(uri: String)
+                     (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[JsValue] = {
     query(uri).map { r =>
       r.contentType match {
         case ContentTypes.`application/json` =>
@@ -53,9 +53,9 @@ object HttpUtils {
     }
   }
 
-  def queryPureJsonBinanceAccount(uri: String, entity: String, apiKeys: SecretsConfig)
-                                 (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[JsValue] = {
-    queryBinanceHmaxSha256(uri, entity, apiKeys).map { r =>
+  def httpRequestPureJsonBinanceAccount(method: HttpMethod, uri: String, entity: String, apiKeys: SecretsConfig)
+                                       (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[JsValue] = {
+    httpRequestBinanceHmaxSha256(method, uri, entity, apiKeys).map { r =>
       r.contentType match {
         case ContentTypes.`application/json` =>
           JsonParser(r.data.utf8String)
@@ -64,9 +64,9 @@ object HttpUtils {
     }
   }
 
-  def queryJson[T](uri: String)
-                  (implicit evidence: JsonReader[T], system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[T] = {
-    queryPureJson(uri).map { j =>
+  def httpGetJson[T](uri: String)
+                    (implicit evidence: JsonReader[T], system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[T] = {
+    httpGetPureJson(uri).map { j =>
       try {
         j.convertTo[T]
       } catch {
@@ -76,9 +76,9 @@ object HttpUtils {
     }
   }
 
-  def queryJsonBinanceAccount[T](uri: String, entity: String, apiKeys: SecretsConfig)
-                                (implicit evidence: JsonReader[T], system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[T] = {
-    queryPureJsonBinanceAccount(uri, entity, apiKeys).map { j =>
+  def httpRequestJsonBinanceAccount[T](method: HttpMethod, uri: String, entity: String, apiKeys: SecretsConfig)
+                                      (implicit evidence: JsonReader[T], system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[T] = {
+    httpRequestPureJsonBinanceAccount(method, uri, entity, apiKeys).map { j =>
       try {
         j.convertTo[T]
       } catch {

@@ -7,7 +7,7 @@ import akka.http.scaladsl.model.ws.{TextMessage, _}
 import akka.stream.OverflowStrategy
 import akka.stream.scaladsl._
 import akka.{Done, NotUsed}
-import org.purevalue.arbitrage.HttpUtils.queryJson
+import org.purevalue.arbitrage.HttpUtils.httpGetJson
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataChannel.{toAsk, toBid}
 import org.purevalue.arbitrage.adapter.binance.BinanceTPWebSocketFlow.StartStreamRequest
@@ -133,7 +133,7 @@ case class BinanceTPWebSocketFlow(config: ExchangeConfig, tradePair: BinanceTrad
 
 
   def deliverBookTickerState(): Unit = {
-    queryJson[RawBookTickerRestJson](s"$BaseRestEndpoint/api/v3/ticker/bookTicker?symbol=${tradePair.symbol}") onComplete {
+    httpGetJson[RawBookTickerRestJson](s"$BaseRestEndpoint/api/v3/ticker/bookTicker?symbol=${tradePair.symbol}") onComplete {
       case Success(ticker) =>
         restSource._1.offer(ticker)
       case Failure(e) =>
