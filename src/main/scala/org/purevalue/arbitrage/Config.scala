@@ -34,6 +34,7 @@ object Config {
 
   val httpTimeout: FiniteDuration = FiniteDuration(config.getDuration("http-timeout").toMillis, TimeUnit.MILLISECONDS)
   val internalCommunicationTimeout: Timeout = Timeout.create(config.getDuration("internal-communication-timeout"))
+  val internalCommunicationTimeoutWhileInit: Timeout = Timeout.create(config.getDuration("internal-communication-timeout-during-init"))
   val gracefulStopTimeout: Timeout = Timeout.create(config.getDuration("graceful-stop-timeout"))
 
   private val tradeRoomConfig = config.getConfig("trade-room")

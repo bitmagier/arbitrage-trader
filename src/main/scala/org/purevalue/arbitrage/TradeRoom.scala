@@ -9,7 +9,7 @@ import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, OneForOneStrategy,
 import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage.Asset.{Bitcoin, USDT}
-import org.purevalue.arbitrage.Exchange.{GetTradePairs, RemoveRunningTradePair, RemoveTradePair, StartStreaming}
+import org.purevalue.arbitrage.Exchange.{GetTradePairs, RemoveTradePair, StartStreaming}
 import org.purevalue.arbitrage.TradeRoom.{LogStats, OrderBundle, TradeContext}
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.purevalue.arbitrage.trader.FooTrader
@@ -302,7 +302,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
 
   def removeTradePairSync(exchangeName: String, tp: TradePair): Unit = {
-    implicit val timeout: Timeout = Config.internalCommunicationTimeout
+    implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
     Await.result(exchanges(exchangeName) ? RemoveTradePair(tp), timeout.duration)
   }
 
@@ -315,7 +315,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
    * Parallel optimization is possible but not necessary for this small task
    */
   def removeSingleConversionOptionOnlyTradePairsSync(): Unit = {
-    implicit val timeout: Timeout = Config.internalCommunicationTimeout
+    implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
     for (e: String <- exchanges.keys) {
       val tradePairs: Set[TradePair] = Await.result((exchanges(e) ? GetTradePairs()).mapTo[Set[TradePair]], timeout.duration)
       val toRemove: Set[TradePair] =
@@ -324,7 +324,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
           .filterNot(tp => tradePairs.count(_.baseAsset == tp.baseAsset) > 1) // don't select assets with multiple conversion options
           .filterNot(_.quoteAsset == USDT) // never remove X:USDT (required for conversion calculations)
       for (tp <- toRemove) {
-        log.debug(s"${Emoji.Robot}  Removing TradePair $tp on $e because there we have only a single trade option with that base asset")
+        log.debug(s"${Emoji.Robot}  Removing TradePair $tp on $e because on this exchange we only have that single trade option with a base asset")
         removeTradePairSync(e, tp)
       }
     }
@@ -333,7 +333,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
   def removeTradePairsListedOnlyAtASingleExchangeSync(): Unit = {
     var tpExchanges: Map[TradePair, Set[String]] = Map()
-    implicit val timeout: Timeout = Config.internalCommunicationTimeout
+    implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
     for (e: String <- exchanges.keys) {
       Await.result((exchanges(e) ? GetTradePairs()).mapTo[Set[TradePair]], timeout.duration).foreach { tp =>
         tpExchanges = tpExchanges + (tp -> (tpExchanges.getOrElse(tp, Set()) + e))
