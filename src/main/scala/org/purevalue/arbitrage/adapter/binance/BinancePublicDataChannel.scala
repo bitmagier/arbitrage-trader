@@ -68,7 +68,7 @@ class BinancePublicDataChannel(config: ExchangeConfig) extends Actor {
   override def preStart(): Unit = {
     import BinanceJsonProtocol._
 
-    exchangeInfo = Await.result(queryJson[RawBinanceExchangeInformationJson](s"$BaseEndpoint/api/v3/exchangeInfo"), AppConfig.httpTimeout)
+    exchangeInfo = Await.result(queryJson[RawBinanceExchangeInformationJson](s"$BaseEndpoint/api/v3/exchangeInfo"), Config.httpTimeout)
     binanceTradePairs = exchangeInfo.symbols
       .filter(s => s.status == "TRADING" && s.orderTypes.contains("LIMIT") /* && s.orderTypes.contains("LIMIT_MAKER")*/ && s.permissions.contains("SPOT"))
       .filter(s => config.assets.contains(s.baseAsset) && config.assets.contains(s.quoteAsset))

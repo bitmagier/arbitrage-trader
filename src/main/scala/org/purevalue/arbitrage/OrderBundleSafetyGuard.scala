@@ -52,7 +52,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
    * It is possible to use different Liquidity reserve assets for different involved assets/trades
    */
   def balanceOfLiquidityTransformationCompensationTransactionsInUSDT(t: OrderBundle): Option[Double] = {
-    val allReserveAssets: List[Asset] = AppConfig.liquidityManager.reserveAssets
+    val allReserveAssets: List[Asset] = Config.liquidityManager.reserveAssets
     val involvedAssets: Set[Asset] = t.orders.flatMap(e => Seq(e.tradePair.baseAsset, e.tradePair.quoteAsset)).toSet
     val uninvolvedReserveAssets: List[Asset] = allReserveAssets.filterNot(involvedAssets.contains)
 
@@ -78,7 +78,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
           e.exchange,
           tradePair,
           TradeSide.Buy,
-          Fee(e.exchange, AppConfig.exchange(e.exchange).makerFee, AppConfig.exchange(e.exchange).takerFee), // TODO take real values
+          Fee(e.exchange, Config.exchange(e.exchange).makerFee, Config.exchange(e.exchange).takerFee), // TODO take real values
           e.amount,
           tickers(e.exchange)(tradePair).priceEstimate
         )
@@ -88,7 +88,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
             e.exchange,
             tradePair,
             TradeSide.Sell,
-            Fee(e.exchange, AppConfig.exchange(e.exchange).makerFee, AppConfig.exchange(e.exchange).takerFee), // TODO take real values
+            Fee(e.exchange, Config.exchange(e.exchange).makerFee, Config.exchange(e.exchange).takerFee), // TODO take real values
             e.amount,
             tickers(e.exchange)(tradePair).priceEstimate
           )

@@ -72,8 +72,8 @@ case class Exchange(exchangeName: String,
   def removeRunningTradePair(tp: TradePair): Unit = {
     if (!initialized) throw new RuntimeException("bad timing")
     try {
-      val stopped: Future[Boolean] = gracefulStop(tpDataManagers(tp), AppConfig.tradeRoom.gracefulStopTimeout.duration, TPDataManager.Stop())
-      Await.result(stopped, AppConfig.tradeRoom.gracefulStopTimeout.duration)
+      val stopped: Future[Boolean] = gracefulStop(tpDataManagers(tp), Config.gracefulStopTimeout.duration, TPDataManager.Stop())
+      Await.result(stopped, Config.gracefulStopTimeout.duration)
       log.debug(s"$exchangeName-TPDataManager for $tp stopped (${stopped.value.get})")
     } catch {
       case t: Throwable =>
@@ -97,7 +97,7 @@ case class Exchange(exchangeName: String,
 
   override def preStart(): Unit = {
     log.info(s"Initializing Exchange $exchangeName")
-    implicit val timeout: Timeout = AppConfig.tradeRoom.internalCommunicationTimeout
+    implicit val timeout: Timeout = Config.internalCommunicationTimeout
     tradePairs = Await.result((exchangeDataChannel ? GetTradePairs()).mapTo[TradePairs], timeout.duration).value
     log.info(s"$exchangeName: ${tradePairs.size} TradePairs: $tradePairs")
 

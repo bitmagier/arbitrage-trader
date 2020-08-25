@@ -16,7 +16,7 @@ object HttpUtils {
       HttpRequest(
         method = HttpMethods.GET,
         uri = uri
-      )).flatMap(_.entity.toStrict(AppConfig.httpTimeout))
+      )).flatMap(_.entity.toStrict(Config.httpTimeout))
   }
 
   //[linux]$ echo -n "symbol=LTCBTC&side=BUY&type=LIMIT&timeInForce=GTC&quantity=1&price=0.1&recvWindow=5000&timestamp=1499827319559" | openssl dgst -sha256 -hmac "NhqPtmdSJYdKjVHjA7PZj4Mge3R5YNiP1e3UZjInClVN65XAbvqqM6A7H5fATj0j"
@@ -39,7 +39,7 @@ object HttpUtils {
         uri = uri,
         headers = List(headers.RawHeader("X-MBX-APIKEY", apiKeys.apiKey)),
         entity = HttpEntity(entity + s"&signature=${sha256Signature(entity, apiKeys.apiSecretKey)}")
-      )).flatMap(_.entity.toStrict(AppConfig.httpTimeout))
+      )).flatMap(_.entity.toStrict(Config.httpTimeout))
   }
 
   def queryPureJson(uri: String)

@@ -178,7 +178,7 @@ case class TPDataManager(config: ExchangeConfig,
     case InitCheck() =>
       if (initialized) initCheckSchedule.cancel()
       else {
-        if (Duration.between(initTime, Instant.now()).compareTo(AppConfig.dataManagerInitTimeout) > 0) {
+        if (Duration.between(initTime, Instant.now()).compareTo(Config.dataManagerInitTimeout) > 0) {
           log.info(s"Killing ${config.exchangeName}-TPDataManager-$tradePair")
           self ! Kill // TODO graceful shutdown of tradepair-channel via parent actor
         }

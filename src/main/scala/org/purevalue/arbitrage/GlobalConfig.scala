@@ -63,13 +63,13 @@ object GlobalConfig {
   // all exchanges - used for init routine
   val AllExchanges: Map[String, ExchangeInitStuff] = Map(
     "binance" -> ExchangeInitStuff(
-      () => BinancePublicDataChannel.props(AppConfig.exchange("binance")),
+      () => BinancePublicDataChannel.props(Config.exchange("binance")),
       (p: TPDataChannelPropsParams) =>
-        BinancePublicTPDataChannel.props(AppConfig.exchange("binance"), p.tp, p.exchangePublicDataChannel)),
+        BinancePublicTPDataChannel.props(Config.exchange("binance"), p.tp, p.exchangePublicDataChannel)),
     "bitfinex" -> ExchangeInitStuff(
-      () => BitfinexPublicDataChannel.props(AppConfig.exchange("bitfinex")),
+      () => BitfinexPublicDataChannel.props(Config.exchange("bitfinex")),
       (p: TPDataChannelPropsParams) =>
-        BitfinexPublicTPDataChannel.props(AppConfig.exchange("bitfinex"), p.tp, p.exchangePublicDataChannel))
+        BitfinexPublicTPDataChannel.props(Config.exchange("bitfinex"), p.tp, p.exchangePublicDataChannel))
   )
 
   // this is the reference to know exactly about which asset (or coin) we are talking (no matter at which exchange)

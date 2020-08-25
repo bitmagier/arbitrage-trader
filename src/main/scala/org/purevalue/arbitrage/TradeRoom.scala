@@ -181,7 +181,7 @@ object TradeRoom {
    * find the best ticker stats for the tradepair prioritized by exchange via config
    */
   def findReferenceTicker(tradePair: TradePair, extendedTickers: scala.collection.Map[String, scala.collection.Map[TradePair, ExtendedTicker]]): Option[ExtendedTicker] = {
-    for (exchange <- AppConfig.tradeRoom.extendedTickerExchanges) {
+    for (exchange <- Config.tradeRoom.extendedTickerExchanges) {
       extendedTickers.get(exchange) match {
         case Some(eTickers) => eTickers.get(tradePair) match {
           case Some(ticker) => return Some(ticker)
@@ -220,8 +220,8 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   private val dataAge: ConcurrentMap[String, TPDataTimestamps] = TrieMap()
 
   private val fees: Map[String, Fee] = Map( // TODO
-    "binance" -> Fee("binance", AppConfig.exchange("binance").makerFee, AppConfig.exchange("binance").takerFee),
-    "bitfinex" -> Fee("bitfinex", AppConfig.exchange("bitfinex").makerFee, AppConfig.exchange("bitfinex").takerFee)
+    "binance" -> Fee("binance", Config.exchange("binance").makerFee, Config.exchange("binance").takerFee),
+    "bitfinex" -> Fee("bitfinex", Config.exchange("bitfinex").makerFee, Config.exchange("bitfinex").takerFee)
   )
 
   private val tradeContext: TradeContext = TradeContext(tickers, extendedTickers, orderBooks, wallets, fees)
@@ -269,7 +269,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
             .sum
         ))
       }.map(e => s"${e._1}: ${e._2}").mkString(", ")
-    log.info(s"${Emoji.Robot}  Available liquidity sums: ${liquidityPerExchange}")
+    log.info(s"${Emoji.Robot}  Available liquidity sums: $liquidityPerExchange")
 
     val freshestTicker = dataAge.maxBy(_._2.tickerTS.toEpochMilli)
     val oldestTicker = dataAge.minBy(_._2.tickerTS.toEpochMilli)
@@ -302,7 +302,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
 
   def removeTradePairSync(exchangeName: String, tp: TradePair): Unit = {
-    implicit val timeout: Timeout = AppConfig.tradeRoom.internalCommunicationTimeout
+    implicit val timeout: Timeout = Config.internalCommunicationTimeout
     Await.result(exchanges(exchangeName) ? RemoveTradePair(tp), timeout.duration)
   }
 
@@ -315,12 +315,12 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
    * Parallel optimization is possible but not necessary for this small task
    */
   def removeSingleConversionOptionOnlyTradePairsSync(): Unit = {
-    implicit val timeout: Timeout = AppConfig.tradeRoom.internalCommunicationTimeout
+    implicit val timeout: Timeout = Config.internalCommunicationTimeout
     for (e: String <- exchanges.keys) {
       val tradePairs: Set[TradePair] = Await.result((exchanges(e) ? GetTradePairs()).mapTo[Set[TradePair]], timeout.duration)
       val toRemove: Set[TradePair] =
         tradePairs
-          .filterNot(tp => AppConfig.liquidityManager.reserveAssets.contains(tp.baseAsset)) // don't select reserve-assets
+          .filterNot(tp => Config.liquidityManager.reserveAssets.contains(tp.baseAsset)) // don't select reserve-assets
           .filterNot(tp => tradePairs.count(_.baseAsset == tp.baseAsset) > 1) // don't select assets with multiple conversion options
           .filterNot(_.quoteAsset == USDT) // never remove X:USDT (required for conversion calculations)
       for (tp <- toRemove) {
@@ -333,7 +333,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
   def removeTradePairsListedOnlyAtASingleExchangeSync(): Unit = {
     var tpExchanges: Map[TradePair, Set[String]] = Map()
-    implicit val timeout: Timeout = AppConfig.tradeRoom.internalCommunicationTimeout
+    implicit val timeout: Timeout = Config.internalCommunicationTimeout
     for (e: String <- exchanges.keys) {
       Await.result((exchanges(e) ? GetTradePairs()).mapTo[Set[TradePair]], timeout.duration).foreach { tp =>
         tpExchanges = tpExchanges + (tp -> (tpExchanges.getOrElse(tp, Set()) + e))
@@ -362,7 +362,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     exchanges += exchangeName -> context.actorOf(
       Exchange.props(
         exchangeName,
-        AppConfig.exchange(exchangeName),
+        Config.exchange(exchangeName),
         self,
         context.actorOf(exchangeInit.dataChannelProps.apply(), s"$camelName-Exchange"),
         exchangeInit.tpDataChannelProps,
@@ -379,14 +379,14 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   }
 
   def startExchanges(): Unit = {
-    for (name: String <- AppConfig.activeExchanges) {
+    for (name: String <- Config.activeExchanges) {
       runExchange(name, GlobalConfig.AllExchanges(name))
     }
   }
 
   def startTraders(): Unit = {
     traders += "FooTrader" -> context.actorOf(
-      FooTrader.props(AppConfig.trader("foo-trader"), self, tradeContext),
+      FooTrader.props(Config.trader("foo-trader"), self, tradeContext),
       "FooTrader")
   }
 
