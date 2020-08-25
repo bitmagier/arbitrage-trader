@@ -2,20 +2,22 @@
 //
 //import java.time.Instant
 //
-//import akka.actor.{Actor, ActorSystem, Props}
-//import akka.stream.OverflowStrategy
-//import akka.stream.scaladsl.{Flow, Sink, Source, SourceQueueWithComplete}
+//import akka.actor.{Actor, ActorSystem, Cancellable, Props}
+//import akka.stream.{Graph, OverflowStrategy}
+//import akka.stream.scaladsl.{Flow, Keep, Sink, Source, SourceQueueWithComplete}
 //import akka.{Done, NotUsed}
 //import org.purevalue.arbitrage.HttpUtils.queryJsonBinanceAccount
-//import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.StartStreamRequest
-//import org.purevalue.arbitrage.adapter.binance.BinancePublicDataChannel.BaseEndpoint
 //import org.purevalue.arbitrage._
+//import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.{QueryData, StartStreamRequest}
+//import org.purevalue.arbitrage.adapter.binance.BinancePublicDataChannel.BaseEndpoint
 //import spray.json.{DefaultJsonProtocol, RootJsonFormat}
 //
+//import scala.concurrent.duration.DurationInt
 //import scala.concurrent.{Await, ExecutionContextExecutor, Future}
 //
 //object BinanceAccountDataChannel {
 //  case class StartStreamRequest(sink: Sink[ExchangeAccountStreamData, Future[Done]])
+//  case class QueryData()
 //
 //  def props(config: ExchangeConfig): Props = Props(new BinanceAccountDataChannel(config))
 //}
@@ -23,19 +25,15 @@
 //  implicit val system: ActorSystem = Main.actorSystem
 //  implicit val executionContext: ExecutionContextExecutor = system.dispatcher
 //
+//  val querySchedule: Cancellable = system.scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, QueryData())
+//
 //  var initialAccountInformation: AccountInformationJson = _
 //
-//
-//
 //  val sourceQueue: Source[IncomingBinanceAccountJson, SourceQueueWithComplete[IncomingBinanceAccountJson]] =
-//    Source.queue[IncomingBinanceAccountJson](10, OverflowStrategy.backpressure)
+//    Source.queue[IncomingBinanceAccountJson](2, OverflowStrategy.backpressure)
 //
-//  val webSocketSource: Source[IncomingBinanceAccountJson, NotUsed] = ???
-//
-//  val downStreamFlow: Flow[IncomingBinanceAccountJson, Option[ExchangeAccountStreamData], NotUsed] = Flow.fromFunction {
-//
-//    case j:AccountInformationJson => Some(j.toWallet)
-//
+//  val downStreamFlow: Flow[IncomingBinanceAccountJson, ExchangeAccountStreamData, NotUsed] = Flow.fromFunction {
+//    case j:AccountInformationJson => j.toWallet
 //    case _ => throw new NotImplementedError
 //  }
 //
@@ -44,8 +42,8 @@
 //  def queryAccountInformation(): AccountInformationJson = {
 //    import BinanceAccountDataJsonProtocoll._
 //    Await.result(
-//      queryJsonBinanceAccount[AccountInformationJson](s"$BaseEndpoint/api/v3/account", s"timestamp=$timestamp", config.tradingSecrets),
-//      AppConfig.httpTimeout)
+//      queryJsonBinanceAccount[AccountInformationJson](s"$BaseEndpoint/api/v3/account", s"timestamp=$timestamp", config.secrets),
+//      Config.httpTimeout)
 //  }
 //
 //  override def preStart(): Unit = {
@@ -54,7 +52,11 @@
 //  }
 //
 //  override def receive: Receive = {
-//    case StartStreamRequest(sink) =>
+//    case StartStreamRequest(sink) => // TODO connect sink to 2 sources: REST + WebSocket
+//      Flow.fromSinkAndSource(
+//        downStreamFlow.toMat(sink)(Keep.right),
+//        sourceQueue)
+//
 //  }
 //
 //}
@@ -88,3 +90,5 @@
 //  implicit val balanceJson: RootJsonFormat[BalanceJson] = jsonFormat3(BalanceJson)
 //  implicit val accountInformationJson: RootJsonFormat[AccountInformationJson] = jsonFormat11(AccountInformationJson)
 //}
+//
+//// TODO replace repeated REST calls by corresponding WebSocket Streams

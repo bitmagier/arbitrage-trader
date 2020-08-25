@@ -36,14 +36,16 @@ class BinancePublicTPDataChannel(config: ExchangeConfig, tradePair: TradePair, b
   }
 
   def streamMapping(in: DecodedBinanceMessage): Seq[ExchangeTPStreamData] = in match {
-
-    case t: RawBookTickerJson =>
+    case t: RawBookTickerRestJson =>
       Seq(t.toTicker(config.exchangeName, tradePair))
 
-    case t: RawExtendedTickerJson =>
+    case t: RawBookTickerStreamJson =>
+      Seq(t.toTicker(config.exchangeName, tradePair))
+
+    case t: RawExtendedTickerStreamJson =>
       Seq(t.toExtendedTicker(config.exchangeName, tradePair))
 
-    case update: RawPartialOrderBookJson =>
+    case update: RawPartialOrderBookStreamJson =>
       if (lastUpdateId.isDefined && lastUpdateId.get > update.lastUpdateId) {
         log.warn("Obsolete orderbook snapshot received")
         Seq()
@@ -75,4 +77,3 @@ class BinancePublicTPDataChannel(config: ExchangeConfig, tradePair: TradePair, b
       log.error("received failure", cause)
   }
 }
-// TODO [refactoring] merge this 'Durchlauferhitzer' with BinanceTPWebSocketFlow

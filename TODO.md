@@ -6,11 +6,10 @@ in progress:
 TODO
 
 - TradeRoom: reject OrderBundles, where another active Order of the same TradePair is still active 
+- blacklist assets per exchange (e.g. for NOT touching personal investments)
 - Query own Orders:  API implementation for binance+bitfinx
 - Submit Order API impl. binance+bitfinex
-- Query trade/withdraw fees
-
-- Withdrawal API binance, bitfinex
+- Query trade fees
 
 - temporary TradePair down detection + action
 - temporary Exchange maintenance/down detection + action 
