@@ -10,6 +10,7 @@ import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataChannel.GetBitfinexTradePair
 import org.slf4j.LoggerFactory
 
+import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor, Future}
 
 
@@ -58,7 +59,7 @@ class BitfinexPublicTPDataChannel(config: ExchangeConfig, tradePair: TradePair, 
     log.debug(s"BitfinexTradePairDataStreamer($tradePair) initializing...")
     implicit val timeout: Timeout = Config.internalCommunicationTimeout
     bitfinexTradePair = Await.result((bitfinexDataChannel ? GetBitfinexTradePair(tradePair)).mapTo[BitfinexTradePair],
-      Config.internalCommunicationTimeout.duration)
+      Config.internalCommunicationTimeout.duration.plus(500.millis))
     bitfinexTPWebSocketFlow = context.actorOf(
       BitfinexTPWebSocketFlow.props(config, bitfinexTradePair, self), s"BitfinexTPWebSocketFlow-${bitfinexTradePair.apiSymbol}")
   }

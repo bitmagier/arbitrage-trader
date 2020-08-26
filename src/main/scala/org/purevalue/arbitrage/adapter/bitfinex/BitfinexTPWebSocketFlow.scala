@@ -11,6 +11,7 @@ import org.purevalue.arbitrage.adapter.bitfinex.BitfinexTPWebSocketFlow.StartStr
 import org.slf4j.LoggerFactory
 import spray.json._
 
+import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, Future, Promise}
 
 
@@ -245,7 +246,7 @@ case class BitfinexTPWebSocketFlow(config: ExchangeConfig, tradePair: BitfinexTr
         }
       }
       try {
-        Await.result(f, Config.httpTimeout)
+        Await.result(f, Config.httpTimeout.plus(1000.millis))
       } catch {
         case e: Exception => throw new RuntimeException(s"While decoding WebSocket stream event: $msg", e)
       }

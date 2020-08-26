@@ -57,7 +57,7 @@ class BinanceAccountDataChannel(config: ExchangeConfig) extends Actor {
     import BinanceAccountDataJsonProtocoll._
     Await.result(
       httpRequestJsonBinanceAccount[AccountInformationJson](HttpMethods.GET, s"$BaseRestEndpoint/api/v3/account", s"timestamp=$timestamp", config.secrets),
-      Config.httpTimeout)
+      Config.httpTimeout.plus(500.millis))
   }
 
 
@@ -92,7 +92,7 @@ class BinanceAccountDataChannel(config: ExchangeConfig) extends Actor {
     import BinanceAccountDataJsonProtocoll._
     listenKey = Await.result(
       httpRequestJsonBinanceAccount[ListenKey](HttpMethods.POST, s"$BaseRestEndpoint/api/v3/userDataStream", s"timestamp=$timestamp", config.secrets),
-      Config.httpTimeout).listenKey
+      Config.httpTimeout.plus(500.millis)).listenKey
   }
 
   def pingUserStream(): Unit = {

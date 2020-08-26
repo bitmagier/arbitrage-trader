@@ -303,7 +303,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
   def dropTradePairSync(exchangeName: String, tp: TradePair): Unit = {
     implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
-    Await.result(exchanges(exchangeName) ? RemoveTradePair(tp), timeout.duration)
+    Await.result(exchanges(exchangeName) ? RemoveTradePair(tp), timeout.duration.plus(500.millis))
   }
 
   /**
@@ -326,7 +326,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
     var eTradePairs: Set[Tuple2[String, TradePair]] = Set()
     for (exchange: String <- exchanges.keys) {
-      val tp: Set[TradePair] = Await.result((exchanges(exchange) ? GetTradePairs()).mapTo[Set[TradePair]], timeout.duration)
+      val tp: Set[TradePair] = Await.result((exchanges(exchange) ? GetTradePairs()).mapTo[Set[TradePair]], timeout.duration.plus(500.millis))
       eTradePairs = eTradePairs ++ tp.map(e => (exchange, e))
     }
     val assetsToRemove = eTradePairs

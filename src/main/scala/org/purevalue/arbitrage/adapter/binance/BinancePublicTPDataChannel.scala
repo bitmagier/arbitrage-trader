@@ -10,6 +10,7 @@ import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataChannel.GetBinanceTradePair
 import org.slf4j.LoggerFactory
 
+import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor, Future}
 
 object BinancePublicTPDataChannel {
@@ -63,7 +64,7 @@ class BinancePublicTPDataChannel(config: ExchangeConfig, tradePair: TradePair, b
     log.debug(s"BinanceTPDataChannel($tradePair) initializing...")
     implicit val timeout: Timeout = Config.internalCommunicationTimeout
     binanceTradePair = Await.result((binanceDataChannel ? GetBinanceTradePair(tradePair)).mapTo[BinanceTradePair],
-      Config.internalCommunicationTimeout.duration)
+      Config.internalCommunicationTimeout.duration.plus(500.millis))
     binanceTPWebSocketFlow = context.actorOf(
       BinanceTPWebSocketFlow.props(config, binanceTradePair, self), s"BinanceTPWebSocketFlow-${binanceTradePair.symbol}")
   }

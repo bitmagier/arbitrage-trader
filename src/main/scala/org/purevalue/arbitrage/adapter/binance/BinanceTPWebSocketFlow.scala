@@ -73,7 +73,7 @@ case class BinanceTPWebSocketFlow(config: ExchangeConfig, tradePair: BinanceTrad
         }
       }
       try {
-        Await.result(f, Config.httpTimeout.plus(500.millis))
+        Await.result(f, Config.httpTimeout.plus(1000.millis))
       } catch {
         case e: Exception => throw new RuntimeException(s"While decoding WebSocket stream event: $msg", e)
       }

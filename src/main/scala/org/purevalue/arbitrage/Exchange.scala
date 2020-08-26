@@ -98,7 +98,7 @@ case class Exchange(exchangeName: String,
   override def preStart(): Unit = {
     log.info(s"Initializing Exchange $exchangeName")
     implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
-    tradePairs = Await.result((exchangeDataChannel ? GetTradePairs()).mapTo[TradePairs], timeout.duration).value
+    tradePairs = Await.result((exchangeDataChannel ? GetTradePairs()).mapTo[TradePairs], timeout.duration.plus(500.millis)).value
     log.info(s"$exchangeName: ${tradePairs.size} TradePairs: ${tradePairs.toSeq.sortBy(e => e.toString)}")
   }
 

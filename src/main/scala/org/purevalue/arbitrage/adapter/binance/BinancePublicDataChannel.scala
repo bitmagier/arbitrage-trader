@@ -8,6 +8,7 @@ import org.purevalue.arbitrage.adapter.binance.BinancePublicDataChannel._
 import org.slf4j.LoggerFactory
 import spray.json._
 
+import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor}
 
 
@@ -68,7 +69,9 @@ class BinancePublicDataChannel(config: ExchangeConfig) extends Actor {
   override def preStart(): Unit = {
     import BinanceJsonProtocol._
 
-    exchangeInfo = Await.result(httpGetJson[RawBinanceExchangeInformationJson](s"$BaseRestEndpoint/api/v3/exchangeInfo"), Config.httpTimeout)
+    exchangeInfo = Await.result(
+      httpGetJson[RawBinanceExchangeInformationJson](s"$BaseRestEndpoint/api/v3/exchangeInfo"),
+      Config.httpTimeout.plus(500.millis))
     binanceTradePairs = exchangeInfo.symbols
       .filter(s => s.status == "TRADING" && s.orderTypes.contains("LIMIT") /* && s.orderTypes.contains("LIMIT_MAKER")*/ && s.permissions.contains("SPOT"))
       .filter(s => config.assets.contains(s.baseAsset) && config.assets.contains(s.quoteAsset))

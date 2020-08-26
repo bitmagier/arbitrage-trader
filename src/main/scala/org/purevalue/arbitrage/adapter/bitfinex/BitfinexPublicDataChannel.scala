@@ -8,13 +8,14 @@ import org.purevalue.arbitrage._
 import org.slf4j.LoggerFactory
 import spray.json._
 
+import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor}
 
 case class BitfinexSymbol(currencySymbol: Asset, apiSymbol: String)
 case class BitfinexTradePair(baseAsset: Asset, quoteAsset: Asset, apiSymbol: String) extends TradePair
 
 object BitfinexPublicDataChannel {
-  case class GetBitfinexTradePair(tp:TradePair)
+  case class GetBitfinexTradePair(tp: TradePair)
 
   def props(config: ExchangeConfig): Props = Props(new BitfinexPublicDataChannel(config))
 }
@@ -24,7 +25,7 @@ object BitfinexPublicDataChannel {
  */
 class BitfinexPublicDataChannel(config: ExchangeConfig) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BitfinexPublicDataChannel])
-  implicit val system:ActorSystem = Main.actorSystem
+  implicit val system: ActorSystem = Main.actorSystem
   implicit val executor: ExecutionContextExecutor = system.dispatcher
 
 
@@ -39,19 +40,22 @@ class BitfinexPublicDataChannel(config: ExchangeConfig) extends Actor {
     import DefaultJsonProtocol._
 
     val apiSymbolToOfficialCurrencySymbolMapping: Map[String, String] =
-      Await.result(httpGetJson[List[List[Tuple2[String, String]]]](s"$baseRestEndpointPublic/v2/conf/pub:map:currency:sym"), Config.httpTimeout)
-      .head
-      .map(e => (e._1, e._2.toUpperCase))
-      .toMap
+      Await.result(
+        httpGetJson[List[List[Tuple2[String, String]]]](s"$baseRestEndpointPublic/v2/conf/pub:map:currency:sym"),
+        Config.httpTimeout.plus(500.millis))
+        .head
+        .map(e => (e._1, e._2.toUpperCase))
+        .toMap
     if (log.isTraceEnabled) log.trace(s"currency mappings received: $apiSymbolToOfficialCurrencySymbolMapping")
 
     // currency->name
     val currencies: Map[String, String] =
-      Await.result(httpGetJson[List[List[Tuple2[String, String]]]](s"$baseRestEndpointPublic/v2/conf/pub:map:currency:label"),
-      Config.httpTimeout)
-      .head
-      .map(e => (e._1, e._2))
-      .toMap
+      Await.result(
+        httpGetJson[List[List[Tuple2[String, String]]]](s"$baseRestEndpointPublic/v2/conf/pub:map:currency:label"),
+        Config.httpTimeout.plus(500.millis))
+        .head
+        .map(e => (e._1, e._2))
+        .toMap
     if (log.isTraceEnabled) log.trace(s"currencies received: $currencies")
 
     bitfinexAssets = currencies // apiSymbol, name
@@ -64,7 +68,7 @@ class BitfinexPublicDataChannel(config: ExchangeConfig) extends Actor {
 
     val tradePairs: List[String] =
       Await.result(httpGetJson[List[List[String]]](s"$baseRestEndpointPublic/v2/conf/pub:list:pair:exchange"), Config.httpTimeout)
-      .head
+        .head
     if (log.isTraceEnabled) log.trace(s"tradepairs: $tradePairs")
 
     bitfinexTradePairs = tradePairs
@@ -95,7 +99,7 @@ class BitfinexPublicDataChannel(config: ExchangeConfig) extends Actor {
 
     // Messages from BitfinexTPDataChannel
     case GetBitfinexTradePair(tp) =>
-      sender() ! bitfinexTradePairs.find(e => e.baseAsset==tp.baseAsset && e.quoteAsset==tp.quoteAsset).get
+      sender() ! bitfinexTradePairs.find(e => e.baseAsset == tp.baseAsset && e.quoteAsset == tp.quoteAsset).get
 
     case Status.Failure(cause) =>
       log.error("received failure", cause)
