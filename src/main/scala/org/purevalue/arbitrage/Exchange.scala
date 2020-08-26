@@ -99,8 +99,7 @@ case class Exchange(exchangeName: String,
     log.info(s"Initializing Exchange $exchangeName")
     implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
     tradePairs = Await.result((exchangeDataChannel ? GetTradePairs()).mapTo[TradePairs], timeout.duration).value
-    log.info(s"$exchangeName: ${tradePairs.size} TradePairs: $tradePairs")
-
+    log.info(s"$exchangeName: ${tradePairs.size} TradePairs: ${tradePairs.toSeq.sortBy(e => e.toString)}")
   }
 
   override def receive: Receive = {

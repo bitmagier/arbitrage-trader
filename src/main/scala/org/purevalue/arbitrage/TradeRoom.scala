@@ -42,7 +42,6 @@ case class CryptoValue(asset: Asset, amount: Double) {
             case Some(rate) =>
               Some(CryptoValue(targetAsset, amount / rate))
             case None => // try conversion via BTC as last option
-              None
               if ((this.asset != Bitcoin && targetAsset != Bitcoin)
                 && findConversionRate(TradePair.of(this.asset, Bitcoin)).isDefined
                 && findConversionRate(TradePair.of(targetAsset, Bitcoin)).isDefined) {
@@ -185,9 +184,9 @@ object TradeRoom {
       extendedTickers.get(exchange) match {
         case Some(eTickers) => eTickers.get(tradePair) match {
           case Some(ticker) => return Some(ticker)
-          case _ =>
+          case None =>
         }
-        case _ =>
+        case None =>
       }
     }
     None

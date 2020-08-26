@@ -14,6 +14,7 @@ import org.purevalue.arbitrage.adapter.binance.BinanceTPWebSocketFlow.StartStrea
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
+import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, Future, Promise}
 import scala.util.{Failure, Success}
 
@@ -72,7 +73,7 @@ case class BinanceTPWebSocketFlow(config: ExchangeConfig, tradePair: BinanceTrad
         }
       }
       try {
-        Await.result(f, Config.httpTimeout)
+        Await.result(f, Config.httpTimeout.plus(500.millis))
       } catch {
         case e: Exception => throw new RuntimeException(s"While decoding WebSocket stream event: $msg", e)
       }
