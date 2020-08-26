@@ -307,11 +307,17 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   }
 
   /**
-   * Select none-reserve assets, where not a single compatible Tradepair can be found looking at all exchanges.
+   * Select none-reserve assets, where not at least two connected compatible TradePairs can be found looking at all exchanges.
    * Then we drop all TradePairs, connected to the selected ones.
    *
+   * Reason: We need two TradePairs at least, to have one for the main-trdade and the other for the reserve-liquidity transaction.
+   * (still we cannot be 100% sure, that every tried transaction can be fulfilled with providing liquidity via an uninvolved reserve-asset,
+   *  but we can increase the chances via that cleanup here)
+   *
    * For instance we have an asset X (which is not one of the reserve assets), and the only tradable options are:
-   * X:BTC on exchange1 and X:ETH on exchange2. Thus there is no compatible tradepair, we remove both trade pairs.
+   * X:BTC & X:ETH on exchange1 and X:ETH on exchange2.
+   * We remove both trade pairs, because there is only one compatible tradepair (X:ETH) which is available for arbitrage-trading and
+   * the required liquidity cannot be provided on exchange2 with another tradepair (ETH does not work because it is involved in the trade)
    *
    * This method runs non-parallel and synchronously to finish together with all actions finished
    * Parallel optimization is possible but not necessary for this small task
@@ -329,14 +335,15 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       .filterNot(a =>
         eTradePairs
           .filter(_._2.baseAsset == a) // all connected tradepairs X -> ...
-          .groupBy(_._2.quoteAsset) // grouped by other side of TradePair
-          .values.exists(_.size > 1)) // tests, if a single TradePair exists (for our candidate base asset), that is present on at least two exchanges
+          .groupBy(_._2.quoteAsset) // grouped by other side of TradePair (trade options)
+          .count(e => e._2.size > 1) > 1 // tests, if at least two trade options exists (for our candidate base asset), that are present on at least two exchanges
+      )
 
     for (asset <- assetsToRemove) {
       val tradePairsToDrop: Set[Tuple2[String, TradePair]] =
         eTradePairs.filter(_._2.baseAsset == asset)
 
-      log.info(s"${Emoji.Robot}  Dropping all TradePairs connected to $asset, because there are no compatible TradePair on any exchange:  $tradePairsToDrop")
+      log.info(s"${Emoji.Robot}  Dropping all TradePairs connected to $asset, because there are not enough (> 1) compatible TradePairs on any exchange:  $tradePairsToDrop")
       tradePairsToDrop.foreach(e => dropTradePairSync(e._1, e._2))
     }
   }
