@@ -302,54 +302,46 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   }
 
 
-  def removeTradePairSync(exchangeName: String, tp: TradePair): Unit = {
+  def dropTradePairSync(exchangeName: String, tp: TradePair): Unit = {
     implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
     Await.result(exchanges(exchangeName) ? RemoveTradePair(tp), timeout.duration)
   }
 
   /**
-   * Here we remove non-reserve-asset-tradepairs which can only be traded against BTC or another single (reserve) asset,
-   * because it is impossible for them to be provided via another reserve-asset than the one in a desired trade.
-   * (see ExchangeLiquidityManager concept)
+   * Select none-reserve assets, where not a single compatible Tradepair can be found looking at all exchanges.
+   * Then we drop all TradePairs, connected to the selected ones.
+   *
+   * For instance we have an asset X (which is not one of the reserve assets), and the only tradable options are:
+   * X:BTC on exchange1 and X:ETH on exchange2. Thus there is no compatible tradepair, we remove both trade pairs.
    *
    * This method runs non-parallel and synchronously to finish together with all actions finished
    * Parallel optimization is possible but not necessary for this small task
    */
-  def removeSingleConversionOptionOnlyTradePairsSync(): Unit = {
+  def dropUnusableTradepairsSync(): Unit = {
     implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
-    for (e: String <- exchanges.keys) {
-      val tradePairs: Set[TradePair] = Await.result((exchanges(e) ? GetTradePairs()).mapTo[Set[TradePair]], timeout.duration)
-      val toRemove: Set[TradePair] =
-        tradePairs
-          .filterNot(tp => Config.liquidityManager.reserveAssets.contains(tp.baseAsset)) // don't select reserve-assets
-          .filterNot(tp => tradePairs.count(_.baseAsset == tp.baseAsset) > 1) // don't select assets with multiple conversion options
-          .filterNot(_.quoteAsset == USDT) // never remove X:USDT (required for conversion calculations)
-      for (tp <- toRemove) {
-        log.debug(s"${Emoji.Robot}  Removing TradePair $tp on $e because on this exchange we only have that single trade option with a base asset")
-        removeTradePairSync(e, tp)
-      }
+    var eTradePairs: Set[Tuple2[String, TradePair]] = Set()
+    for (exchange: String <- exchanges.keys) {
+      val tp: Set[TradePair] = Await.result((exchanges(exchange) ? GetTradePairs()).mapTo[Set[TradePair]], timeout.duration)
+      eTradePairs = eTradePairs ++ tp.map(e => (exchange, e))
+    }
+    val assetsToRemove = eTradePairs
+      .map(_._2.baseAsset) // set of candidate assets
+      .filterNot(Config.liquidityManager.reserveAssets.contains) // don't select reserve assets
+      .filterNot(a =>
+        eTradePairs
+          .filter(_._2.baseAsset == a) // all connected tradepairs X -> ...
+          .groupBy(_._2.quoteAsset) // grouped by other side of TradePair
+          .values.exists(_.size > 1)) // tests, if a single TradePair exists (for our candidate base asset), that is present on at least two exchanges
+
+    for (asset <- assetsToRemove) {
+      val tradePairsToDrop: Set[Tuple2[String, TradePair]] =
+        eTradePairs.filter(_._2.baseAsset == asset)
+
+      log.info(s"${Emoji.Robot}  Dropping all TradePairs connected to $asset, because there are no compatible TradePair on any exchange:  $tradePairsToDrop")
+      tradePairsToDrop.foreach(e => dropTradePairSync(e._1, e._2))
     }
   }
 
-
-  def removeTradePairsListedOnlyAtASingleExchangeSync(): Unit = {
-    var tpExchanges: Map[TradePair, Set[String]] = Map()
-    implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
-    for (e: String <- exchanges.keys) {
-      Await.result((exchanges(e) ? GetTradePairs()).mapTo[Set[TradePair]], timeout.duration).foreach { tp =>
-        tpExchanges = tpExchanges + (tp -> (tpExchanges.getOrElse(tp, Set()) + e))
-      }
-    }
-    tpExchanges // map[TradePair -> Set[exchanges]]
-      .filter(_._2.size == 1) // select TP listed only on a single exchange
-      .filterNot(_._1.quoteAsset == USDT) // never remove X:USDT (required for conversion calculations)
-      .foreach { tpe =>
-        val tp = tpe._1
-        val e = tpe._2.head
-        log.debug(s"${Emoji.Robot}  Removing TradePair $tp on $e because it is listed only on that exchange and nowhere else")
-        removeTradePairSync(e, tp)
-      }
-  }
 
   def runExchange(exchangeName: String, exchangeInit: ExchangeInitStuff): Unit = {
     val camelName = exchangeName.substring(0, 1).toUpperCase + exchangeName.substring(1)
@@ -392,9 +384,10 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   }
 
   def cleanupTradePairs(): Unit = {
-    removeSingleConversionOptionOnlyTradePairsSync()
-    removeTradePairsListedOnlyAtASingleExchangeSync()
-    log.info(s"${Emoji.Robot}  Finished cleanup of unusable trade pairs")
+    dropUnusableTradepairsSync()
+    log.info(s"${
+      Emoji.Robot
+    }  Finished cleanup of unusable trade pairs")
   }
 
   def startStreaming(): Unit = {
@@ -420,11 +413,14 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
    * Watches for stale data and will trigger a restart of the TradeRoom
    */
   def deathWatch(): Unit = {
-    dataAge.keys.foreach { e =>
-      if (Duration.between(dataAge(e).tickerTS, Instant.now).compareTo(config.restartWhenASingleTickerIsOlderThan) > 0) {
-        log.info(s"${Emoji.Robot}  Killing TradeRoom actor because of outdated ticker data from $e")
-        self ! Kill
-      }
+    dataAge.keys.foreach {
+      e =>
+        if (Duration.between(dataAge(e).tickerTS, Instant.now).compareTo(config.restartWhenAnExchangeDataStreamIsOlderThan) > 0) {
+          log.info(s"${
+            Emoji.Robot
+          }  Killing TradeRoom actor because of outdated ticker data from $e")
+          self ! Kill
+        }
     }
   }
 
@@ -434,7 +430,9 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     case Exchange.Initialized(exchange) =>
       initializedExchanges = initializedExchanges + exchange
       if (initialized) {
-        log.info(s"${Emoji.Satisfied}  All exchanges initialized")
+        log.info(s"${
+          Emoji.Satisfied
+        }  All exchanges initialized")
         self ! LogStats()
         startTraders()
       }
@@ -459,6 +457,5 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   }
 }
 
-// TODO restart whole exchange channels, when the ticker is aged (3 minutes)
 // TODO shudown app in case of serious exceptions
 // TODO add feature Exchange-PlatformStatus to cover Maintainance periods

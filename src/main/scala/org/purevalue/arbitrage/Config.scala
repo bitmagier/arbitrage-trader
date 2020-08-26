@@ -25,7 +25,7 @@ case class OrderBundleSafetyGuardConfig(maximumReasonableWinPerOrderBundleUSDT: 
 case class TradeRoomConfig(extendedTickerExchanges: List[String],
                            orderBooksEnabled: Boolean,
                            statsInterval: Duration,
-                           restartWhenASingleTickerIsOlderThan: Duration,
+                           restartWhenAnExchangeDataStreamIsOlderThan: Duration,
                            orderBundleSafetyGuard: OrderBundleSafetyGuardConfig)
 case class LiquidityManagerConfig(reserveAssets: List[Asset])
 
@@ -44,7 +44,7 @@ object Config {
       tradeRoomConfig.getStringList("reference-ticker-exchanges").asScala.toList,
       tradeRoomConfig.getBoolean("order-books-enabled"),
       tradeRoomConfig.getDuration("stats-interval"),
-      tradeRoomConfig.getDuration("restart-when-a-single-ticker-is-older-than"),
+      tradeRoomConfig.getDuration("restart-when-an-exchange-data-stream-is-older-than"),
       tradeRoomConfig.getConfig("order-bundle-safety-guard") match {
         case c: com.typesafe.config.Config => OrderBundleSafetyGuardConfig(
           c.getDouble("max-reasonable-win-per-order-bundle-usdt"),
