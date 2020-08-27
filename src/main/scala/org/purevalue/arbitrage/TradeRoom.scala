@@ -417,6 +417,8 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
   override def preStart(): Unit = {
     startExchanges()
+    // REMARK: doing the tradepair cleanup here causes loss of some options for the reference ticker which leads to lesser balance conversion calculation options
+    // TODO decouple reference-ticker delivery from ExchangeTPDataManager (=active trade pairs)
     cleanupTradePairs()
     startStreaming()
   }
