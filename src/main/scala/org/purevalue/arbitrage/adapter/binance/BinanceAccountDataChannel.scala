@@ -45,7 +45,11 @@ class BinanceAccountDataChannel(config: ExchangeConfig) extends Actor {
           .map(_.getStrictText)
           .map(s => JsonParser(s).asJsObject())
           .map {
-            // TODO
+            // TODO: do we need to subscribe to these streams first?
+            // TODO parse Account Update "outboundAccountInfo"
+            // TODO parse Order Update "executionResport"
+            // TODO ignore "outboundAccountPosition" (its a diff only)
+            // TODO ignore "balanceUpdate" (because I assume, that outboundAccountInfo is always sent, when something changes
             case j: JsObject =>
               log.warn(s"Unknown json object received: $j")
               None
