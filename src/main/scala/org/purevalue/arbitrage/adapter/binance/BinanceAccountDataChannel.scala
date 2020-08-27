@@ -253,22 +253,22 @@ case class BalanceUpdateJson(e: String, // event type
   }
 }
 
-
+// see https://github.com/binance-exchange/binance-official-api-docs/blob/master/rest-api.md#enum-definitions
 case class OrderExecutionReportJson( e: String, // Event type
                                      E: Long, // Event time
                                      s: String, // Symbol
                                      c: String, // Client order ID
-                                     S: String, // Side ("BUY","SELL")
-                                     o: String, // Order type (e.g. "LIMIT")
-//                                     f: String, // Time in force e.g. "GTC"
+                                     S: String, // Side (BUY, SELL)
+                                     o: String, // Order type (LIMIT, MARKET, STOP_LOSS, STOP_LOSS_LIMIT, TAKE_PROFIT, TAKE_PROFIT_LIMIT, LIMIT_MAKER)
+//                                     f: String, // Time in force (GTC - Good Til Canceled, IOC - Immediate Or Cancel, FOK - Fill or Kill)
                                      q: String, // Order quantity (e.g. "1.00000000")
                                      p: String, // Order price
                                      P: String, // Stop price
 //                                     F: String, // Iceberg quantity
                                      g: Long, // OrderListId
                                      C: String, // Original client order ID; This is the ID of the order being canceled (or null otherwise)
-                                     x: String, // Current execution type (e.g. "NEW")
-                                     X: String, // Current order status (e.g. "NEW")
+                                     x: String, // Current execution type (NEW - The order has been accepted into the engine, CANCELED - canceled by user, (REJECTED), TRADE - part of the order or all of the order's quantity has filled, EXPIRED - the order was canceled according to the order's rules)
+                                     X: String, // Current order status (e.g. NEW, PARTIALLY_FILLED, FILLED, CANCELED, PENDING_CANCEL, REJECTED, EXPIRED)
                                      r: String, // Order reject reason; will be an error code or "NONE"
                                      i: Long, // Order ID
 //                                     l: String, // Last executed quantity
