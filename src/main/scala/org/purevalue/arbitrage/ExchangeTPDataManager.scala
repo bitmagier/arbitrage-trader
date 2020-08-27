@@ -6,7 +6,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import akka.Done
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, PoisonPill, Props, Status}
 import akka.stream.scaladsl.Sink
-import org.purevalue.arbitrage.TPDataManager._
+import org.purevalue.arbitrage.ExchangeTPDataManager._
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.slf4j.LoggerFactory
 
@@ -75,27 +75,31 @@ case class ExchangeTPData(ticker: concurrent.Map[TradePair, Ticker],
                           orderBook: concurrent.Map[TradePair, OrderBook],
                           age: TPDataTimestamps)
 
-object TPDataManager {
+object ExchangeTPDataManager {
   case class InitCheck()
   case class Initialized(tradePair: TradePair)
   case class StartStreamRequest(sink: Sink[Seq[ExchangeTPStreamData], Future[Done]])
   case class Stop()
 
-  def props(config: ExchangeConfig, tradePair: TradePair, exchangeDataChannel: ActorRef, exchange: ActorRef,
-            tpDataChannelInit: Function1[TPDataChannelPropsParams, Props], tpDataSink: ExchangeTPData): Props =
-    Props(new TPDataManager(config, tradePair, exchangeDataChannel, exchange, tpDataChannelInit, tpDataSink))
+  def props(config: ExchangeConfig,
+            tradePair: TradePair,
+            exchangePublicDataInquirer: ActorRef,
+            exchange: ActorRef,
+            tpDataChannelInit: Function1[ExchangePublicTPDataChannelPropsParams, Props],
+            tpDataSink: ExchangeTPData): Props =
+    Props(new ExchangeTPDataManager(config, tradePair, exchangePublicDataInquirer, exchange, tpDataChannelInit, tpDataSink))
 }
 
 /**
  * Manages all kind of data of one tradepair at one exchange
  */
-case class TPDataManager(config: ExchangeConfig,
-                         tradePair: TradePair,
-                         exchangeDataChannel: ActorRef,
-                         exchange: ActorRef,
-                         tpDataChannelInit: Function1[TPDataChannelPropsParams, Props],
-                         tpData: ExchangeTPData) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[TPDataManager])
+case class ExchangeTPDataManager(config: ExchangeConfig,
+                                 tradePair: TradePair,
+                                 exchangePublicDataInquirer: ActorRef,
+                                 exchange: ActorRef,
+                                 exchangePublicTPDataChannelInit: Function1[ExchangePublicTPDataChannelPropsParams, Props],
+                                 tpData: ExchangeTPData) extends Actor {
+  private val log = LoggerFactory.getLogger(classOf[ExchangeTPDataManager])
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
@@ -104,8 +108,8 @@ case class TPDataManager(config: ExchangeConfig,
   private var initializedMsgSend = false
   private var orderBookInitialized = false
 
-  private var initTime: Instant = _
-  private val stopData:AtomicBoolean = new AtomicBoolean(false)
+  private var initTimestamp: Instant = _
+  private val stopData: AtomicBoolean = new AtomicBoolean(false)
 
   val initCheckSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(1.seconds, 1.seconds, self, InitCheck())
 
@@ -165,9 +169,10 @@ case class TPDataManager(config: ExchangeConfig,
   }
 
   override def preStart(): Unit = {
-    initTime = Instant.now()
+    initTimestamp = Instant.now()
     tpDataChannel = context.actorOf(
-      tpDataChannelInit.apply(TPDataChannelPropsParams(tradePair, exchangeDataChannel, self)), s"${config.exchangeName}-TPDataChannel-$tradePair")
+      exchangePublicTPDataChannelInit.apply(
+        ExchangePublicTPDataChannelPropsParams(tradePair, exchangePublicDataInquirer, self)), s"${config.exchangeName}-TPDataChannel-$tradePair")
 
     tpDataChannel ! StartStreamRequest(sink)
   }
@@ -178,9 +183,9 @@ case class TPDataManager(config: ExchangeConfig,
     case InitCheck() =>
       if (initialized) initCheckSchedule.cancel()
       else {
-        if (Duration.between(initTime, Instant.now()).compareTo(Config.dataManagerInitTimeout) > 0) {
+        if (Duration.between(initTimestamp, Instant.now()).compareTo(Config.dataManagerInitTimeout) > 0) {
           log.info(s"Killing ${config.exchangeName}-TPDataManager-$tradePair")
-          self ! Kill // TODO graceful shutdown of tradepair-channel via parent actor
+          self ! Kill
         }
       }
 

@@ -9,7 +9,7 @@ import akka.stream.scaladsl._
 import akka.{Done, NotUsed}
 import org.purevalue.arbitrage.HttpUtils.httpGetJson
 import org.purevalue.arbitrage._
-import org.purevalue.arbitrage.adapter.binance.BinancePublicDataChannel.{toAsk, toBid}
+import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.{toAsk, toBid}
 import org.purevalue.arbitrage.adapter.binance.BinanceTPWebSocketFlow.StartStreamRequest
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
@@ -58,7 +58,7 @@ case class BinanceTPWebSocketFlow(config: ExchangeConfig, tradePair: BinanceTrad
                 case OrderBookStreamName => j.fields("data").asJsObject.convertTo[RawPartialOrderBookStreamJson]
                 case name: String => log.error(s"Unknown data stream '$name' received: $j")
               }
-            case j: JsObject => log.error(s"Unknown json object received: $j")
+            case j: JsObject => log.warn(s"Unknown json object received: $j")
           } map {
           case s: StreamSubscribeResponseJson =>
             if (log.isTraceEnabled) log.trace(s"received $s")

@@ -4,24 +4,24 @@ import java.time.Instant
 
 import akka.actor.{Actor, ActorSystem, Cancellable, Props}
 import akka.http.scaladsl.Http
-import akka.http.scaladsl.model.{HttpMethods, StatusCodes, Uri}
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
-import akka.stream.{Graph, OverflowStrategy}
+import akka.http.scaladsl.model.{HttpMethods, StatusCodes, Uri}
+import akka.stream.OverflowStrategy
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source, SourceQueueWithComplete}
 import akka.{Done, NotUsed}
 import org.purevalue.arbitrage.HttpUtils.httpRequestJsonBinanceAccount
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.{QueryData, SendPing, StartStreamRequest}
-import org.purevalue.arbitrage.adapter.binance.BinancePublicDataChannel.BaseRestEndpoint
+import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.BaseRestEndpoint
 import org.purevalue.arbitrage.adapter.binance.WebSocketJsonProtocoll.subscribeMsg
 import org.slf4j.LoggerFactory
-import spray.json.{DefaultJsonProtocol, RootJsonFormat, enrichAny}
+import spray.json.{DefaultJsonProtocol, JsObject, JsonParser, RootJsonFormat, enrichAny}
 
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor, Future, Promise}
 
 object BinanceAccountDataChannel {
-  case class StartStreamRequest(sink: Sink[ExchangeAccountStreamData, NotUsed])
+  case class StartStreamRequest(sink: Sink[ExchangeAccountStreamData, Future[Done]])
   case class QueryData()
   case class SendPing()
 
@@ -42,16 +42,36 @@ class BinanceAccountDataChannel(config: ExchangeConfig) extends Actor {
   val restSource: (SourceQueueWithComplete[IncomingBinanceAccountJson], Source[IncomingBinanceAccountJson, NotUsed]) =
     Source.queue[IncomingBinanceAccountJson](1, OverflowStrategy.backpressure).preMaterialize()
 
-  val wsFlow: Flow[Message, IncomingBinanceAccountJson, NotUsed] = Flow.fromFunction {
-    case _ => null // TODO
+  val wsFlow: Flow[Message, Option[IncomingBinanceAccountJson], NotUsed] = Flow.fromFunction {
+    case msg: TextMessage =>
+      val f: Future[Option[IncomingBinanceAccountJson]] = {
+        msg.toStrict(Config.httpTimeout)
+          .map(_.getStrictText)
+          .map(s => JsonParser(s).asJsObject())
+          .map {
+            // TODO
+            case j: JsObject =>
+              log.warn(s"Unknown json object received: $j")
+              None
+          }
+      }
+      try {
+        Await.result(f, Config.httpTimeout.plus(1000.millis))
+      } catch {
+        case e: Exception => throw new RuntimeException(s"While decoding WebSocket stream event: $msg", e)
+      }
+
+    case _ =>
+      log.warn(s"Received non TextMessage")
+      None
   }
 
   val downStreamFlow: Flow[IncomingBinanceAccountJson, ExchangeAccountStreamData, NotUsed] = Flow.fromFunction {
-    case j:AccountInformationJson => j.toWallet
+    case j: AccountInformationJson => j.toWallet
     case _ => throw new NotImplementedError
   }
 
-  def timestamp:Long = Instant.now.toEpochMilli
+  def timestamp: Long = Instant.now.toEpochMilli
 
   def queryAccountInformation(): AccountInformationJson = {
     import BinanceAccountDataJsonProtocoll._
@@ -60,12 +80,13 @@ class BinanceAccountDataChannel(config: ExchangeConfig) extends Actor {
       Config.httpTimeout.plus(500.millis))
   }
 
-
   val SubscribeMessages: List[StreamSubscribeRequestJson] = List()
 
-  def createFlowTo(sink: Sink[ExchangeAccountStreamData, NotUsed]): Flow[Message, Message, Promise[Option[Message]]] = {
+  def createFlowTo(sink: Sink[ExchangeAccountStreamData, Future[Done]]): Flow[Message, Message, Promise[Option[Message]]] = {
     Flow.fromSinkAndSourceCoupledMat(
       wsFlow
+        .filter(_.isDefined)
+        .map(_.get)
         .mergePreferred(restSource._2, priority = true, eagerComplete = false)
         .via(downStreamFlow)
         .toMat(sink)(Keep.right),
@@ -91,13 +112,16 @@ class BinanceAccountDataChannel(config: ExchangeConfig) extends Actor {
   def createListenKey(): Unit = {
     import BinanceAccountDataJsonProtocoll._
     listenKey = Await.result(
-      httpRequestJsonBinanceAccount[ListenKey](HttpMethods.POST, s"$BaseRestEndpoint/api/v3/userDataStream", s"timestamp=$timestamp", config.secrets),
+      httpRequestJsonBinanceAccount[ListenKey](HttpMethods.POST,
+        s"$BaseRestEndpoint/api/v3/userDataStream", s"timestamp=$timestamp", config.secrets),
       Config.httpTimeout.plus(500.millis)).listenKey
+    log.debug(s"created listenKey: $listenKey")
   }
 
   def pingUserStream(): Unit = {
     import DefaultJsonProtocol._
-    httpRequestJsonBinanceAccount[String](HttpMethods.PUT, s"$BaseRestEndpoint/api/v3/userDataStream?listenKey=$listenKey", s"timestamp=$timestamp", config.secrets)
+    httpRequestJsonBinanceAccount[String](HttpMethods.PUT,
+      s"$BaseRestEndpoint/api/v3/userDataStream?listenKey=$listenKey", s"timestamp=$timestamp", config.secrets)
   }
 
   override def preStart(): Unit = {
@@ -115,7 +139,6 @@ class BinanceAccountDataChannel(config: ExchangeConfig) extends Actor {
       restSource._1.offer(queryAccountInformation())
 
     case SendPing() => pingUserStream()
-
   }
 }
 
@@ -146,11 +169,10 @@ case class AccountInformationJson(makerCommission: Int,
       .toMap)
 }
 
-case class ListenKey(listenKey:String)
+case class ListenKey(listenKey: String)
 
 object BinanceAccountDataJsonProtocoll extends DefaultJsonProtocol {
   implicit val balanceJson: RootJsonFormat[BalanceJson] = jsonFormat3(BalanceJson)
   implicit val accountInformationJson: RootJsonFormat[AccountInformationJson] = jsonFormat11(AccountInformationJson)
   implicit val listenKeyJson: RootJsonFormat[ListenKey] = jsonFormat1(ListenKey)
 }
-

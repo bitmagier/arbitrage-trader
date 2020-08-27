@@ -1,8 +1,8 @@
 package org.purevalue.arbitrage
 
 import akka.actor.{ActorRef, Props}
-import org.purevalue.arbitrage.adapter.binance.{BinancePublicDataChannel, BinancePublicTPDataChannel}
-import org.purevalue.arbitrage.adapter.bitfinex.{BitfinexPublicDataChannel, BitfinexPublicTPDataChannel}
+import org.purevalue.arbitrage.adapter.binance.{BinanceAccountDataChannel, BinancePublicDataInquirer, BinancePublicTPDataChannel}
+import org.purevalue.arbitrage.adapter.bitfinex.{BitfinexPublicDataInquirer, BitfinexPublicTPDataChannel}
 import org.slf4j.LoggerFactory
 
 // Crypto asset / coin.
@@ -54,8 +54,10 @@ object TradePair {
   }
 }
 
-case class TPDataChannelPropsParams(tp: TradePair, exchangePublicDataChannel: ActorRef, tpDataManager: ActorRef)
-case class ExchangeInitStuff(dataChannelProps: Function0[Props], tpDataChannelProps: Function1[TPDataChannelPropsParams, Props])
+case class ExchangePublicTPDataChannelPropsParams(tp: TradePair, exchangePublicDataInquirer: ActorRef, tpDataManager: ActorRef)
+case class ExchangeInitStuff(publicDataInquirerProps: Function0[Props],
+                             exchangePublicTPDataChannelProps: Function1[ExchangePublicTPDataChannelPropsParams, Props],
+                             exchangeAccountDataChannelProps: () => Props)
 
 object GlobalConfig {
   private val log = LoggerFactory.getLogger("GlobalConfig")
@@ -63,13 +65,17 @@ object GlobalConfig {
   // all exchanges - used for init routine
   val AllExchanges: Map[String, ExchangeInitStuff] = Map(
     "binance" -> ExchangeInitStuff(
-      () => BinancePublicDataChannel.props(Config.exchange("binance")),
-      (p: TPDataChannelPropsParams) =>
-        BinancePublicTPDataChannel.props(Config.exchange("binance"), p.tp, p.exchangePublicDataChannel)),
+      () => BinancePublicDataInquirer.props(Config.exchange("binance")),
+      (p: ExchangePublicTPDataChannelPropsParams) =>
+        BinancePublicTPDataChannel.props(Config.exchange("binance"), p.tp, p.exchangePublicDataInquirer),
+      () => BinanceAccountDataChannel.props(Config.exchange("binance"))
+    ),
     "bitfinex" -> ExchangeInitStuff(
-      () => BitfinexPublicDataChannel.props(Config.exchange("bitfinex")),
-      (p: TPDataChannelPropsParams) =>
-        BitfinexPublicTPDataChannel.props(Config.exchange("bitfinex"), p.tp, p.exchangePublicDataChannel))
+      () => BitfinexPublicDataInquirer.props(Config.exchange("bitfinex")),
+      (p: ExchangePublicTPDataChannelPropsParams) =>
+        BitfinexPublicTPDataChannel.props(Config.exchange("bitfinex"), p.tp, p.exchangePublicDataInquirer),
+      null // TODO
+    )
   )
 
   // this is the reference to know exactly about which asset (or coin) we are talking (no matter at which exchange)

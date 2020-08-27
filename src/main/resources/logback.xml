@@ -13,6 +13,7 @@
   <logger name="org.purevalue.arbitrage" level="INFO"/>
   <logger name="org.purevalue.arbitrage.OrderBundleSafetyGuard" level="DEBUG"/>
   <logger name="org.purevalue.arbitrage.TradeRoom" level="DEBUG"/>
+  <logger name="org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel" level="DEBUG"/>
 
   <root level="INFO">
     <appender-ref ref="STDOUT" />

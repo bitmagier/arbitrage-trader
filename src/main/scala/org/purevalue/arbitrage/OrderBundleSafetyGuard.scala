@@ -6,21 +6,22 @@ import org.purevalue.arbitrage.TradeRoom.OrderBundle
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.slf4j.LoggerFactory
 
-sealed trait OrderBundleUnsafeReason
-case object NegativeBalance extends OrderBundleUnsafeReason
-case object TickerOutdated extends OrderBundleUnsafeReason
-case object TooFantasticWin extends OrderBundleUnsafeReason
-case object OrderLimitFarAwayFromTicker extends OrderBundleUnsafeReason
-case object TotalTransactionUneconomic extends OrderBundleUnsafeReason
+sealed trait SafetyGuardDecision
+case object Okay extends SafetyGuardDecision
+case object NegativeBalance extends SafetyGuardDecision
+case object TickerOutdated extends SafetyGuardDecision
+case object TooFantasticWin extends SafetyGuardDecision
+case object OrderLimitFarAwayFromTicker extends SafetyGuardDecision
+case object TotalTransactionUneconomic extends SafetyGuardDecision
 
 case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
                                   tickers: scala.collection.Map[String, scala.collection.concurrent.Map[TradePair, Ticker]],
                                   extendedTicker: scala.collection.Map[String, scala.collection.Map[TradePair, ExtendedTicker]],
                                   dataAge: scala.collection.Map[String, TPDataTimestamps]) {
   private val log = LoggerFactory.getLogger(classOf[OrderBundleSafetyGuard])
-  private var stats: Map[OrderBundleUnsafeReason, Int] = Map()
+  private var stats: Map[SafetyGuardDecision, Int] = Map()
 
-  def unsafeStats: Map[OrderBundleUnsafeReason, Int] = stats
+  def unsafeStats: Map[SafetyGuardDecision, Int] = stats
 
   private def orderLimitCloseToTicker(order: Order): Boolean = {
     val ticker = tickers(order.exchange)(order.tradePair)
@@ -141,16 +142,15 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
 
   def isSafe(t: OrderBundle): Boolean = {
     _isSafe(t) match {
-      case (true, _) => true
-      case (false, reason) =>
+      case (result, reason) =>
         this.synchronized {
           stats = stats + (reason -> (stats.getOrElse(reason, 0) + 1))
         }
-        false
+        result
     }
   }
 
-  private def _isSafe(t: OrderBundle): (Boolean, OrderBundleUnsafeReason) = {
+  private def _isSafe(t: OrderBundle): (Boolean, SafetyGuardDecision) = {
     if (t.bill.sumUSDT <= 0) {
       log.warn(s"${Emoji.Disagree}  Got OrderBundle with negative balance: ${t.bill.sumUSDT}. I will not execute that one!")
       log.debug(s"$t")
@@ -166,7 +166,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
     else if (!totalTransactionCostsInRage(t)) {
       (false, TotalTransactionUneconomic)
     } else {
-      (true, null)
+      (true, Okay)
     }
   }
 }

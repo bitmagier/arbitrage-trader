@@ -4,7 +4,7 @@ import akka.actor.{Actor, ActorSystem, Props, Status}
 import org.purevalue.arbitrage.Exchange.{GetTradePairs, TradePairs}
 import org.purevalue.arbitrage.HttpUtils.httpGetJson
 import org.purevalue.arbitrage._
-import org.purevalue.arbitrage.adapter.binance.BinancePublicDataChannel._
+import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer._
 import org.slf4j.LoggerFactory
 import spray.json._
 
@@ -29,7 +29,7 @@ import scala.concurrent.{Await, ExecutionContextExecutor}
 
 case class BinanceTradePair(baseAsset: Asset, quoteAsset: Asset, symbol: String) extends TradePair
 
-object BinancePublicDataChannel {
+object BinancePublicDataInquirer {
   case class GetBinanceTradePair(tradePair: TradePair)
 
   def toBid(e: Seq[String]): Bid = {
@@ -50,14 +50,14 @@ object BinancePublicDataChannel {
 
   val BaseRestEndpoint = "https://api.binance.com"
 
-  def props(config: ExchangeConfig): Props = Props(new BinancePublicDataChannel(config))
+  def props(config: ExchangeConfig): Props = Props(new BinancePublicDataInquirer(config))
 }
 
 /**
  * Binance exchange - account data channel
  */
-class BinancePublicDataChannel(config: ExchangeConfig) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[BinancePublicDataChannel])
+class BinancePublicDataInquirer(config: ExchangeConfig) extends Actor {
+  private val log = LoggerFactory.getLogger(classOf[BinancePublicDataInquirer])
   implicit val system: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = system.dispatcher
 

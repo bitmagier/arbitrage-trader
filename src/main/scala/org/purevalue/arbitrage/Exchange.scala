@@ -1,15 +1,15 @@
 package org.purevalue.arbitrage
 
 import akka.actor.SupervisorStrategy.Restart
-import akka.actor.{Actor, ActorRef, ActorSystem, OneForOneStrategy, PoisonPill, Props, Status}
-import akka.pattern.{ask, gracefulStop}
+import akka.actor.{Actor, ActorRef, ActorSystem, OneForOneStrategy, Props, Status}
+import akka.pattern.ask
 import akka.util.Timeout
-import org.purevalue.arbitrage.Exchange.{GetTradePairs, RemoveRunningTradePair, RemoveTradePair, StartStreaming, TradePairs}
+import org.purevalue.arbitrage.Exchange.{GetTradePairs, RemoveTradePair, StartStreaming, TradePairs}
 import org.slf4j.LoggerFactory
 
 import scala.collection._
 import scala.concurrent.duration.DurationInt
-import scala.concurrent.{Await, ExecutionContextExecutor, Future}
+import scala.concurrent.{Await, ExecutionContextExecutor}
 
 
 object Exchange {
@@ -23,18 +23,21 @@ object Exchange {
   def props(exchangeName: String,
             config: ExchangeConfig,
             tradeRoom: ActorRef,
-            exchangeDataChannel: ActorRef,
-            tpDataChannelPropsInit: Function1[TPDataChannelPropsParams, Props],
+            exchangePublicDataInquirer: ActorRef,
+            exchangePublicTPDataChannelPropsInit: Function1[ExchangePublicTPDataChannelPropsParams, Props],
+            exchangeAccountDataChannelPropsInit: () => Props,
             tpData: ExchangeTPData,
             accountData: ExchangeAccountData): Props =
-    Props(new Exchange(exchangeName, config, tradeRoom, exchangeDataChannel, tpDataChannelPropsInit, tpData, accountData))
+    Props(new Exchange(exchangeName, config, tradeRoom, exchangePublicDataInquirer, exchangePublicTPDataChannelPropsInit,
+      exchangeAccountDataChannelPropsInit, tpData, accountData))
 }
 
 case class Exchange(exchangeName: String,
                     config: ExchangeConfig,
                     tradeRoom: ActorRef,
-                    exchangeDataChannel: ActorRef,
-                    tpDataChannelPropsInit: Function1[TPDataChannelPropsParams, Props],
+                    exchangePublicDataInquirer: ActorRef,
+                    exchangePublicTPDataChannelPropsInit: Function1[ExchangePublicTPDataChannelPropsParams, Props],
+                    exchangeAccountDataChannelPropsInit: () => Props,
                     tpData: ExchangeTPData,
                     accountData: ExchangeAccountData) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[Exchange])
@@ -54,13 +57,13 @@ case class Exchange(exchangeName: String,
     for (tp <- tradePairs) {
       tpDataManagers = tpDataManagers +
         (tp -> context.actorOf(
-          TPDataManager.props(config, tp, exchangeDataChannel, self, tpDataChannelPropsInit, tpData),
+          ExchangeTPDataManager.props(config, tp, exchangePublicDataInquirer, self, exchangePublicTPDataChannelPropsInit, tpData),
           s"$exchangeName.TPDataManager-${tp.baseAsset.officialSymbol}-${tp.quoteAsset.officialSymbol}"))
     }
   }
 
   def initAccountDataManager(): Unit = {
-    accountDataManager = context.actorOf(ExchangeAccountDataManager.props(config, accountData),
+    accountDataManager = context.actorOf(ExchangeAccountDataManager.props(config, exchangeAccountDataChannelPropsInit, accountData),
       s"${config.exchangeName}.AccountDataManager")
   }
 
@@ -69,26 +72,26 @@ case class Exchange(exchangeName: String,
     tradePairs = tradePairs - tp
   }
 
-  def removeRunningTradePair(tp: TradePair): Unit = {
-    if (!initialized) throw new RuntimeException("bad timing")
-    try {
-      val stopped: Future[Boolean] = gracefulStop(tpDataManagers(tp), Config.gracefulStopTimeout.duration, TPDataManager.Stop())
-      Await.result(stopped, Config.gracefulStopTimeout.duration)
-      log.debug(s"$exchangeName-TPDataManager for $tp stopped (${stopped.value.get})")
-    } catch {
-      case t: Throwable =>
-        log.warn(s"Catched $t: So we are forced, to send a PosionPill to ${tpDataManagers(tp)} because gracefulStop did not work")
-        tpDataManagers(tp) ! PoisonPill
-    } finally {
-      tpDataManagers = tpDataManagers - tp
-    }
-    tpData.ticker.remove(tp)
-    tpData.extendedTicker.remove(tp)
-    tpData.orderBook.remove(tp)
-
-    tradePairs = tradePairs - tp
-  }
-
+//  def removeRunningTradePair(tp: TradePair): Unit = {
+//    if (!initialized) throw new RuntimeException("bad timing")
+//    try {
+//      val stopped: Future[Boolean] = gracefulStop(tpDataManagers(tp), Config.gracefulStopTimeout.duration, TPDataManager.Stop())
+//      Await.result(stopped, Config.gracefulStopTimeout.duration)
+//      log.debug(s"$exchangeName-TPDataManager for $tp stopped (${stopped.value.get})")
+//    } catch {
+//      case t: Throwable =>
+//        log.warn(s"Catched $t: So we are forced, to send a PosionPill to ${tpDataManagers(tp)} because gracefulStop did not work")
+//        tpDataManagers(tp) ! PoisonPill
+//    } finally {
+//      tpDataManagers = tpDataManagers - tp
+//    }
+//    tpData.ticker.remove(tp)
+//    tpData.extendedTicker.remove(tp)
+//    tpData.orderBook.remove(tp)
+//
+//    tradePairs = tradePairs - tp
+//  }
+//
 
   override val supervisorStrategy: OneForOneStrategy =
     OneForOneStrategy(maxNrOfRetries = 5, withinTimeRange = 10.minutes, loggingEnabled = true) {
@@ -98,7 +101,7 @@ case class Exchange(exchangeName: String,
   override def preStart(): Unit = {
     log.info(s"Initializing Exchange $exchangeName")
     implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
-    tradePairs = Await.result((exchangeDataChannel ? GetTradePairs()).mapTo[TradePairs], timeout.duration.plus(500.millis)).value
+    tradePairs = Await.result((exchangePublicDataInquirer ? GetTradePairs()).mapTo[TradePairs], timeout.duration.plus(500.millis)).value
     log.info(s"$exchangeName: ${tradePairs.size} TradePairs: ${tradePairs.toSeq.sortBy(e => e.toString)}")
   }
 
@@ -115,16 +118,16 @@ case class Exchange(exchangeName: String,
 
     case StartStreaming() =>
       initTradePairBasedDataManagers()
-      initAccountDataManager()
+      if (exchangeAccountDataChannelPropsInit != null) initAccountDataManager() // TODO remove nullable condition
 
     // tested, but currently unused - maybe we need that later
-    case RemoveRunningTradePair(tp) =>
-      removeRunningTradePair(tp)
-      sender() ! true
+//    case RemoveRunningTradePair(tp) =>
+//      removeRunningTradePair(tp)
+//      sender() ! true
 
     // Messages from TradePairDataManager
 
-    case TPDataManager.Initialized(t) =>
+    case ExchangeTPDataManager.Initialized(t) =>
       tpDataInitPending -= t
       log.debug(s"[$exchangeName]: [$t] initialized. Still pending: $tpDataInitPending")
       if (tpDataInitPending.isEmpty) {

@@ -5,23 +5,23 @@ import akka.pattern.ask
 import akka.stream.scaladsl.{Flow, Keep, Sink}
 import akka.util.Timeout
 import akka.{Done, NotUsed}
-import org.purevalue.arbitrage.TPDataManager.StartStreamRequest
+import org.purevalue.arbitrage.ExchangeTPDataManager.StartStreamRequest
 import org.purevalue.arbitrage._
-import org.purevalue.arbitrage.adapter.binance.BinancePublicDataChannel.GetBinanceTradePair
+import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.GetBinanceTradePair
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor, Future}
 
 object BinancePublicTPDataChannel {
-  def props(config: ExchangeConfig, tradePair: TradePair, binanceDataChannel: ActorRef): Props =
-    Props(new BinancePublicTPDataChannel(config, tradePair, binanceDataChannel))
+  def props(config: ExchangeConfig, tradePair: TradePair, binancePublicDataChannel: ActorRef): Props =
+    Props(new BinancePublicTPDataChannel(config, tradePair, binancePublicDataChannel))
 }
 /**
  * Binance TradePair-based data channel
  * Converts Raw TradePair-based data to unified ExchangeTPStreamData
  */
-class BinancePublicTPDataChannel(config: ExchangeConfig, tradePair: TradePair, binanceDataChannel: ActorRef) extends Actor {
+class BinancePublicTPDataChannel(config: ExchangeConfig, tradePair: TradePair, binancePublicDataChannel: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BinancePublicTPDataChannel])
   implicit val system: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = system.dispatcher
@@ -63,7 +63,7 @@ class BinancePublicTPDataChannel(config: ExchangeConfig, tradePair: TradePair, b
   override def preStart() {
     log.debug(s"BinanceTPDataChannel($tradePair) initializing...")
     implicit val timeout: Timeout = Config.internalCommunicationTimeout
-    binanceTradePair = Await.result((binanceDataChannel ? GetBinanceTradePair(tradePair)).mapTo[BinanceTradePair],
+    binanceTradePair = Await.result((binancePublicDataChannel ? GetBinanceTradePair(tradePair)).mapTo[BinanceTradePair],
       Config.internalCommunicationTimeout.duration.plus(500.millis))
     binanceTPWebSocketFlow = context.actorOf(
       BinanceTPWebSocketFlow.props(config, binanceTradePair, self), s"BinanceTPWebSocketFlow-${binanceTradePair.symbol}")
