@@ -118,7 +118,10 @@ case class Exchange(exchangeName: String,
 
     case StartStreaming() =>
       initTradePairBasedDataManagers()
-      if (exchangeAccountDataChannelPropsInit != null) initAccountDataManager() // TODO remove nullable condition
+      if (config.secrets.apiKey.isEmpty || config.secrets.apiSecretKey.isEmpty)
+        log.warn(s"Will NOT start AccountDataManager for exchange ${config.exchangeName} because API-Key is not set")
+      else
+        initAccountDataManager()
 
     // tested, but currently unused - maybe we need that later
 //    case RemoveRunningTradePair(tp) =>
@@ -139,6 +142,3 @@ case class Exchange(exchangeName: String,
       log.error("received failure", cause)
   }
 }
-
-// find out why Ticker of removed TradePairs are stilled feeded with data after removal & fix that
-// TODO restart ExchangeTPDataManager when ticker data gets much too old (like 30 sec)
