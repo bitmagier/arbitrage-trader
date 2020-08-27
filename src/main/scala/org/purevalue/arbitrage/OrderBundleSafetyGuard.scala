@@ -6,11 +6,21 @@ import org.purevalue.arbitrage.TradeRoom.OrderBundle
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.slf4j.LoggerFactory
 
+sealed trait OrderBundleUnsafeReason
+case object NegativeBalance extends OrderBundleUnsafeReason
+case object TickerOutdated extends OrderBundleUnsafeReason
+case object TooFantasticWin extends OrderBundleUnsafeReason
+case object OrderLimitFarAwayFromTicker extends OrderBundleUnsafeReason
+case object TotalTransactionUneconomic extends OrderBundleUnsafeReason
+
 case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
                                   tickers: scala.collection.Map[String, scala.collection.concurrent.Map[TradePair, Ticker]],
                                   extendedTicker: scala.collection.Map[String, scala.collection.Map[TradePair, ExtendedTicker]],
                                   dataAge: scala.collection.Map[String, TPDataTimestamps]) {
   private val log = LoggerFactory.getLogger(classOf[OrderBundleSafetyGuard])
+  private var stats: Map[OrderBundleUnsafeReason, Int] = Map()
+
+  def unsafeStats: Map[OrderBundleUnsafeReason, Int] = stats
 
   private def orderLimitCloseToTicker(order: Order): Boolean = {
     val ticker = tickers(order.exchange)(order.tradePair)
@@ -83,16 +93,16 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
           tickers(e.exchange)(tradePair).priceEstimate
         )
       }) ++ toConvertBack.map(e => {
-          val tradePair = TradePair.of(e.asset, findUsableReserveAsset(e.exchange, e.asset, uninvolvedReserveAssets).get)
-          Order(null, null,
-            e.exchange,
-            tradePair,
-            TradeSide.Sell,
-            Fee(e.exchange, Config.exchange(e.exchange).makerFee, Config.exchange(e.exchange).takerFee), // TODO take real values
-            e.amount,
-            tickers(e.exchange)(tradePair).priceEstimate
-          )
-        })
+        val tradePair = TradePair.of(e.asset, findUsableReserveAsset(e.exchange, e.asset, uninvolvedReserveAssets).get)
+        Order(null, null,
+          e.exchange,
+          tradePair,
+          TradeSide.Sell,
+          Fee(e.exchange, Config.exchange(e.exchange).makerFee, Config.exchange(e.exchange).takerFee), // TODO take real values
+          e.amount,
+          tickers(e.exchange)(tradePair).priceEstimate
+        )
+      })
 
     val balanceSheet: Iterable[CryptoValue] = transactions.flatMap(OrderBill.calcBalanceSheet)
 
@@ -125,23 +135,38 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
       false
     } else true
   }
+
   // ^^^ TODO instead of taking only the first possible one, better try all alternatives of reserve liquidity asset conversion before giving up here
 
+
   def isSafe(t: OrderBundle): Boolean = {
+    _isSafe(t) match {
+      case (true, _) => true
+      case (false, reason) =>
+        this.synchronized {
+          stats = stats + (reason -> (stats.getOrElse(reason, 0) + 1))
+        }
+        false
+    }
+  }
+
+  private def _isSafe(t: OrderBundle): (Boolean, OrderBundleUnsafeReason) = {
     if (t.bill.sumUSDT <= 0) {
       log.warn(s"${Emoji.Disagree}  Got OrderBundle with negative balance: ${t.bill.sumUSDT}. I will not execute that one!")
       log.debug(s"$t")
-      false
+      (false, NegativeBalance)
     } else if (!t.orders.forall(tickerDataUpToDate)) {
-      false
+      (false, TickerOutdated)
     } else if (t.bill.sumUSDT >= config.maximumReasonableWinPerOrderBundleUSDT) {
       log.warn(s"${Emoji.Disagree}  Got OrderBundle with unbelievable high estimated win of ${formatDecimal(t.bill.sumUSDT)} USDT. I will rather not execute that one - seem to be a bug!")
       log.debug(s"${Emoji.Disagree}  $t")
-      false
+      (false, TooFantasticWin)
+    } else if (!t.orders.forall(orderLimitCloseToTicker))
+      (false, OrderLimitFarAwayFromTicker)
+    else if (!totalTransactionCostsInRage(t)) {
+      (false, TotalTransactionUneconomic)
     } else {
-      t.orders.forall(orderLimitCloseToTicker) &&
-        totalTransactionCostsInRage(t)
+      (true, null)
     }
   }
 }
-

@@ -298,6 +298,8 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
         .toList
       log.info(s"${Emoji.Robot}  TradeRoom stats: [smallest 3 OrderBooks] : $orderBookBottom3")
     }
+
+    log.info(s"${Emoji.Robot}  OrderBundleSafetyGuard deny reason stats: ${orderBundleSafetyGuard.unsafeStats}")
   }
 
 

@@ -44,7 +44,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
 
   def newUUID(): UUID = UUID.randomUUID() // switch to Time based UUID when connecting a DB like cassandra
 
-  trait NoResultReason
+  sealed trait NoResultReason
   case class BuyOrSellBookEmpty() extends NoResultReason
   case class BidAskGap() extends NoResultReason
   case class Confused() extends NoResultReason
