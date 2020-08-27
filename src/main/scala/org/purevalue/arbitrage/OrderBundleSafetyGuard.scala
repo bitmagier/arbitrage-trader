@@ -170,3 +170,5 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
     }
   }
 }
+
+// TODO check if enough trading volume (or order book entries) are available to fulfill our trade plan

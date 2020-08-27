@@ -18,8 +18,9 @@ import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, Future, Promise}
 import scala.util.{Failure, Success}
 
+
 object BinanceTPWebSocketFlow {
-  case class StartStreamRequest(sink: Sink[DecodedBinanceMessage, NotUsed])
+  case class StartStreamRequest(sink: Sink[IncomingBinanceTradepairJson, NotUsed])
 
   def props(config: ExchangeConfig, tradePair: BinanceTradePair, binanceTPDataChannel: ActorRef): Props =
     Props(new BinanceTPWebSocketFlow(config, tradePair, binanceTPDataChannel))
@@ -43,34 +44,32 @@ case class BinanceTPWebSocketFlow(config: ExchangeConfig, tradePair: BinanceTrad
   import WebSocketJsonProtocoll._
   import actorSystem.dispatcher
 
-  val downStreamWSFlow: Flow[Message, Option[DecodedBinanceMessage], NotUsed] = Flow.fromFunction {
+  val downStreamWSFlow: Flow[Message, Option[IncomingBinanceTradepairJson], NotUsed] = Flow.fromFunction {
     case msg: TextMessage =>
-      val f: Future[Option[DecodedBinanceMessage]] = {
+      val f: Future[Option[IncomingBinanceTradepairJson]] = {
         msg.toStrict(Config.httpTimeout)
           .map(_.getStrictText)
           .map(s => JsonParser(s).asJsObject())
           .map {
-            case j: JsObject if j.fields.contains("result") => j.convertTo[StreamSubscribeResponseJson]
+            case j: JsObject if j.fields.contains("result") =>
+              if (log.isTraceEnabled) log.trace(s"received $j")
+              None // ignoring stream subscribe responses
             case j: JsObject if j.fields.contains("stream") =>
               j.fields("stream").convertTo[String] match {
-                case BookTickerStreamName => j.fields("data").asJsObject.convertTo[RawBookTickerStreamJson]
-                case ExtendedTickerStreamName => j.fields("data").asJsObject.convertTo[RawExtendedTickerStreamJson]
-                case OrderBookStreamName => j.fields("data").asJsObject.convertTo[RawPartialOrderBookStreamJson]
-                case name: String => log.error(s"Unknown data stream '$name' received: $j")
+                case BookTickerStreamName =>
+                  Some(j.fields("data").asJsObject.convertTo[RawBookTickerStreamJson])
+                case ExtendedTickerStreamName =>
+                  Some(j.fields("data").asJsObject.convertTo[RawExtendedTickerStreamJson])
+                case OrderBookStreamName =>
+                  Some(j.fields("data").asJsObject.convertTo[RawPartialOrderBookStreamJson])
+                case name: String =>
+                  log.warn(s"${Emoji.Confused}  Unhandled data stream $name received: $j")
+                  None
               }
-            case j: JsObject => log.warn(s"Unknown json object received: $j")
-          } map {
-          case s: StreamSubscribeResponseJson =>
-            if (log.isTraceEnabled) log.trace(s"received $s")
-            // if (s.id == IdOrderBookStreamRequest) // TODO inject Orderbook snapshot
-            None
-          case m: DecodedBinanceMessage =>
-            if (log.isTraceEnabled) log.trace(s"received $m")
-            Some(m)
-          case other =>
-            log.warn(s"${Emoji.Confused}  Unhandled object (for $tradePair). Message: $other")
-            None
-        }
+            case j: JsObject =>
+              log.warn(s"Unknown json object received: $j")
+              None
+          }
       }
       try {
         Await.result(f, Config.httpTimeout.plus(1000.millis))
@@ -83,20 +82,20 @@ case class BinanceTPWebSocketFlow(config: ExchangeConfig, tradePair: BinanceTrad
       None
   }
 
-  val DefaultSubscribeMessages: List[StreamSubscribeRequestJson] = List(
-    StreamSubscribeRequestJson(params = Seq(BookTickerStreamName), id = IdBookTickerStreamRequest),
-    StreamSubscribeRequestJson(params = Seq(ExtendedTickerStreamName), id = IdExtendedTickerStreamRequest)
+  val DefaultSubscribeMessages: List[TPStreamSubscribeRequestJson] = List(
+    TPStreamSubscribeRequestJson(params = Seq(BookTickerStreamName), id = IdBookTickerStreamRequest),
+    TPStreamSubscribeRequestJson(params = Seq(ExtendedTickerStreamName), id = IdExtendedTickerStreamRequest)
   )
-  val SubscribeMessages: List[StreamSubscribeRequestJson] = if (config.orderBooksEnabled)
-    StreamSubscribeRequestJson(params = Seq(OrderBookStreamName), id = IdOrderBookStreamRequest) :: DefaultSubscribeMessages
+  val SubscribeMessages: List[TPStreamSubscribeRequestJson] = if (config.orderBooksEnabled)
+    TPStreamSubscribeRequestJson(params = Seq(OrderBookStreamName), id = IdOrderBookStreamRequest) :: DefaultSubscribeMessages
   else DefaultSubscribeMessages
 
-  val restSource: (SourceQueueWithComplete[DecodedBinanceMessage], Source[DecodedBinanceMessage, NotUsed]) =
-    Source.queue[DecodedBinanceMessage](1, OverflowStrategy.backpressure).preMaterialize()
+  val restSource: (SourceQueueWithComplete[IncomingBinanceTradepairJson], Source[IncomingBinanceTradepairJson, NotUsed]) =
+    Source.queue[IncomingBinanceTradepairJson](1, OverflowStrategy.backpressure).preMaterialize()
 
   // flow to us
   // emits a list of Messages and then keep the connection open
-  def createFlowTo(sink: Sink[DecodedBinanceMessage, NotUsed]): Flow[Message, Message, Promise[Option[Message]]] = {
+  def createFlowTo(sink: Sink[IncomingBinanceTradepairJson, NotUsed]): Flow[Message, Message, Promise[Option[Message]]] = {
     Flow.fromSinkAndSourceCoupledMat(
       downStreamWSFlow
         .filter(_.isDefined)
@@ -157,11 +156,11 @@ case class BinanceTPWebSocketFlow(config: ExchangeConfig, tradePair: BinanceTrad
   }
 }
 
-trait DecodedBinanceMessage
-case class StreamSubscribeRequestJson(method: String = "SUBSCRIBE", params: Seq[String], id: Int)
-case class StreamSubscribeResponseJson(result: JsValue, id: Int) extends DecodedBinanceMessage
+case class TPStreamSubscribeRequestJson(method: String = "SUBSCRIBE", params: Seq[String], id: Int)
 
-case class RawPartialOrderBookStreamJson(lastUpdateId: Int, bids: Seq[Seq[String]], asks: Seq[Seq[String]]) extends DecodedBinanceMessage {
+trait IncomingBinanceTradepairJson
+
+case class RawPartialOrderBookStreamJson(lastUpdateId: Int, bids: Seq[Seq[String]], asks: Seq[Seq[String]]) extends IncomingBinanceTradepairJson {
   def toOrderBookSnapshot: ExchangeTPStreamData =
     OrderBookSnapshot(
       bids.map(toBid),
@@ -207,7 +206,7 @@ case class RawExtendedTickerStreamJson(e: String, // e == "24hrTicker"
                                        F: Long, // first trade ID
                                        L: Long, // last trade ID
                                        n: Long // total number of trades
-                                      ) extends DecodedBinanceMessage {
+                                      ) extends IncomingBinanceTradepairJson {
   def toExtendedTicker(exchange: String, tradePair: TradePair): ExtendedTicker =
     ExtendedTicker(exchange, tradePair, b.toDouble, B.toDouble, a.toDouble, A.toDouble, c.toDouble, Q.toDouble, w.toDouble)
 }
@@ -217,7 +216,7 @@ case class RawBookTickerRestJson(symbol: String,
                                  bidPrice: String,
                                  bidQty: String,
                                  askPrice: String,
-                                 askQty: String) extends DecodedBinanceMessage {
+                                 askQty: String) extends IncomingBinanceTradepairJson {
   def toTicker(exchange: String, tradePair: TradePair): Ticker = {
     Ticker(exchange, tradePair, bidPrice.toDouble, Some(bidQty.toDouble), askPrice.toDouble, Some(askQty.toDouble), None)
   }
@@ -229,14 +228,13 @@ case class RawBookTickerStreamJson(u: Long, // order book updateId
                                    B: String, // best bid quantity
                                    a: String, // best ask price
                                    A: String // best ask quantity
-                                  ) extends DecodedBinanceMessage {
+                                  ) extends IncomingBinanceTradepairJson {
   def toTicker(exchange: String, tradePair: TradePair): Ticker =
     Ticker(exchange, tradePair, b.toDouble, Some(B.toDouble), a.toDouble, Some(A.toDouble), None)
 }
 
 object WebSocketJsonProtocoll extends DefaultJsonProtocol {
-  implicit val subscribeMsg: RootJsonFormat[StreamSubscribeRequestJson] = jsonFormat3(StreamSubscribeRequestJson)
-  implicit val subscribeResponseMsg: RootJsonFormat[StreamSubscribeResponseJson] = jsonFormat2(StreamSubscribeResponseJson)
+  implicit val subscribeMsg: RootJsonFormat[TPStreamSubscribeRequestJson] = jsonFormat3(TPStreamSubscribeRequestJson)
   //  implicit val bookUpdate: RootJsonFormat[RawOrderBookUpdateJson] = jsonFormat7(RawOrderBookUpdateJson)
   implicit val partialBookStream: RootJsonFormat[RawPartialOrderBookStreamJson] = jsonFormat3(RawPartialOrderBookStreamJson)
   implicit val rawBookTickerStream: RootJsonFormat[RawBookTickerStreamJson] = jsonFormat6(RawBookTickerStreamJson)

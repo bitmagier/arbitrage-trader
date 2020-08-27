@@ -30,13 +30,13 @@ class BinancePublicTPDataChannel(config: ExchangeConfig, tradePair: TradePair, b
   private var binanceTPWebSocketFlow: ActorRef = _
   private var lastUpdateId: Option[Int] = None
 
-  private var sink: Sink[DecodedBinanceMessage, NotUsed] = _
+  private var sink: Sink[IncomingBinanceTradepairJson, NotUsed] = _
 
-  def createSinkTo(downstreamSink: Sink[Seq[ExchangeTPStreamData], Future[Done]]): Sink[DecodedBinanceMessage, NotUsed] = {
+  def createSinkTo(downstreamSink: Sink[Seq[ExchangeTPStreamData], Future[Done]]): Sink[IncomingBinanceTradepairJson, NotUsed] = {
     Flow.fromFunction(streamMapping).toMat(downstreamSink)(Keep.none)
   }
 
-  def streamMapping(in: DecodedBinanceMessage): Seq[ExchangeTPStreamData] = in match {
+  def streamMapping(in: IncomingBinanceTradepairJson): Seq[ExchangeTPStreamData] = in match {
     case t: RawBookTickerRestJson =>
       Seq(t.toTicker(config.exchangeName, tradePair))
 

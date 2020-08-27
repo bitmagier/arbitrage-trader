@@ -16,6 +16,8 @@ case class Balance(asset: Asset, amountAvailable: Double, amountLocked: Double) 
 }
 // we use a [var immutable map] instead of mutable one here, to be able to update the whole map at once without a race condition
 case class Wallet(var balances: Map[Asset, Balance]) extends ExchangeAccountStreamData
+case class WalletAssetUpdate(balances: Map[Asset, Balance]) extends ExchangeAccountStreamData
+case class WalletBalanceUpdate(asset:Asset, balanceDelta:Double) extends ExchangeAccountStreamData
 
 
 case class Fee(exchange: String,
@@ -41,6 +43,17 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
     case w: Wallet =>
       if (log.isTraceEnabled()) log.trace(s"${config.exchangeName}: received $w")
       accountData.wallet.balances = w.balances
+    case w: WalletAssetUpdate =>
+      if (log.isTraceEnabled()) log.trace(s"${config.exchangeName}: received $w")
+      accountData.wallet.balances = accountData.wallet.balances -- w.balances.keys ++ w.balances
+    case w: WalletBalanceUpdate =>
+      if (log.isTraceEnabled()) log.trace(s"${config.exchangeName}: received $w")
+      accountData.wallet.balances = accountData.wallet.balances.map {
+        // TODO validate if an update of amountAvailable is the right thing, that is meant by this message (I'm 95% sure so far)
+        case (a:Asset,b:Balance) if a == w.asset =>
+          (a, Balance(b.asset, b.amountAvailable + w.balanceDelta, b.amountLocked))
+        case x => x
+      }
     // ...
     case _ => throw new NotImplementedError
   }
