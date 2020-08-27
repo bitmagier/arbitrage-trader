@@ -5,11 +5,16 @@ in progress:
 
 TODO
 
-- TradeRoom: reject OrderBundles, where another active Order of the same TradePair is still active 
 - blacklist assets per exchange (e.g. for NOT touching personal investments)
+- decouple delivery of reference ticker from ExchangeTPDataManager channel, because ReferenceTicker shall contain as much TradePairs as possible and not just the ones remaining after trade pair cleanup
 - Query own Orders:  API implementation for binance+bitfinx
 - Submit Order API impl. binance+bitfinex
 - Query trade fees
 
 - temporary TradePair down detection + action
 - temporary Exchange maintenance/down detection + action 
+
+
+
+NOTES:
+- TradeRoom: reject OrderBundles, where another active Order of the same TradePair is still active

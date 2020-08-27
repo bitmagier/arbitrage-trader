@@ -61,7 +61,7 @@ class BitfinexPublicDataInquirer(config: ExchangeConfig) extends Actor {
     bitfinexAssets = currencies // apiSymbol, name
       .map(e => (e._1, apiSymbolToOfficialCurrencySymbolMapping.getOrElse(e._1, e._1))) // apiSymbol, officialSymbol
       .filter(e => GlobalConfig.AllAssets.keySet.contains(e._2)) // global crosscheck
-      .filter(e => config.assets.contains(e._2)) // bitfinex config crosscheck
+      .filter(e => config.tradeAssets.contains(e._2)) // bitfinex config crosscheck
       .map(e => BitfinexSymbol(Asset(e._2), e._1))
       .toSet
     if (log.isTraceEnabled) log.trace(s"bitfinexAssets: $bitfinexAssets")

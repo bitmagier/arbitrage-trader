@@ -74,7 +74,7 @@ class BinancePublicDataInquirer(config: ExchangeConfig) extends Actor {
       Config.httpTimeout.plus(500.millis))
     binanceTradePairs = exchangeInfo.symbols
       .filter(s => s.status == "TRADING" && s.orderTypes.contains("LIMIT") /* && s.orderTypes.contains("LIMIT_MAKER")*/ && s.permissions.contains("SPOT"))
-      .filter(s => config.assets.contains(s.baseAsset) && config.assets.contains(s.quoteAsset))
+      .filter(s => config.tradeAssets.contains(s.baseAsset) && config.tradeAssets.contains(s.quoteAsset))
       .map(s => BinanceTradePair(Asset(s.baseAsset), Asset(s.quoteAsset), s.symbol))
       .toSet
     log.debug("received ExchangeInfo")

@@ -89,7 +89,7 @@ object GlobalConfig {
     Asset("LTC", "Litecoin"),
     Asset("ADA", "Cardano"),
     Asset("CRO", "Crypto.com Coin"),
-    //    Asset("BNB", "Binance Coin"),
+    Asset("BNB", "Binance Coin"),
     Asset("EOS", "EOS"),
     Asset("LINK", "Chainlink"),
     Asset("XTZ", "Tezos"),
@@ -138,7 +138,8 @@ object GlobalConfig {
     Asset("BCD", "Bitcoin Diamond"),
     Asset("LSK", "Lisk"),
     Asset("WAVES", "Waves"),
-    Asset("SXP", "Swipe")
+    Asset("SXP", "Swipe"),
+    Asset("BAND", "Band Protocol")
   ).map(a => (a.officialSymbol, a)).toMap
 
   log.info(s"Total available assets: ${AllAssets.keys}")

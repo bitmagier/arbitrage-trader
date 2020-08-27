@@ -57,7 +57,7 @@ class BitfinexPublicTPDataChannel(config: ExchangeConfig, tradePair: TradePair, 
 
   override def preStart() {
     log.debug(s"BitfinexTradePairDataStreamer($tradePair) initializing...")
-    implicit val timeout: Timeout = Config.internalCommunicationTimeout
+    implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
     bitfinexTradePair = Await.result((bitfinexDataChannel ? GetBitfinexTradePair(tradePair)).mapTo[BitfinexTradePair],
       Config.internalCommunicationTimeout.duration.plus(500.millis))
     bitfinexTPWebSocketFlow = context.actorOf(

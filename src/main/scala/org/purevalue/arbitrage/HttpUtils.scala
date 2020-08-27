@@ -1,5 +1,7 @@
 package org.purevalue.arbitrage
 
+import java.time.Instant
+
 import akka.actor.ActorSystem
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model._
@@ -31,14 +33,29 @@ object HttpUtils {
     convertBytesToLowerCaseHex(hash)
   }
 
-  def httpRequestBinanceHmaxSha256(method: HttpMethod, uri: String, entity: String, apiKeys: SecretsConfig)
+  def httpRequestBinanceHmaxSha256(method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig, sign: Boolean)
                                   (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[HttpEntity.Strict] = {
+    val finalUriParams: Option[String] =
+      if (sign) {
+        val totalParamsBeforeSigning: String = (Uri(uri).queryString() match {
+          case None => ""
+          case Some(x) => x + "&"
+        }) + s"timestamp=${Instant.now.toEpochMilli}"
+        val signingContent = totalParamsBeforeSigning + requestBody.getOrElse("")
+        Some(totalParamsBeforeSigning + "&" + s"signature=${sha256Signature(signingContent, apiKeys.apiSecretKey)}")
+      } else {
+        Uri(uri).rawQueryString
+      }
+
     Http().singleRequest(
       HttpRequest(
         method,
-        uri = uri,
+        uri = Uri(uri).withRawQueryString(finalUriParams.getOrElse("")),
         headers = List(headers.RawHeader("X-MBX-APIKEY", apiKeys.apiKey)),
-        entity = HttpEntity(entity + s"&signature=${sha256Signature(entity, apiKeys.apiSecretKey)}")
+        entity = requestBody match {
+          case None => HttpEntity.Empty
+          case Some(x) => HttpEntity(x)
+        }
       )).flatMap(_.entity.toStrict(Config.httpTimeout))
   }
 
@@ -53,9 +70,9 @@ object HttpUtils {
     }
   }
 
-  def httpRequestPureJsonBinanceAccount(method: HttpMethod, uri: String, entity: String, apiKeys: SecretsConfig)
+  def httpRequestPureJsonBinanceAccount(method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig, signed: Boolean)
                                        (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[JsValue] = {
-    httpRequestBinanceHmaxSha256(method, uri, entity, apiKeys).map { r =>
+    httpRequestBinanceHmaxSha256(method, uri, requestBody, apiKeys, signed).map { r =>
       r.contentType match {
         case ContentTypes.`application/json` =>
           JsonParser(r.data.utf8String)
@@ -76,9 +93,9 @@ object HttpUtils {
     }
   }
 
-  def httpRequestJsonBinanceAccount[T](method: HttpMethod, uri: String, entity: String, apiKeys: SecretsConfig)
+  def httpRequestJsonBinanceAccount[T](method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig, sign: Boolean)
                                       (implicit evidence: JsonReader[T], system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[T] = {
-    httpRequestPureJsonBinanceAccount(method, uri, entity, apiKeys).map { j =>
+    httpRequestPureJsonBinanceAccount(method, uri, requestBody, apiKeys, sign).map { j =>
       try {
         j.convertTo[T]
       } catch {

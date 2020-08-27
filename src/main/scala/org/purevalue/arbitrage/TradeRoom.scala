@@ -258,12 +258,20 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
         .mkString(", ")
     }
 
+    val inconvertibleAssets = wallets
+        .flatMap(_._2.balances.keys)
+        .filter(e => CryptoValue(e, 1.0).convertTo(Bitcoin, tradeContext).isEmpty)
+        .toSet
+    if (inconvertibleAssets.nonEmpty) {
+      log.warn(s"Currently we cannot calculate the correct balance, because no reference ticker available for converting them to Bitcoin: $inconvertibleAssets")
+    }
     val liquidityPerExchange: String =
       wallets.map { case (exchange, b) => (
         exchange,
         CryptoValue(
-          Bitcoin, // conversion to BTC is expected to work ALWAYS!
+          Bitcoin,
           b.balances
+            .filterNot(e => inconvertibleAssets.contains(e._1))
             .map(e => CryptoValue(e._2.asset, e._2.amountAvailable).convertTo(Bitcoin, tradeContext).get)
             .map(_.amount)
             .sum
@@ -299,7 +307,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       log.info(s"${Emoji.Robot}  TradeRoom stats: [smallest 3 OrderBooks] : $orderBookBottom3")
     }
 
-    log.info(s"${Emoji.Robot}  OrderBundleSafetyGuard deny reason stats: ${orderBundleSafetyGuard.unsafeStats}")
+    log.info(s"${Emoji.Robot}  OrderBundleSafetyGuard decision stats: ${orderBundleSafetyGuard.unsafeStats}")
   }
 
 

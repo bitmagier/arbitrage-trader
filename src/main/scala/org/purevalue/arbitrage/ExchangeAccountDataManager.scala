@@ -4,6 +4,7 @@ import akka.Done
 import akka.actor.{Actor, ActorRef, Props}
 import akka.stream.scaladsl.Sink
 import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.StartStreamRequest
+import org.slf4j.LoggerFactory
 
 import scala.collection.Map
 import scala.concurrent.Future
@@ -33,10 +34,13 @@ object ExchangeAccountDataManager {
 class ExchangeAccountDataManager(config: ExchangeConfig,
                                  exchangeAccountDataChannelInit: () => Props,
                                  accountData: ExchangeAccountData) extends Actor {
+  private val log = LoggerFactory.getLogger(classOf[ExchangeAccountDataManager])
   var accountDataChannel: ActorRef = _
 
   val sink: Sink[ExchangeAccountStreamData, Future[Done]] = Sink.foreach[ExchangeAccountStreamData] {
-    case w: Wallet => accountData.wallet.balances = w.balances
+    case w: Wallet =>
+      if (log.isTraceEnabled()) log.trace(s"${config.exchangeName}: received $w")
+      accountData.wallet.balances = w.balances
     // ...
     case _ => throw new NotImplementedError
   }

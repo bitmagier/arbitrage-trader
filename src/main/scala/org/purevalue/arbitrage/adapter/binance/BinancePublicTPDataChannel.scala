@@ -62,7 +62,7 @@ class BinancePublicTPDataChannel(config: ExchangeConfig, tradePair: TradePair, b
 
   override def preStart() {
     log.debug(s"BinanceTPDataChannel($tradePair) initializing...")
-    implicit val timeout: Timeout = Config.internalCommunicationTimeout
+    implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
     binanceTradePair = Await.result((binancePublicDataChannel ? GetBinanceTradePair(tradePair)).mapTo[BinanceTradePair],
       Config.internalCommunicationTimeout.duration.plus(500.millis))
     binanceTPWebSocketFlow = context.actorOf(

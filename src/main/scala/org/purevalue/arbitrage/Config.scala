@@ -14,7 +14,7 @@ case class SecretsConfig(apiKey: String,
                          apiSecretKey: String)
 case class ExchangeConfig(exchangeName: String,
                           secrets: SecretsConfig,
-                          assets: Set[String],
+                          tradeAssets: Set[String],
                           makerFee: Double,
                           takerFee: Double,
                           orderBooksEnabled: Boolean)
@@ -30,7 +30,7 @@ case class TradeRoomConfig(extendedTickerExchanges: List[String],
 case class LiquidityManagerConfig(reserveAssets: List[Asset])
 
 object Config {
-  private val log = LoggerFactory.getLogger("AppConfig")
+  private val log = LoggerFactory.getLogger("Config")
   private val config = ConfigFactory.load()
 
   val httpTimeout: FiniteDuration = FiniteDuration(config.getDuration("http-timeout").toMillis, TimeUnit.MILLISECONDS)
@@ -68,7 +68,7 @@ object Config {
   private def exchangeConfig(name: String, c: com.typesafe.config.Config) = ExchangeConfig(
     name,
     secretsConfig(c.getConfig("secrets")),
-    c.getStringList("assets").asScala.toSet,
+    c.getStringList("trade-assets").asScala.toSet,
     c.getDouble("fee.maker"),
     c.getDouble("fee.taker"),
     c.getBoolean("order-books-enabled")

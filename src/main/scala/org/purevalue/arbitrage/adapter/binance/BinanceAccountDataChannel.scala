@@ -1,7 +1,5 @@
 package org.purevalue.arbitrage.adapter.binance
 
-import java.time.Instant
-
 import akka.actor.{Actor, ActorSystem, Cancellable, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
@@ -11,7 +9,7 @@ import akka.stream.scaladsl.{Flow, Keep, Sink, Source, SourceQueueWithComplete}
 import akka.{Done, NotUsed}
 import org.purevalue.arbitrage.HttpUtils.httpRequestJsonBinanceAccount
 import org.purevalue.arbitrage._
-import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.{QueryData, SendPing, StartStreamRequest}
+import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.{SendPing, StartStreamRequest}
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.BaseRestEndpoint
 import org.purevalue.arbitrage.adapter.binance.WebSocketJsonProtocoll.subscribeMsg
 import org.slf4j.LoggerFactory
@@ -22,7 +20,6 @@ import scala.concurrent.{Await, ExecutionContextExecutor, Future, Promise}
 
 object BinanceAccountDataChannel {
   case class StartStreamRequest(sink: Sink[ExchangeAccountStreamData, Future[Done]])
-  case class QueryData()
   case class SendPing()
 
   def props(config: ExchangeConfig): Props = Props(new BinanceAccountDataChannel(config))
@@ -32,7 +29,6 @@ class BinanceAccountDataChannel(config: ExchangeConfig) extends Actor {
   implicit val system: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = system.dispatcher
 
-  val querySchedule: Cancellable = system.scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, QueryData())
   val pingSchedule: Cancellable = system.scheduler.scheduleAtFixedRate(30.minutes, 30.minutes, self, SendPing())
 
   var listenKey: String = _
@@ -71,12 +67,10 @@ class BinanceAccountDataChannel(config: ExchangeConfig) extends Actor {
     case _ => throw new NotImplementedError
   }
 
-  def timestamp: Long = Instant.now.toEpochMilli
-
   def queryAccountInformation(): AccountInformationJson = {
     import BinanceAccountDataJsonProtocoll._
     Await.result(
-      httpRequestJsonBinanceAccount[AccountInformationJson](HttpMethods.GET, s"$BaseRestEndpoint/api/v3/account", s"timestamp=$timestamp", config.secrets),
+      httpRequestJsonBinanceAccount[AccountInformationJson](HttpMethods.GET, s"$BaseRestEndpoint/api/v3/account", None, config.secrets, sign = true),
       Config.httpTimeout.plus(500.millis))
   }
 
@@ -112,16 +106,15 @@ class BinanceAccountDataChannel(config: ExchangeConfig) extends Actor {
   def createListenKey(): Unit = {
     import BinanceAccountDataJsonProtocoll._
     listenKey = Await.result(
-      httpRequestJsonBinanceAccount[ListenKey](HttpMethods.POST,
-        s"$BaseRestEndpoint/api/v3/userDataStream", s"timestamp=$timestamp", config.secrets),
+      httpRequestJsonBinanceAccount[ListenKey](HttpMethods.POST, s"$BaseRestEndpoint/api/v3/userDataStream", None, config.secrets, sign = false),
       Config.httpTimeout.plus(500.millis)).listenKey
-    log.debug(s"created listenKey: $listenKey")
+    log.debug(s"got listenKey: $listenKey")
   }
 
   def pingUserStream(): Unit = {
     import DefaultJsonProtocol._
     httpRequestJsonBinanceAccount[String](HttpMethods.PUT,
-      s"$BaseRestEndpoint/api/v3/userDataStream?listenKey=$listenKey", s"timestamp=$timestamp", config.secrets)
+      s"$BaseRestEndpoint/api/v3/userDataStream?listenKey=$listenKey", None, config.secrets, sign = false)
   }
 
   override def preStart(): Unit = {
@@ -144,13 +137,22 @@ class BinanceAccountDataChannel(config: ExchangeConfig) extends Actor {
 
 
 trait IncomingBinanceAccountJson
+
 case class BalanceJson(asset: String, free: String, locked: String) {
-  def toBalance: Balance = Balance(
-    Asset(asset),
-    free.toDouble,
-    locked.toDouble
-  )
+  def toBalance: Option[Balance] = {
+    if (free.toDouble == 0.0 && locked.toDouble == 0.0)
+      None
+    else if (!GlobalConfig.AllAssets.keySet.contains(asset))
+      throw new Exception(s"We need to ignore a filled balance here, because it's asset is unknown: $this")
+    else
+      Some(Balance(
+        Asset(asset),
+        free.toDouble,
+        locked.toDouble
+      ))
+  }
 }
+
 case class AccountInformationJson(makerCommission: Int,
                                   takerCommission: Int,
                                   buyerCommission: Int,
@@ -164,7 +166,7 @@ case class AccountInformationJson(makerCommission: Int,
                                   permissions: List[String]) extends IncomingBinanceAccountJson {
   def toWallet: ExchangeAccountStreamData =
     Wallet(balances
-      .map(_.toBalance)
+      .flatMap(_.toBalance)
       .map(e => (e.asset, e))
       .toMap)
 }
