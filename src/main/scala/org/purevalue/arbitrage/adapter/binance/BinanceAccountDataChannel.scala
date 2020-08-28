@@ -1,6 +1,8 @@
 package org.purevalue.arbitrage.adapter.binance
 
-import akka.actor.{Actor, ActorSystem, Cancellable, Props}
+import java.time.Instant
+
+import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{HttpMethods, StatusCodes, Uri}
@@ -23,10 +25,10 @@ object BinanceAccountDataChannel {
   case class SendPing()
   case class QueryAccountInformation()
 
-  def props(config: ExchangeConfig): Props = Props(new BinanceAccountDataChannel(config))
+  def props(config: ExchangeConfig, exchangePublicDataInquirer: ActorRef): Props = Props(new BinanceAccountDataChannel(config, exchangePublicDataInquirer))
 }
 
-class BinanceAccountDataChannel(config: ExchangeConfig) extends Actor {
+class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BinanceAccountDataChannel])
 
   private val OutboundAccountInfoStreamName = "outboundAccountInfo"
@@ -45,6 +47,7 @@ class BinanceAccountDataChannel(config: ExchangeConfig) extends Actor {
   val externalAccountUpdateSchedule: Cancellable = system.scheduler.scheduleAtFixedRate(1.minute, 1.minute, self, QueryAccountInformation())
 
   var listenKey: String = _
+  var tradePairResolveFunction: String => TradePair = _
 
   val restSource: (SourceQueueWithComplete[IncomingBinanceAccountJson], Source[IncomingBinanceAccountJson, NotUsed]) =
     Source.queue[IncomingBinanceAccountJson](1, OverflowStrategy.backpressure).preMaterialize()
@@ -90,10 +93,10 @@ class BinanceAccountDataChannel(config: ExchangeConfig) extends Actor {
   }
 
   val downStreamFlow: Flow[IncomingBinanceAccountJson, ExchangeAccountStreamData, NotUsed] = Flow.fromFunction {
-    case j: AccountInformationJson => j.toWallet
-    case j: OutboundAccountPositionJson => j.toWalletUpdate
-    case j: BalanceUpdateJson => j.toWalletBalanceUpdate
-    // case j: OrderExecutionReportJson => j.toOrderExecutionReport // TODO OrderExecutionReport
+    case a: AccountInformationJson => a.toWallet
+    case a: OutboundAccountPositionJson => a.toWalletUpdate
+    case b: BalanceUpdateJson => b.toWalletBalanceUpdate
+    case o: OrderExecutionReportJson => o.toOrderOrOrderUpdate(tradePairResolveFunction)
     case _ => throw new NotImplementedError
   }
 
@@ -138,6 +141,12 @@ class BinanceAccountDataChannel(config: ExchangeConfig) extends Actor {
       }
     }
 
+  def pingUserStream(): Unit = {
+    import DefaultJsonProtocol._
+    httpRequestJsonBinanceAccount[String](HttpMethods.PUT,
+      s"$BaseRestEndpoint/api/v3/userDataStream?listenKey=$listenKey", None, config.secrets, sign = false)
+  }
+
   def createListenKey(): Unit = {
     import BinanceAccountDataJsonProtocoll._
     listenKey = Await.result(
@@ -146,14 +155,13 @@ class BinanceAccountDataChannel(config: ExchangeConfig) extends Actor {
     log.debug(s"got listenKey: $listenKey")
   }
 
-  def pingUserStream(): Unit = {
-    import DefaultJsonProtocol._
-    httpRequestJsonBinanceAccount[String](HttpMethods.PUT,
-      s"$BaseRestEndpoint/api/v3/userDataStream?listenKey=$listenKey", None, config.secrets, sign = false)
+  def getTradePairResolveFunction(): Unit = {
+    // TODO
   }
 
   override def preStart(): Unit = {
     createListenKey()
+    getTradePairResolveFunction()
   }
 
   override def receive: Receive = {
@@ -254,39 +262,104 @@ case class BalanceUpdateJson(e: String, // event type
 }
 
 // see https://github.com/binance-exchange/binance-official-api-docs/blob/master/rest-api.md#enum-definitions
-case class OrderExecutionReportJson( e: String, // Event type
-                                     E: Long, // Event time
-                                     s: String, // Symbol
-                                     c: String, // Client order ID
-                                     S: String, // Side (BUY, SELL)
-                                     o: String, // Order type (LIMIT, MARKET, STOP_LOSS, STOP_LOSS_LIMIT, TAKE_PROFIT, TAKE_PROFIT_LIMIT, LIMIT_MAKER)
-//                                     f: String, // Time in force (GTC - Good Til Canceled, IOC - Immediate Or Cancel, FOK - Fill or Kill)
-                                     q: String, // Order quantity (e.g. "1.00000000")
-                                     p: String, // Order price
-                                     P: String, // Stop price
-//                                     F: String, // Iceberg quantity
-                                     g: Long, // OrderListId
-                                     C: String, // Original client order ID; This is the ID of the order being canceled (or null otherwise)
-                                     x: String, // Current execution type (NEW - The order has been accepted into the engine, CANCELED - canceled by user, (REJECTED), TRADE - part of the order or all of the order's quantity has filled, EXPIRED - the order was canceled according to the order's rules)
-                                     X: String, // Current order status (e.g. NEW, PARTIALLY_FILLED, FILLED, CANCELED, PENDING_CANCEL, REJECTED, EXPIRED)
-                                     r: String, // Order reject reason; will be an error code or "NONE"
-                                     i: Long, // Order ID
-//                                     l: String, // Last executed quantity
-                                     z: String, // Cumulative filled quantity (Average price can be found by doing Z divided by z)
-//                                     L: String, // Last executed price
-//                                     n: String, // Commission amount
-//                                     N: String, // Commission asset (null)
-                                     T: Long, // Transaction time
-                                     t: Long, // Trade ID
-//                                     I: Long, // Ignore
-                                     w: Boolean, // Is the order on the book?
-                                     m: Boolean, // Is this trade the maker side?
-//                                     M: Boolean, // Ignore
-                                     O: Long, // Order creation time
-                                     Z: String, // Cumulative quote asset transacted quantity
-//                                     Y: String, // Last quote asset transacted quantity (i.e. lastPrice * lastQty)
-//                                     Q: String // Quote Order Qty
-                                   ) extends IncomingBinanceAccountJson
+case class OrderExecutionReportJson(e: String, // Event type
+                                    E: Long, // Event time
+                                    s: String, // Symbol
+                                    c: String, // Client order ID
+                                    S: String, // Side (BUY, SELL)
+                                    o: String, // Order type (LIMIT, MARKET, STOP_LOSS, STOP_LOSS_LIMIT, TAKE_PROFIT, TAKE_PROFIT_LIMIT, LIMIT_MAKER)
+                                    //                                     f: String, // Time in force (GTC - Good Til Canceled, IOC - Immediate Or Cancel, FOK - Fill or Kill)
+                                    q: String, // Order quantity (e.g. "1.00000000")
+                                    p: String, // Order price
+                                    P: String, // Stop price
+                                    //                                     F: String, // Iceberg quantity
+                                    g: Long, // OrderListId
+                                    C: String, // Original client order ID; This is the ID of the order being canceled (or null otherwise)
+                                    x: String, // Current execution type (NEW - The order has been accepted into the engine, CANCELED - canceled by user, (REJECTED), TRADE - part of the order or all of the order's quantity has filled, EXPIRED - the order was canceled according to the order's rules)
+                                    X: String, // Current order status (e.g. NEW, PARTIALLY_FILLED, FILLED, CANCELED, PENDING_CANCEL, REJECTED, EXPIRED)
+                                    r: String, // Order reject reason; will be an error code or "NONE"
+                                    i: Long, // Order ID
+                                    //                                     l: String, // Last executed quantity
+                                    z: String, // Cumulative filled quantity (Average price can be found by doing Z divided by z)
+                                    //                                     L: String, // Last executed price
+                                    //                                     n: String, // Commission amount
+                                    //                                     N: String, // Commission asset (null)
+                                    T: Long, // Transaction time
+                                    t: Long, // Trade ID
+                                    //                                     I: Long, // Ignore
+                                    w: Boolean, // Is the order on the book?
+                                    m: Boolean, // Is this trade the maker side?
+                                    //                                     M: Boolean, // Ignore
+                                    O: Long, // Order creation time
+                                    Z: String, // Cumulative quote asset transacted quantity
+                                    //                                     Y: String, // Last quote asset transacted quantity (i.e. lastPrice * lastQty)
+                                    //                                     Q: String // Quote Order Qty
+                                   ) extends IncomingBinanceAccountJson {
+  def tradeSide: TradeSide = S match {
+    case "BUY" => TradeSide.Buy
+    case "SELL" => TradeSide.Sell
+  }
+
+  def orderType: OrderType = o match {
+    // @formatter:off
+    case "LIMIT"              => OrderType.LIMIT
+    case "MARKET"             => OrderType.MARKET
+    case "STOP_LOSS"          => OrderType.STOP_LOSS
+    case "STOP_LOSS_LIMIT"    => OrderType.STOP_LOSS_LIMIT
+    case "TAKE_PROFIT"        => OrderType.TAKE_PROFIT
+    case "TAKE_PROFIT_LIMIT"  => OrderType.TAKE_PROFIT_LIMIT
+    case "LIMIT_MAKER"        => OrderType.LIMIT_MAKER
+    // @formatter:on
+  }
+
+  def orderStatus: OrderStatus = X match {
+    // @formatter:off
+    case "NEW"              => OrderStatus.NEW
+    case "PARTIALLY_FILLED" => OrderStatus.PARTIALLY_FILLED
+    case "FILLED"           => OrderStatus.FILLED
+    case "CANCELED"         => OrderStatus.CANCELED
+    case "REJECTED"         => OrderStatus.REJECTED
+    case "EXPIRED"          => OrderStatus.EXPIRED
+    // @formatter:on
+  }
+
+  def toOrderOrOrderUpdate(resolveSymbol: String => TradePair): ExchangeAccountStreamData =
+    if (X == "NEW") toOrder(resolveSymbol)
+    else toOrderUpdate(resolveSymbol)
+
+  def toOrderUpdate(resolveSymbol: String => TradePair): OrderUpdate = OrderUpdate(
+    i.toString,
+    resolveSymbol(s),
+    tradeSide,
+    orderType,
+    orderStatus,
+    z.toDouble,
+    Z.toDouble / z.toDouble,
+    Instant.ofEpochMilli(E),
+  )
+
+  def toOrder(resolveSymbol: String => TradePair): Order = Order(
+    i.toString,
+    resolveSymbol(s),
+    Instant.ofEpochMilli(E),
+    tradeSide,
+    p.toDouble,
+    P.toDouble match {
+      case 0.0 => None
+      case x => Some(x)
+    },
+    q.toDouble,
+    orderType,
+    r match {
+      case "NONE" => None
+      case x => Some(x)
+    },
+    orderStatus,
+    z.toDouble,
+    Z.toDouble / z.toDouble,
+    Instant.ofEpochMilli(E)
+  )
+}
 
 object BinanceAccountDataJsonProtocoll extends DefaultJsonProtocol {
   implicit val listenKeyJson: RootJsonFormat[ListenKeyJson] = jsonFormat1(ListenKeyJson)

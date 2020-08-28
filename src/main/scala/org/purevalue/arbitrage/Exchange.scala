@@ -23,26 +23,23 @@ object Exchange {
   def props(exchangeName: String,
             config: ExchangeConfig,
             tradeRoom: ActorRef,
-            exchangePublicDataInquirer: ActorRef,
-            exchangePublicTPDataChannelPropsInit: Function1[ExchangePublicTPDataChannelPropsParams, Props],
-            exchangeAccountDataChannelPropsInit: () => Props,
+            initStuff: ExchangeInitStuff,
             tpData: ExchangeTPData,
             accountData: ExchangeAccountData): Props =
-    Props(new Exchange(exchangeName, config, tradeRoom, exchangePublicDataInquirer, exchangePublicTPDataChannelPropsInit,
-      exchangeAccountDataChannelPropsInit, tpData, accountData))
+    Props(new Exchange(exchangeName, config, tradeRoom, initStuff, tpData, accountData))
 }
 
 case class Exchange(exchangeName: String,
                     config: ExchangeConfig,
                     tradeRoom: ActorRef,
-                    exchangePublicDataInquirer: ActorRef,
-                    exchangePublicTPDataChannelPropsInit: Function1[ExchangePublicTPDataChannelPropsParams, Props],
-                    exchangeAccountDataChannelPropsInit: () => Props,
+                    initStuff:ExchangeInitStuff,
                     tpData: ExchangeTPData,
                     accountData: ExchangeAccountData) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[Exchange])
   implicit val system: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = system.dispatcher
+
+  var exchangePublicDataInquirer: ActorRef = _
 
   // dynamic
   var tradePairs: Set[TradePair] = _
@@ -57,13 +54,13 @@ case class Exchange(exchangeName: String,
     for (tp <- tradePairs) {
       tpDataManagers = tpDataManagers +
         (tp -> context.actorOf(
-          ExchangeTPDataManager.props(config, tp, exchangePublicDataInquirer, self, exchangePublicTPDataChannelPropsInit, tpData),
+          ExchangeTPDataManager.props(config, tp, exchangePublicDataInquirer, self, initStuff.exchangePublicTPDataChannelProps, tpData),
           s"$exchangeName.TPDataManager-${tp.baseAsset.officialSymbol}-${tp.quoteAsset.officialSymbol}"))
     }
   }
 
   def initAccountDataManager(): Unit = {
-    accountDataManager = context.actorOf(ExchangeAccountDataManager.props(config, exchangeAccountDataChannelPropsInit, accountData),
+    accountDataManager = context.actorOf(ExchangeAccountDataManager.props(config, exchangePublicDataInquirer, initStuff.exchangeAccountDataChannelProps, accountData),
       s"${config.exchangeName}.AccountDataManager")
   }
 
@@ -100,6 +97,7 @@ case class Exchange(exchangeName: String,
 
   override def preStart(): Unit = {
     log.info(s"Initializing Exchange $exchangeName")
+    exchangePublicDataInquirer = context.actorOf(initStuff.publicDataInquirerProps(config), s"$exchangeName-PublicDataInquirer")
     implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
     tradePairs = Await.result((exchangePublicDataInquirer ? GetTradePairs()).mapTo[TradePairs], timeout.duration.plus(500.millis)).value
     log.info(s"$exchangeName: ${tradePairs.size} TradePairs: ${tradePairs.toSeq.sortBy(e => e.toString)}")

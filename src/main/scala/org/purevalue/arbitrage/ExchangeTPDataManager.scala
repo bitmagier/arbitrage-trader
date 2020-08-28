@@ -85,9 +85,9 @@ object ExchangeTPDataManager {
             tradePair: TradePair,
             exchangePublicDataInquirer: ActorRef,
             exchange: ActorRef,
-            tpDataChannelInit: Function1[ExchangePublicTPDataChannelPropsParams, Props],
+            publicTPDataChannelProps: Function3[ExchangeConfig, TradePair, ActorRef, Props],
             tpDataSink: ExchangeTPData): Props =
-    Props(new ExchangeTPDataManager(config, tradePair, exchangePublicDataInquirer, exchange, tpDataChannelInit, tpDataSink))
+    Props(new ExchangeTPDataManager(config, tradePair, exchangePublicDataInquirer, exchange, publicTPDataChannelProps, tpDataSink))
 }
 
 /**
@@ -97,7 +97,7 @@ case class ExchangeTPDataManager(config: ExchangeConfig,
                                  tradePair: TradePair,
                                  exchangePublicDataInquirer: ActorRef,
                                  exchange: ActorRef,
-                                 exchangePublicTPDataChannelInit: Function1[ExchangePublicTPDataChannelPropsParams, Props],
+                                 exchangePublicTPDataChannelProps: Function3[ExchangeConfig, TradePair, ActorRef, Props],
                                  tpData: ExchangeTPData) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[ExchangeTPDataManager])
   implicit val actorSystem: ActorSystem = Main.actorSystem
@@ -171,8 +171,7 @@ case class ExchangeTPDataManager(config: ExchangeConfig,
   override def preStart(): Unit = {
     initTimestamp = Instant.now()
     tpDataChannel = context.actorOf(
-      exchangePublicTPDataChannelInit.apply(
-        ExchangePublicTPDataChannelPropsParams(tradePair, exchangePublicDataInquirer, self)), s"${config.exchangeName}-TPDataChannel-$tradePair")
+      exchangePublicTPDataChannelProps.apply(config, tradePair, exchangePublicDataInquirer), s"${config.exchangeName}-TPDataChannel-$tradePair")
 
     tpDataChannel ! StartStreamRequest(sink)
   }

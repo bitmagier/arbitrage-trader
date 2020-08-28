@@ -15,7 +15,6 @@ import scala.collection.mutable.ArrayBuffer
  * A (real) order, which comes from exchange data feed
  */
 case class Order(externalId: String,
-                 orderRequest: OrderRequest,
                  tradePair: TradePair,
                  creationTime: Instant,
                  side: TradeSide,
@@ -25,9 +24,10 @@ case class Order(externalId: String,
                  orderType: OrderType,
                  orderRejectReason: Option[String],
                  var orderStatus: OrderStatus,
-                 var priceAverage: Double,
                  var cumulativeFilledQuantity: Double,
+                 var priceAverage: Double,
                  var lastUpdateTime: Instant) extends ExchangeAccountStreamData {
+
   private val log = LoggerFactory.getLogger(classOf[Order])
 
   def applyUpdate(u: OrderUpdate): Unit = {
@@ -45,29 +45,33 @@ case class Order(externalId: String,
 
 
 sealed trait TradeSide
-object TradeSide extends TradeSide {
+object TradeSide {
   case object Buy extends TradeSide
   case object Sell extends TradeSide
 }
 
 sealed trait OrderType
-case object LIMIT extends OrderType
-case object MARKET extends OrderType
-case object STOP extends OrderType
-case object STOP_LIMIT extends OrderType
-case object TRAILING_STOP extends OrderType
-case object FOK extends OrderType // unused here
-case object IOC extends OrderType // unused here
-// bitfinex extras: TRAILING_STOP, EXCHANGE_MARKET, EXCHANGE_LIMIT, EXCHANGE_STOP, EXCHANGE_STOP_LIMIT, EXCHANGE TRAILING STOP, FOK, EXCHANGE FOK, IOC, EXCHANGE IOC
+object OrderType {
+  case object LIMIT extends OrderType
+  case object MARKET extends OrderType
+  case object STOP_LOSS extends OrderType
+  case object STOP_LOSS_LIMIT extends OrderType
+  case object TAKE_PROFIT extends OrderType // binance only
+  case object TAKE_PROFIT_LIMIT extends OrderType // binance only
+  case object LIMIT_MAKER extends OrderType   // binance only
+  // bitfinex extras: TRAILING_STOP, EXCHANGE_MARKET, EXCHANGE_LIMIT, EXCHANGE_STOP, EXCHANGE_STOP_LIMIT, EXCHANGE TRAILING STOP, FOK, EXCHANGE FOK, IOC, EXCHANGE IOC
+}
 
 sealed trait OrderStatus
-case object ACTIVE extends OrderStatus
-case object PARTIALLY_FILLED extends OrderStatus
-case object FILLED extends OrderStatus
-case object CANCELED extends OrderStatus // cancelled by user
-case object EXPIRED extends OrderStatus // order was canceled acording to order type's rules
-case object REJECTED extends OrderStatus
-case object PAUSE extends OrderStatus
+object OrderStatus {
+  case object NEW extends OrderStatus
+  case object PARTIALLY_FILLED extends OrderStatus
+  case object FILLED extends OrderStatus
+  case object CANCELED extends OrderStatus // cancelled by user
+  case object EXPIRED extends OrderStatus // order was canceled acording to order type's rules
+  case object REJECTED extends OrderStatus
+  case object PAUSE extends OrderStatus
+}
 
 /**
  * Order update coming from exchange data flow
@@ -76,10 +80,10 @@ case class OrderUpdate(externalOrderId: String,
                        tradePair: TradePair, // for validation only
                        side: TradeSide, // for validation only
                        orderType: OrderType, // for validation only
-                       updateTime: Instant,
                        orderStatus: OrderStatus,
                        cumulativeFilledQuantity: Double,
-                       priceAverage: Double) extends ExchangeAccountStreamData
+                       priceAverage: Double,
+                       updateTime: Instant) extends ExchangeAccountStreamData
 
 /**
  * OrderRequest: a single trade request before it is sent to an exchange
@@ -94,6 +98,8 @@ case class OrderRequest(id: UUID,
                         fee: Fee,
                         amountBaseAsset: Double,
                         limit: Double) {
+  var externalOrderId: Option[String] = None
+
   override def toString: String = s"OrderRequest($id, orderBundleId:$orderBundleId, $exchange, $tradePair, $tradeSide, $fee, " +
     s"amountBaseAsset:${formatDecimal(amountBaseAsset)}, limit:${formatDecimal(limit)})"
 

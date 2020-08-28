@@ -21,7 +21,7 @@ object BinancePublicTPDataChannel {
  * Binance TradePair-based data channel
  * Converts Raw TradePair-based data to unified ExchangeTPStreamData
  */
-class BinancePublicTPDataChannel(config: ExchangeConfig, tradePair: TradePair, binancePublicDataChannel: ActorRef) extends Actor {
+class BinancePublicTPDataChannel(config: ExchangeConfig, tradePair: TradePair, binancePublicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BinancePublicTPDataChannel])
   implicit val system: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = system.dispatcher
@@ -63,7 +63,7 @@ class BinancePublicTPDataChannel(config: ExchangeConfig, tradePair: TradePair, b
   override def preStart() {
     log.debug(s"BinanceTPDataChannel($tradePair) initializing...")
     implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
-    binanceTradePair = Await.result((binancePublicDataChannel ? GetBinanceTradePair(tradePair)).mapTo[BinanceTradePair],
+    binanceTradePair = Await.result((binancePublicDataInquirer ? GetBinanceTradePair(tradePair)).mapTo[BinanceTradePair],
       Config.internalCommunicationTimeout.duration.plus(500.millis))
     binanceTPWebSocketFlow = context.actorOf(
       BinanceTPWebSocketFlow.props(config, binanceTradePair, self), s"BinanceTPWebSocketFlow-${binanceTradePair.symbol}")

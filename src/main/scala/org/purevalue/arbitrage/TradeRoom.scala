@@ -239,9 +239,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
         exchangeName,
         Config.exchange(exchangeName),
         self,
-        context.actorOf(exchangeInit.publicDataInquirerProps.apply(), s"$camelName-Exchange"),
-        exchangeInit.exchangePublicTPDataChannelProps,
-        exchangeInit.exchangeAccountDataChannelProps,
+        exchangeInit,
         ExchangeTPData(
           tickers(exchangeName),
           extendedTickers(exchangeName),

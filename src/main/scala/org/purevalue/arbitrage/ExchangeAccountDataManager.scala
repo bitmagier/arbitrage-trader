@@ -29,12 +29,14 @@ case class ExchangeAccountData(wallet: Wallet, orders: concurrent.Map[String, Or
 
 object ExchangeAccountDataManager {
   def props(config: ExchangeConfig,
-            exchangeAccountDataChannelInit: () => Props,
+            exchangePublicDataInquirer: ActorRef,
+            exchangeAccountDataChannelInit: Function2[ExchangeConfig, ActorRef, Props],
             accountData: ExchangeAccountData): Props =
-    Props(new ExchangeAccountDataManager(config, exchangeAccountDataChannelInit, accountData))
+    Props(new ExchangeAccountDataManager(config, exchangePublicDataInquirer, exchangeAccountDataChannelInit, accountData))
 }
 class ExchangeAccountDataManager(config: ExchangeConfig,
-                                 exchangeAccountDataChannelInit: () => Props,
+                                 exchangePublicDataInquirer: ActorRef,
+                                 exchangeAccountDataChannelInit: Function2[ExchangeConfig, ActorRef, Props],
                                  accountData: ExchangeAccountData) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[ExchangeAccountDataManager])
   var accountDataChannel: ActorRef = _
@@ -58,7 +60,7 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
   }
 
   override def preStart(): Unit = {
-    accountDataChannel = context.actorOf(exchangeAccountDataChannelInit.apply(), s"${config.exchangeName}.AccountDataChannel")
+    accountDataChannel = context.actorOf(exchangeAccountDataChannelInit(config, exchangePublicDataInquirer), s"${config.exchangeName}.AccountDataChannel")
     accountDataChannel ! StartStreamRequest(sink)
   }
 

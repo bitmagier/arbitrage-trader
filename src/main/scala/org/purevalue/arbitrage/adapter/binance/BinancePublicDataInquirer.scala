@@ -31,6 +31,7 @@ case class BinanceTradePair(baseAsset: Asset, quoteAsset: Asset, symbol: String)
 
 object BinancePublicDataInquirer {
   case class GetBinanceTradePair(tradePair: TradePair)
+  case class GetBinanceTradePairs()
 
   def toBid(e: Seq[String]): Bid = {
     if (e.length != 2) throw new IllegalArgumentException(e.toString())
@@ -88,6 +89,9 @@ class BinancePublicDataInquirer(config: ExchangeConfig) extends Actor {
     // Messages from BinanceTPDataChannel
     case GetBinanceTradePair(tp) =>
       sender() ! binanceTradePairs.find(e => e.baseAsset == tp.baseAsset && e.quoteAsset == tp.quoteAsset).get
+
+    case GetBinanceTradePairs() =>
+      sender() ! binanceTradePairs
 
     case Status.Failure(cause) =>
       log.error("received failure", cause)

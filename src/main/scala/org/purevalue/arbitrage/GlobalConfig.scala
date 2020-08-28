@@ -54,10 +54,9 @@ object TradePair {
   }
 }
 
-case class ExchangePublicTPDataChannelPropsParams(tp: TradePair, exchangePublicDataInquirer: ActorRef, tpDataManager: ActorRef)
-case class ExchangeInitStuff(publicDataInquirerProps: Function0[Props],
-                             exchangePublicTPDataChannelProps: Function1[ExchangePublicTPDataChannelPropsParams, Props],
-                             exchangeAccountDataChannelProps: () => Props)
+case class ExchangeInitStuff(publicDataInquirerProps: Function1[ExchangeConfig, Props],
+                             exchangePublicTPDataChannelProps: Function3[ExchangeConfig, TradePair, ActorRef, Props],
+                             exchangeAccountDataChannelProps: Function2[ExchangeConfig, ActorRef, Props])
 
 object GlobalConfig {
   private val log = LoggerFactory.getLogger("GlobalConfig")
@@ -65,15 +64,13 @@ object GlobalConfig {
   // all exchanges - used for init routine
   val AllExchanges: Map[String, ExchangeInitStuff] = Map(
     "binance" -> ExchangeInitStuff(
-      () => BinancePublicDataInquirer.props(Config.exchange("binance")),
-      (p: ExchangePublicTPDataChannelPropsParams) =>
-        BinancePublicTPDataChannel.props(Config.exchange("binance"), p.tp, p.exchangePublicDataInquirer),
-      () => BinanceAccountDataChannel.props(Config.exchange("binance"))
+      BinancePublicDataInquirer.props,
+      BinancePublicTPDataChannel.props,
+      BinanceAccountDataChannel.props
     ),
     "bitfinex" -> ExchangeInitStuff(
-      () => BitfinexPublicDataInquirer.props(Config.exchange("bitfinex")),
-      (p: ExchangePublicTPDataChannelPropsParams) =>
-        BitfinexPublicTPDataChannel.props(Config.exchange("bitfinex"), p.tp, p.exchangePublicDataInquirer),
+      BitfinexPublicDataInquirer.props,
+      BitfinexPublicTPDataChannel.props,
       null // TODO
     )
   )
