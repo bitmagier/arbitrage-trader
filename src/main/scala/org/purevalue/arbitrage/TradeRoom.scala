@@ -1,6 +1,6 @@
 package org.purevalue.arbitrage
 
-import java.time.{Duration, Instant, LocalDateTime, ZonedDateTime}
+import java.time.{Duration, Instant, LocalDateTime}
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -8,15 +8,14 @@ import akka.actor.SupervisorStrategy.Restart
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, OneForOneStrategy, Props, Status}
 import akka.pattern.ask
 import akka.util.Timeout
-import org.purevalue.arbitrage.Asset.{Bitcoin, USDT}
+import org.purevalue.arbitrage.Asset.Bitcoin
 import org.purevalue.arbitrage.Exchange.{GetTradePairs, RemoveTradePair, StartStreaming}
-import org.purevalue.arbitrage.TradeRoom.{DeathWatch, LogStats, OrderBundle, TradeContext}
+import org.purevalue.arbitrage.TradeRoom.{DeathWatch, LogStats, OrderRequestBundle, TradeContext}
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.purevalue.arbitrage.trader.FooTrader
 import org.slf4j.LoggerFactory
 
 import scala.collection.concurrent.TrieMap
-import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.concurrent.{Await, ExecutionContextExecutor}
 
@@ -62,91 +61,6 @@ case class CryptoValue(asset: Asset, amount: Double) {
  */
 case class LocalCryptoValue(exchange: String, asset: Asset, amount: Double)
 
-/** Order: a single trade request before it's execution */
-case class Order(id: UUID,
-                 orderBundleId: UUID,
-                 exchange: String,
-                 tradePair: TradePair,
-                 tradeSide: TradeSide,
-                 fee: Fee,
-                 amountBaseAsset: Double,
-                 limit: Double) {
-  override def toString: String = s"Order($id, orderBundleId:$orderBundleId, $exchange, $tradePair, $tradeSide, $fee, " +
-    s"amountBaseAsset:${formatDecimal(amountBaseAsset)}, limit:${formatDecimal(limit)})"
-
-  // absolute (positive) amount minus fees
-  def calcOutgoingLiquidity: LocalCryptoValue = tradeSide match {
-    case TradeSide.Buy => LocalCryptoValue(exchange, tradePair.quoteAsset, limit * amountBaseAsset * (1.0 + fee.takerFee))
-    case TradeSide.Sell => LocalCryptoValue(exchange, tradePair.baseAsset, amountBaseAsset)
-    case _ => throw new IllegalArgumentException
-  }
-
-  // absolute (positive) amount minus fees
-  def calcIncomingLiquidity: LocalCryptoValue = tradeSide match {
-    case TradeSide.Buy => LocalCryptoValue(exchange, tradePair.baseAsset, amountBaseAsset)
-    case TradeSide.Sell => LocalCryptoValue(exchange, tradePair.quoteAsset, limit * amountBaseAsset * (1.0 - fee.takerFee))
-    case _ => throw new IllegalArgumentException
-  }
-}
-
-/** Trade: a successfully executed Order */
-case class Trade(id: UUID,
-                 orderId: UUID,
-                 exchange: String,
-                 tradePair: TradePair,
-                 direction: TradeSide,
-                 fee: Fee,
-                 amountBaseAsset: Double,
-                 amountQuoteAsset: Double,
-                 executionRate: Double,
-                 executionTime: ZonedDateTime,
-                 wasMaker: Boolean,
-                 supervisorComments: Seq[String]) // comments from TradeRoom "operator"
-
-case class OrderBill(balanceSheet: Seq[CryptoValue], sumUSDT: Double) {
-  override def toString: String = s"OrderBill(balanceSheet:$balanceSheet, sumUSDT:${formatDecimal(sumUSDT)})"
-}
-object OrderBill {
-  /**
-   * Calculates the balance sheet of that order
-   * incoming value have positive amount; outgoing value have negative amount
-   */
-  def calcBalanceSheet(order: Order): Seq[CryptoValue] = {
-    val result = ArrayBuffer[CryptoValue]()
-    order.calcIncomingLiquidity match {
-      case v: LocalCryptoValue => result.append(CryptoValue(v.asset, v.amount))
-    }
-    order.calcOutgoingLiquidity match {
-      case v: LocalCryptoValue => result.append(CryptoValue(v.asset, -v.amount))
-    }
-    result
-  }
-
-  def aggregateValues(balanceSheet: Iterable[CryptoValue], targetAsset: Asset, findReferenceRate: TradePair => Option[Double]): Double = {
-    val sumByAsset: Iterable[CryptoValue] = balanceSheet
-      .groupBy(_.asset)
-      .map(e => CryptoValue(e._1, e._2.map(_.amount).sum))
-
-    sumByAsset.map { v =>
-      v.convertTo(targetAsset, findReferenceRate) match {
-        case Some(v) => v.amount
-        case None =>
-          throw new RuntimeException(s"Unable to convert ${v.asset} to $targetAsset")
-      }
-    }.sum
-  }
-
-  def aggregateValues(balanceSheet: Iterable[CryptoValue], targetAsset: Asset, tc: TradeContext): Double =
-    aggregateValues(balanceSheet, targetAsset, tp => tc.findReferenceTicker(tp).map(_.weightedAveragePrice))
-
-  def calc(orders: Seq[Order], tc: TradeContext): OrderBill = {
-    val balanceSheet: Seq[CryptoValue] = orders.flatMap(calcBalanceSheet)
-    val sumUSDT: Double = aggregateValues(balanceSheet, Asset("USDT"), tc)
-    OrderBill(balanceSheet, sumUSDT)
-  }
-}
-
-
 object TradeRoom {
 
   /**
@@ -162,17 +76,17 @@ object TradeRoom {
     def findReferenceTicker(tp: TradePair): Option[ExtendedTicker] = TradeRoom.findReferenceTicker(tp, extendedTickers)
   }
 
-  /** High level order bundle, covering 2 or more trader orders */
-  case class OrderBundle(id: UUID,
-                         traderName: String,
-                         trader: ActorRef,
-                         creationTime: LocalDateTime,
-                         orders: Seq[Order],
-                         bill: OrderBill) {
-    override def toString: String = s"OrderBundle($id, $traderName, creationTime:$creationTime, orders:$orders, $bill)"
+  /** High level order request bundle, covering 2 or more trader orders */
+  case class OrderRequestBundle(id: UUID,
+                                traderName: String,
+                                trader: ActorRef,
+                                creationTime: LocalDateTime,
+                                orders: Seq[OrderRequest],
+                                bill: OrderRequestBill) {
+    override def toString: String = s"OrderRequestBundle($id, $traderName, creationTime:$creationTime, orders:$orders, $bill)"
   }
 
-  // communication with ourselfs
+  // communication with ourself
   case class LogStats()
   case class DeathWatch()
 
@@ -223,6 +137,11 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     "bitfinex" -> Fee("bitfinex", Config.exchange("bitfinex").makerFee, Config.exchange("bitfinex").takerFee)
   )
 
+  // Map[exchange-name, Map[external-order-id, order]]
+  private val activeOrders: ConcurrentMap[String, ConcurrentMap[String, PlacedOrder]] = TrieMap()
+  // Map[exchange-name, Map[external-trade-id, trade]]
+  private val executedTrades: ConcurrentMap[String, ConcurrentMap[String, ExecutedTrade]] = TrieMap()
+
   private val tradeContext: TradeContext = TradeContext(tickers, extendedTickers, orderBooks, wallets, fees)
 
   private val orderBundleSafetyGuard = OrderBundleSafetyGuard(config.orderBundleSafetyGuard, tickers, extendedTickers, dataAge)
@@ -236,7 +155,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     true // TODO ask liquidity manager to lock that amount of CryptoValue on the specified exchanges for us
   }
 
-  def placeOrderBundleOrders(t: OrderBundle): Unit = {
+  def placeOrderBundleOrders(t: OrderRequestBundle): Unit = {
     if (orderBundleSafetyGuard.isSafe(t)) {
       val requiredLiquidity: Seq[LocalCryptoValue] = t.orders.map(_.calcOutgoingLiquidity)
       if (checkAndLockRequiredLiquidity(requiredLiquidity)) {
@@ -458,7 +377,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
     // messages from Traders
 
-    case ob: OrderBundle =>
+    case ob: OrderRequestBundle =>
       placeOrderBundleOrders(ob)
 
     // messages from outself
@@ -476,5 +395,4 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   }
 }
 
-// TODO shudown app in case of serious exceptions
-// TODO add feature Exchange-PlatformStatus to cover Maintainance periods
+

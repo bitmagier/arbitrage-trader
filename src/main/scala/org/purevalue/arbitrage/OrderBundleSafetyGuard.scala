@@ -2,7 +2,7 @@ package org.purevalue.arbitrage
 
 import java.time.{Duration, Instant}
 
-import org.purevalue.arbitrage.TradeRoom.OrderBundle
+import org.purevalue.arbitrage.TradeRoom.OrderRequestBundle
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.slf4j.LoggerFactory
 
@@ -23,7 +23,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
 
   def unsafeStats: Map[SafetyGuardDecision, Int] = stats
 
-  private def orderLimitCloseToTicker(order: Order): Boolean = {
+  private def orderLimitCloseToTicker(order: OrderRequest): Boolean = {
     val ticker = tickers(order.exchange)(order.tradePair)
     val bestOfferPrice: Double = if (order.tradeSide == TradeSide.Buy) ticker.lowestAskPrice else ticker.highestBidPrice
     val diff = ((order.limit - bestOfferPrice) / bestOfferPrice).abs
@@ -36,7 +36,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
     valid
   }
 
-  private def tickerDataUpToDate(o: Order): Boolean = {
+  private def tickerDataUpToDate(o: OrderRequest): Boolean = {
     val age = Duration.between(dataAge(o.exchange).tickerTS, Instant.now)
     val r = age.compareTo(config.maxTickerAge) < 0
     if (!r) {
@@ -62,7 +62,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
    *
    * It is possible to use different Liquidity reserve assets for different involved assets/trades
    */
-  def balanceOfLiquidityTransformationCompensationTransactionsInUSDT(t: OrderBundle): Option[Double] = {
+  def balanceOfLiquidityTransformationCompensationTransactionsInUSDT(t: OrderRequestBundle): Option[Double] = {
     val allReserveAssets: List[Asset] = Config.liquidityManager.reserveAssets
     val involvedAssets: Set[Asset] = t.orders.flatMap(e => Seq(e.tradePair.baseAsset, e.tradePair.quoteAsset)).toSet
     val uninvolvedReserveAssets: List[Asset] = allReserveAssets.filterNot(involvedAssets.contains)
@@ -85,7 +85,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
     val transactions =
       toProvide.map(e => {
         val tradePair = TradePair.of(e.asset, findUsableReserveAsset(e.exchange, e.asset, uninvolvedReserveAssets).get)
-        Order(null, null,
+        OrderRequest(null, null,
           e.exchange,
           tradePair,
           TradeSide.Buy,
@@ -95,7 +95,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
         )
       }) ++ toConvertBack.map(e => {
         val tradePair = TradePair.of(e.asset, findUsableReserveAsset(e.exchange, e.asset, uninvolvedReserveAssets).get)
-        Order(null, null,
+        OrderRequest(null, null,
           e.exchange,
           tradePair,
           TradeSide.Sell,
@@ -105,7 +105,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
         )
       })
 
-    val balanceSheet: Iterable[CryptoValue] = transactions.flatMap(OrderBill.calcBalanceSheet)
+    val balanceSheet: Iterable[CryptoValue] = transactions.flatMap(OrderRequestBill.calcBalanceSheet)
 
     // self check
     val groupedAndCleanedUpBalanceSheet: Iterable[CryptoValue] =
@@ -120,14 +120,14 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
     }
 
     Some(
-      OrderBill.aggregateValues(
+      OrderRequestBill.aggregateValues(
         groupedAndCleanedUpBalanceSheet,
         Asset.USDT,
         tp => TradeRoom.findReferenceTicker(tp, extendedTicker).map(_.weightedAveragePrice)))
   }
 
 
-  def totalTransactionCostsInRage(t: OrderBundle): Boolean = {
+  def totalTransactionCostsInRage(t: OrderRequestBundle): Boolean = {
     val b: Option[Double] = balanceOfLiquidityTransformationCompensationTransactionsInUSDT(t)
     if (b.isEmpty) return false
     if ((t.bill.sumUSDT + b.get) < config.minTotalGainInUSDT) {
@@ -140,7 +140,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
   // ^^^ TODO instead of taking only the first possible one, better try all alternatives of reserve liquidity asset conversion before giving up here
 
 
-  def isSafe(t: OrderBundle): Boolean = {
+  def isSafe(t: OrderRequestBundle): Boolean = {
     _isSafe(t) match {
       case (result, reason) =>
         this.synchronized {
@@ -150,7 +150,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
     }
   }
 
-  private def _isSafe(t: OrderBundle): (Boolean, SafetyGuardDecision) = {
+  private def _isSafe(t: OrderRequestBundle): (Boolean, SafetyGuardDecision) = {
     if (t.bill.sumUSDT <= 0) {
       log.warn(s"${Emoji.Disagree}  Got OrderBundle with negative balance: ${t.bill.sumUSDT}. I will not execute that one!")
       log.debug(s"$t")

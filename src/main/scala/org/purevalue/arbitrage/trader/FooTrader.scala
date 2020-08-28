@@ -31,8 +31,8 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
 
   val name: String = "FooTrader"
   val maxOpenOrderBundles: Int = config.getInt("max-open-order-bundles")
-  var pendingOrderBundles: Map[UUID, OrderBundle] = Map()
-  var activeOrderBundles: Map[UUID, OrderBundle] = Map()
+  var pendingOrderBundles: Map[UUID, OrderRequestBundle] = Map()
+  var activeOrderBundles: Map[UUID, OrderRequestBundle] = Map()
   var numSearchesTotal: Int = 0
   var numSearchesDiff: Int = 0
   var numSingleSearchesDiff: Int = 0
@@ -51,7 +51,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
   case class NoUSDTConversion(asses: Asset) extends NoResultReason
   case class MinGainTooLow() extends NoResultReason
 
-  def findBestShotBasedOnTicker(tradePair: TradePair): (Option[OrderBundle], Option[NoResultReason]) = {
+  def findBestShotBasedOnTicker(tradePair: TradePair): (Option[OrderRequestBundle], Option[NoResultReason]) = {
     // ignore wallet for now
     val ticker4Buy: Iterable[Ticker] = tc.tickers.map(_._2(tradePair))
     val ticker4Sell: Iterable[Ticker] = tc.tickers.map(_._2(tradePair))
@@ -95,7 +95,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
     }
 
     val ourBuyBaseAssetOrder =
-      Order(
+      OrderRequest(
         newUUID(),
         orderBundleId,
         lowestAsk._1,
@@ -106,7 +106,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
         lowestAsk._2.price * (1.0d + orderLimitAdditionRate))
 
     val ourSellBaseAssetOrder =
-      Order(
+      OrderRequest(
         newUUID(),
         orderBundleId,
         highestBid._1,
@@ -117,9 +117,9 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
         highestBid._2.price * (1.0d - orderLimitAdditionRate)
       )
 
-    val bill: OrderBill = OrderBill.calc(Seq(ourBuyBaseAssetOrder, ourSellBaseAssetOrder), tc)
+    val bill: OrderRequestBill = OrderRequestBill.calc(Seq(ourBuyBaseAssetOrder, ourSellBaseAssetOrder), tc)
     if (bill.sumUSDT >= config.getDouble("order-bundle.min-gain-in-usdt")) {
-      (Some(OrderBundle(
+      (Some(OrderRequestBundle(
         orderBundleId,
         name,
         self,
@@ -214,8 +214,8 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
 
   var noResultReasonStats: Map[NoResultReason, Int] = Map()
 
-  def findBestShots(topN: Int): Seq[OrderBundle] = {
-    var result: List[OrderBundle] = List()
+  def findBestShots(topN: Int): Seq[OrderRequestBundle] = {
+    var result: List[OrderRequestBundle] = List()
     for (tradePair: TradePair <- tc.tickers.values.flatMap(_.keys).toSet) {
       if (tc.tickers.count(_._2.keySet.contains(tradePair)) > 1) {
         numSingleSearchesDiff += 1
