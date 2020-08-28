@@ -2,7 +2,6 @@ package org.purevalue.arbitrage
 
 import java.time.{Duration, Instant}
 
-import org.purevalue.arbitrage.TradeRoom.OrderRequestBundle
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.slf4j.LoggerFactory
 
@@ -105,7 +104,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
         )
       })
 
-    val balanceSheet: Iterable[CryptoValue] = transactions.flatMap(OrderRequestBill.calcBalanceSheet)
+    val balanceSheet: Iterable[CryptoValue] = transactions.flatMap(OrderBill.calcBalanceSheet)
 
     // self check
     val groupedAndCleanedUpBalanceSheet: Iterable[CryptoValue] =
@@ -120,7 +119,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
     }
 
     Some(
-      OrderRequestBill.aggregateValues(
+      OrderBill.aggregateValues(
         groupedAndCleanedUpBalanceSheet,
         Asset.USDT,
         tp => TradeRoom.findReferenceTicker(tp, extendedTicker).map(_.weightedAveragePrice)))

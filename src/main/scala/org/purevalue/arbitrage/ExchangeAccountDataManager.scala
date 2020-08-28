@@ -6,7 +6,7 @@ import akka.stream.scaladsl.Sink
 import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.StartStreamRequest
 import org.slf4j.LoggerFactory
 
-import scala.collection.Map
+import scala.collection._
 import scala.concurrent.Future
 
 trait ExchangeAccountStreamData
@@ -25,7 +25,7 @@ case class Fee(exchange: String,
                takerFee: Double)
 
 
-case class ExchangeAccountData(wallet: Wallet)
+case class ExchangeAccountData(wallet: Wallet, orders: concurrent.Map[String, Order])
 
 object ExchangeAccountDataManager {
   def props(config: ExchangeConfig,
@@ -39,23 +39,22 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
   private val log = LoggerFactory.getLogger(classOf[ExchangeAccountDataManager])
   var accountDataChannel: ActorRef = _
 
-  val sink: Sink[ExchangeAccountStreamData, Future[Done]] = Sink.foreach[ExchangeAccountStreamData] {
-    case w: Wallet =>
-      if (log.isTraceEnabled()) log.trace(s"${config.exchangeName}: received $w")
-      accountData.wallet.balances = w.balances
-    case w: WalletAssetUpdate =>
-      if (log.isTraceEnabled()) log.trace(s"${config.exchangeName}: received $w")
-      accountData.wallet.balances = accountData.wallet.balances -- w.balances.keys ++ w.balances
-    case w: WalletBalanceUpdate =>
-      if (log.isTraceEnabled()) log.trace(s"${config.exchangeName}: received $w")
-      accountData.wallet.balances = accountData.wallet.balances.map {
-        // TODO validate if an update of amountAvailable is the right thing, that is meant by this message (I'm 95% sure so far)
-        case (a:Asset,b:Balance) if a == w.asset =>
-          (a, Balance(b.asset, b.amountAvailable + w.balanceDelta, b.amountLocked))
-        case x => x
-      }
-    // ...
-    case _ => throw new NotImplementedError
+  val sink: Sink[ExchangeAccountStreamData, Future[Done]] = Sink.foreach[ExchangeAccountStreamData] { x =>
+    if (log.isTraceEnabled()) log.trace(s"${config.exchangeName}: received $x")
+    x match {
+      case w: Wallet              => accountData.wallet.balances = w.balances
+      case w: WalletAssetUpdate   => accountData.wallet.balances = accountData.wallet.balances -- w.balances.keys ++ w.balances
+      case w: WalletBalanceUpdate =>
+        accountData.wallet.balances = accountData.wallet.balances.map {
+          // TODO validate if an update of amountAvailable is the right thing, that is meant by this message (I'm 95% sure so far)
+          case (a: Asset, b: Balance) if a == w.asset =>
+            (a, Balance(b.asset, b.amountAvailable + w.balanceDelta, b.amountLocked))
+          case x => x
+        }
+      case o: Order               => accountData.orders.update(o.externalId, o)
+      case o: OrderUpdate         => accountData.orders(o.externalOrderId).applyUpdate(o)
+      case _                      => throw new NotImplementedError
+    }
   }
 
   override def preStart(): Unit = {

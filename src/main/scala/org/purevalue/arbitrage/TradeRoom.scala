@@ -1,7 +1,6 @@
 package org.purevalue.arbitrage
 
-import java.time.{Duration, Instant, LocalDateTime}
-import java.util.UUID
+import java.time.{Duration, Instant}
 import java.util.concurrent.TimeUnit
 
 import akka.actor.SupervisorStrategy.Restart
@@ -10,7 +9,7 @@ import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage.Asset.Bitcoin
 import org.purevalue.arbitrage.Exchange.{GetTradePairs, RemoveTradePair, StartStreaming}
-import org.purevalue.arbitrage.TradeRoom.{DeathWatch, LogStats, OrderRequestBundle, TradeContext}
+import org.purevalue.arbitrage.TradeRoom.{DeathWatch, LogStats, TradeContext}
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.purevalue.arbitrage.trader.FooTrader
 import org.slf4j.LoggerFactory
@@ -19,47 +18,6 @@ import scala.collection.concurrent.TrieMap
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.concurrent.{Await, ExecutionContextExecutor}
 
-sealed trait TradeSide
-object TradeSide extends TradeSide {
-  case object Buy extends TradeSide
-  case object Sell extends TradeSide
-}
-
-case class CryptoValue(asset: Asset, amount: Double) {
-  override def toString: String = s"${formatDecimal(amount)} ${asset.officialSymbol}"
-
-  def convertTo(targetAsset: Asset, findConversionRate: TradePair => Option[Double]): Option[CryptoValue] = {
-    if (this.asset == targetAsset)
-      Some(this)
-    else {
-      // try direct conversion first
-      findConversionRate(TradePair.of(this.asset, targetAsset)) match {
-        case Some(rate) =>
-          Some(CryptoValue(targetAsset, amount * rate))
-        case None =>
-          findConversionRate(TradePair.of(targetAsset, this.asset)) match { // try reverse ticker
-            case Some(rate) =>
-              Some(CryptoValue(targetAsset, amount / rate))
-            case None => // try conversion via BTC as last option
-              if ((this.asset != Bitcoin && targetAsset != Bitcoin)
-                && findConversionRate(TradePair.of(this.asset, Bitcoin)).isDefined
-                && findConversionRate(TradePair.of(targetAsset, Bitcoin)).isDefined) {
-                this.convertTo(Bitcoin, findConversionRate).get.convertTo(targetAsset, findConversionRate)
-              } else {
-                None
-              }
-          }
-      }
-    }
-  }
-
-  def convertTo(targetAsset: Asset, tc: TradeContext): Option[CryptoValue] =
-    convertTo(targetAsset, tp => tc.findReferenceTicker(tp).map(_.weightedAveragePrice))
-}
-/**
- * CryptoValue on a specific exchange
- */
-case class LocalCryptoValue(exchange: String, asset: Asset, amount: Double)
 
 object TradeRoom {
 
@@ -74,16 +32,6 @@ object TradeRoom {
                           fees: scala.collection.Map[String, Fee]) {
 
     def findReferenceTicker(tp: TradePair): Option[ExtendedTicker] = TradeRoom.findReferenceTicker(tp, extendedTickers)
-  }
-
-  /** High level order request bundle, covering 2 or more trader orders */
-  case class OrderRequestBundle(id: UUID,
-                                traderName: String,
-                                trader: ActorRef,
-                                creationTime: LocalDateTime,
-                                orders: Seq[OrderRequest],
-                                bill: OrderRequestBill) {
-    override def toString: String = s"OrderRequestBundle($id, $traderName, creationTime:$creationTime, orders:$orders, $bill)"
   }
 
   // communication with ourself
@@ -137,10 +85,8 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     "bitfinex" -> Fee("bitfinex", Config.exchange("bitfinex").makerFee, Config.exchange("bitfinex").takerFee)
   )
 
-  // Map[exchange-name, Map[external-order-id, order]]
-  private val activeOrders: ConcurrentMap[String, ConcurrentMap[String, PlacedOrder]] = TrieMap()
-  // Map[exchange-name, Map[external-trade-id, trade]]
-  private val executedTrades: ConcurrentMap[String, ConcurrentMap[String, ExecutedTrade]] = TrieMap()
+  // Map(exchange-name -> Map(external-order-id -> order))
+  private val orders: ConcurrentMap[String, ConcurrentMap[String, Order]] = TrieMap()
 
   private val tradeContext: TradeContext = TradeContext(tickers, extendedTickers, orderBooks, wallets, fees)
 
@@ -286,6 +232,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     dataAge += exchangeName -> TPDataTimestamps(Instant.MIN, Instant.MIN, Instant.MIN)
 
     wallets += exchangeName -> Wallet(Map())
+    orders += exchangeName -> TrieMap()
 
     exchanges += exchangeName -> context.actorOf(
       Exchange.props(
@@ -302,7 +249,8 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
           dataAge(exchangeName)
         ),
         ExchangeAccountData(
-          wallets(exchangeName)
+          wallets(exchangeName),
+          orders(exchangeName)
         )
       ), camelName)
   }
@@ -395,4 +343,40 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   }
 }
 
+
+case class CryptoValue(asset: Asset, amount: Double) {
+  override def toString: String = s"${formatDecimal(amount)} ${asset.officialSymbol}"
+
+  def convertTo(targetAsset: Asset, findConversionRate: TradePair => Option[Double]): Option[CryptoValue] = {
+    if (this.asset == targetAsset)
+      Some(this)
+    else {
+      // try direct conversion first
+      findConversionRate(TradePair.of(this.asset, targetAsset)) match {
+        case Some(rate) =>
+          Some(CryptoValue(targetAsset, amount * rate))
+        case None =>
+          findConversionRate(TradePair.of(targetAsset, this.asset)) match { // try reverse ticker
+            case Some(rate) =>
+              Some(CryptoValue(targetAsset, amount / rate))
+            case None => // try conversion via BTC as last option
+              if ((this.asset != Bitcoin && targetAsset != Bitcoin)
+                && findConversionRate(TradePair.of(this.asset, Bitcoin)).isDefined
+                && findConversionRate(TradePair.of(targetAsset, Bitcoin)).isDefined) {
+                this.convertTo(Bitcoin, findConversionRate).get.convertTo(targetAsset, findConversionRate)
+              } else {
+                None
+              }
+          }
+      }
+    }
+  }
+
+  def convertTo(targetAsset: Asset, tc: TradeContext): Option[CryptoValue] =
+    convertTo(targetAsset, tp => tc.findReferenceTicker(tp).map(_.weightedAveragePrice))
+}
+/**
+ * CryptoValue on a specific exchange
+ */
+case class LocalCryptoValue(exchange: String, asset: Asset, amount: Double)
 

@@ -117,7 +117,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
         highestBid._2.price * (1.0d - orderLimitAdditionRate)
       )
 
-    val bill: OrderRequestBill = OrderRequestBill.calc(Seq(ourBuyBaseAssetOrder, ourSellBaseAssetOrder), tc)
+    val bill: OrderBill = OrderBill.calc(Seq(ourBuyBaseAssetOrder, ourSellBaseAssetOrder), tc)
     if (bill.sumUSDT >= config.getDouble("order-bundle.min-gain-in-usdt")) {
       (Some(OrderRequestBundle(
         orderBundleId,
