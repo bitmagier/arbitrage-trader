@@ -3,7 +3,7 @@ package org.purevalue.arbitrage
 import akka.Done
 import akka.actor.{Actor, ActorRef, Props}
 import akka.stream.scaladsl.Sink
-import org.purevalue.arbitrage.ExchangeAccountDataManager.CancelOrder
+import org.purevalue.arbitrage.ExchangeAccountDataManager.{CancelOrder, FetchOrder, NewLimitOrder}
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.StartStreamRequest
 import org.slf4j.LoggerFactory
@@ -16,6 +16,8 @@ object ExchangeAccountDataManager {
   case class FetchOrder(tradePair:TradePair, externalOrderId:String) // order shall be queried from exchange and feed into the data stream (e.g. for refreshing persisted open orders after restart)
   case class CancelOrder(tradePair:TradePair,
                          externalOrderId:String) // response is a boolean indicating the success of the operation
+  case class NewLimitOrder(o:OrderRequest) // response is NewOrderAck
+  case class NewOrderAck(externalOrderId:String, clientOrderId:String)
 
   def props(config: ExchangeConfig,
             exchangePublicDataInquirer: ActorRef,
@@ -54,7 +56,9 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
   }
 
   override def receive: Receive = {
+    case f:FetchOrder  => accountDataChannel.forward(f)
     case c:CancelOrder => accountDataChannel.forward(c)
+    case o:NewLimitOrder => accountDataChannel.forward(o)
   }
 }
 
@@ -65,8 +69,8 @@ case class Balance(asset: Asset, amountAvailable: Double, amountLocked: Double) 
   def toCryptoValue: CryptoValue = CryptoValue(asset, amountAvailable)
 
   override def toString: String = s"Balance(${asset.officialSymbol}: " +
-    s"available:${formatDecimal(amountAvailable, asset.visibleFractionDigits)}, " +
-    s"locked: ${formatDecimal(amountLocked, asset.visibleFractionDigits)})"
+    s"available:${formatDecimal(amountAvailable, asset.visibleAmountFractionDigits)}, " +
+    s"locked: ${formatDecimal(amountLocked, asset.visibleAmountFractionDigits)})"
 }
 // we use a [var immutable map] instead of mutable one here, to be able to update the whole map at once without a race condition
 case class Wallet(var balances: Map[Asset, Balance]) extends ExchangeAccountStreamData

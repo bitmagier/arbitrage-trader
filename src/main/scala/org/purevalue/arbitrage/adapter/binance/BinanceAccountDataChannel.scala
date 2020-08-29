@@ -11,11 +11,12 @@ import akka.stream.OverflowStrategy
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source, SourceQueueWithComplete}
 import akka.util.Timeout
 import akka.{Done, NotUsed}
-import org.purevalue.arbitrage.ExchangeAccountDataManager.CancelOrder
+import org.purevalue.arbitrage.ExchangeAccountDataManager.{CancelOrder, FetchOrder, NewLimitOrder, NewOrderAck}
 import org.purevalue.arbitrage.HttpUtils.{httpRequestJsonBinanceAccount, httpRequestPureJsonBinanceAccount}
+import org.purevalue.arbitrage.Utils.formatDecimal
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.{QueryAccountInformation, SendPing, StartStreamRequest}
-import org.purevalue.arbitrage.adapter.binance.BinanceOrder.OrderExecutionReportJson.{toOrderStatus, toOrderType, toTradeSide}
+import org.purevalue.arbitrage.adapter.binance.BinanceOrder.{toOrderStatus, toOrderType, toTradeSide}
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.{BinanceBaseRestEndpoint, GetBinanceTradePairs}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
@@ -187,6 +188,33 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
     }
   }
 
+  def newLimitOrder(o: OrderRequest): Future[NewOrderAck] = {
+    def toNewOrderAck(j: JsValue): NewOrderAck = {
+      j.asJsObject match {
+        case j: JsObject if j.fields.contains("orderId") && j.fields.contains("clientOrderId") =>
+          NewOrderAck(
+            j.fields("orderId").convertTo[Long].toString,
+            j.fields("clientOrderId").convertTo[String]
+          )
+        case _ => throw new RuntimeException(s"NewLimitOrder: Unidentified response $j")
+      }
+    }
+
+    val requestBody: String =
+      s"""symbol=${resolveSymbol(o.tradePair)}
+         |side=${BinanceOrder.toString(o.tradeSide)}
+         |type=${BinanceOrder.toString(OrderType.LIMIT)}
+         |timeInForce=GTC
+         |quantity=${formatDecimal(o.amountBaseAsset, o.tradePair.baseAsset.visibleAmountFractionDigits)}
+         |price=${formatDecimal(o.limit, 8)}
+         |newClientOrderId=${o.id.toString}
+         |newOrderRespType=ACK
+         |""".stripMargin
+    httpRequestPureJsonBinanceAccount(HttpMethods.POST, s"$BinanceBaseRestEndpoint/api/v3/order", Some(requestBody), config.secrets, signed = true)
+      .map(toNewOrderAck)
+  }
+
+
   def createListenKey(): Unit = {
     import BinanceAccountDataJsonProtocoll._
     listenKey = Await.result(
@@ -230,9 +258,12 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
     case CancelOrder(tradePair, externalOrderId) =>
       cancelOrder(tradePair, externalOrderId.toLong).pipeTo(sender())
 
-// TODO query unfinished persisted orders from TradeRoom after application restart
-//    case FetchOrder(tradePair, externalOrderId) =>
-//      restSource._1.offer(queryOrder(resolveSymbol(tradePair), externalOrderId.toLong))
+    // TODO query unfinished persisted orders from TradeRoom after application restart
+    case FetchOrder(tradePair, externalOrderId) => ???
+    //      restSource._1.offer(queryOrder(resolveSymbol(tradePair), externalOrderId.toLong))
+
+    case NewLimitOrder(o: OrderRequest) =>
+      newLimitOrder(o).pipeTo(sender())
   }
 }
 
@@ -318,14 +349,14 @@ case class BalanceUpdateJson(e: String, // event type
 
 case class OpenOrderJson(symbol: String,
                          orderId: Long,
-//                         orderListId: Long,
+                         //                         orderListId: Long,
                          clientOrderId: String,
                          price: String,
                          origQty: String,
                          executedQty: String,
                          cummulativeQuoteQty: String,
                          status: String,
-//                         timeInForce: String,
+                         //                         timeInForce: String,
                          `type`: String,
                          side: String,
                          stopPrice: String,
@@ -429,14 +460,18 @@ case class OrderExecutionReportJson(e: String, // Event type
 }
 
 object BinanceOrder {
-  object OrderExecutionReportJson {
-    def toTradeSide(s:String): TradeSide = s match {
-      case "BUY" => TradeSide.Buy
-      case "SELL" => TradeSide.Sell
-    }
+  def toTradeSide(s: String): TradeSide = s match {
+    case "BUY" => TradeSide.Buy
+    case "SELL" => TradeSide.Sell
+  }
 
-    def toOrderType(o:String): OrderType = o match {
-      // @formatter:off
+  def toString(s: TradeSide): String = s match {
+    case TradeSide.Buy => "BUY"
+    case TradeSide.Sell => "SELL"
+  }
+
+  def toOrderType(o: String): OrderType = o match {
+    // @formatter:off
       case "LIMIT"              => OrderType.LIMIT
       case "MARKET"             => OrderType.MARKET
       case "STOP_LOSS"          => OrderType.STOP_LOSS
@@ -445,10 +480,20 @@ object BinanceOrder {
       case "TAKE_PROFIT_LIMIT"  => OrderType.TAKE_PROFIT_LIMIT
       case "LIMIT_MAKER"        => OrderType.LIMIT_MAKER
       // @formatter:on
-    }
+  }
 
-    def toOrderStatus(X:String): OrderStatus = X match {
-      // @formatter:off
+  def toString(o: OrderType): String = o match {
+    case OrderType.LIMIT => "LIMIT"
+    case OrderType.MARKET => "MARKET"
+    case OrderType.STOP_LOSS => "STOP_LOSS"
+    case OrderType.STOP_LOSS_LIMIT => "STOP_LOSS_LIMIT"
+    case OrderType.TAKE_PROFIT => "TAKE_PROFIT"
+    case OrderType.TAKE_PROFIT_LIMIT => "TAKE_PROFIT_LIMIT"
+    case OrderType.LIMIT_MAKER => "LIMIT_MAKER"
+  }
+
+  def toOrderStatus(X: String): OrderStatus = X match {
+    // @formatter:off
       case "NEW"              => OrderStatus.NEW
       case "PARTIALLY_FILLED" => OrderStatus.PARTIALLY_FILLED
       case "FILLED"           => OrderStatus.FILLED
@@ -456,7 +501,6 @@ object BinanceOrder {
       case "REJECTED"         => OrderStatus.REJECTED
       case "EXPIRED"          => OrderStatus.EXPIRED
       // @formatter:on
-    }
   }
 }
 

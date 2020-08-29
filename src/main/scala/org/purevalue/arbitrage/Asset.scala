@@ -7,7 +7,7 @@ import org.purevalue.arbitrage.Utils.formatDecimal
 
 // Crypto asset / coin.
 // It should NOT be created somewhere else. The way to get it is via Asset(officialSymbol)
-case class Asset(officialSymbol: String, name: String, visibleFractionDigits: Int = 4) {
+case class Asset(officialSymbol: String, name: String, visibleAmountFractionDigits: Int = 4) {
   override def equals(obj: Any): Boolean = {
     obj.isInstanceOf[Asset] &&
       this.officialSymbol == obj.asInstanceOf[Asset].officialSymbol
@@ -57,7 +57,7 @@ object TradePair {
 
 
 case class CryptoValue(asset: Asset, amount: Double) {
-  override def toString: String = s"${formatDecimal(amount, asset.visibleFractionDigits)} ${asset.officialSymbol}"
+  override def toString: String = s"${formatDecimal(amount, asset.visibleAmountFractionDigits)} ${asset.officialSymbol}"
 
   def convertTo(targetAsset: Asset, findConversionRate: TradePair => Option[Double]): Option[CryptoValue] = {
     if (this.asset == targetAsset)
