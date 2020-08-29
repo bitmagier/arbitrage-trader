@@ -247,7 +247,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
           orderBooks(exchangeName),
           dataAge(exchangeName)
         ),
-        ExchangeAccountData(
+        IncomingExchangeAccountData(
           wallets(exchangeName),
           orders(exchangeName)
         )

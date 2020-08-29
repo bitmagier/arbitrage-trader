@@ -6,7 +6,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import akka.Done
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, PoisonPill, Props, Status}
 import akka.stream.scaladsl.Sink
-import org.purevalue.arbitrage.ExchangeTPDataManager._
+import org.purevalue.arbitrage.ExchangePublicTPDataManager._
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.slf4j.LoggerFactory
 
@@ -75,7 +75,7 @@ case class ExchangeTPData(ticker: concurrent.Map[TradePair, Ticker],
                           orderBook: concurrent.Map[TradePair, OrderBook],
                           age: TPDataTimestamps)
 
-object ExchangeTPDataManager {
+object ExchangePublicTPDataManager {
   case class InitCheck()
   case class Initialized(tradePair: TradePair)
   case class StartStreamRequest(sink: Sink[Seq[ExchangeTPStreamData], Future[Done]])
@@ -87,19 +87,19 @@ object ExchangeTPDataManager {
             exchange: ActorRef,
             publicTPDataChannelProps: Function3[ExchangeConfig, TradePair, ActorRef, Props],
             tpDataSink: ExchangeTPData): Props =
-    Props(new ExchangeTPDataManager(config, tradePair, exchangePublicDataInquirer, exchange, publicTPDataChannelProps, tpDataSink))
+    Props(new ExchangePublicTPDataManager(config, tradePair, exchangePublicDataInquirer, exchange, publicTPDataChannelProps, tpDataSink))
 }
 
 /**
  * Manages all kind of data of one tradepair at one exchange
  */
-case class ExchangeTPDataManager(config: ExchangeConfig,
-                                 tradePair: TradePair,
-                                 exchangePublicDataInquirer: ActorRef,
-                                 exchange: ActorRef,
-                                 exchangePublicTPDataChannelProps: Function3[ExchangeConfig, TradePair, ActorRef, Props],
-                                 tpData: ExchangeTPData) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[ExchangeTPDataManager])
+case class ExchangePublicTPDataManager(config: ExchangeConfig,
+                                       tradePair: TradePair,
+                                       exchangePublicDataInquirer: ActorRef,
+                                       exchange: ActorRef,
+                                       exchangePublicTPDataChannelProps: Function3[ExchangeConfig, TradePair, ActorRef, Props],
+                                       tpData: ExchangeTPData) extends Actor {
+  private val log = LoggerFactory.getLogger(classOf[ExchangePublicTPDataManager])
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 

@@ -25,7 +25,7 @@ object Exchange {
             tradeRoom: ActorRef,
             initStuff: ExchangeInitStuff,
             tpData: ExchangeTPData,
-            accountData: ExchangeAccountData): Props =
+            accountData: IncomingExchangeAccountData): Props =
     Props(new Exchange(exchangeName, config, tradeRoom, initStuff, tpData, accountData))
 }
 
@@ -34,7 +34,7 @@ case class Exchange(exchangeName: String,
                     tradeRoom: ActorRef,
                     initStuff:ExchangeInitStuff,
                     tpData: ExchangeTPData,
-                    accountData: ExchangeAccountData) extends Actor {
+                    accountData: IncomingExchangeAccountData) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[Exchange])
   implicit val system: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = system.dispatcher
@@ -43,7 +43,7 @@ case class Exchange(exchangeName: String,
 
   // dynamic
   var tradePairs: Set[TradePair] = _
-  var tpDataManagers: Map[TradePair, ActorRef] = Map()
+  var publicTPDataManagers: Map[TradePair, ActorRef] = Map()
   var tpDataInitPending: Set[TradePair] = _
   var accountDataManager: ActorRef = _
 
@@ -52,9 +52,9 @@ case class Exchange(exchangeName: String,
   def initTradePairBasedDataManagers(): Unit = {
     tpDataInitPending = tradePairs
     for (tp <- tradePairs) {
-      tpDataManagers = tpDataManagers +
+      publicTPDataManagers = publicTPDataManagers +
         (tp -> context.actorOf(
-          ExchangeTPDataManager.props(config, tp, exchangePublicDataInquirer, self, initStuff.exchangePublicTPDataChannelProps, tpData),
+          ExchangePublicTPDataManager.props(config, tp, exchangePublicDataInquirer, self, initStuff.exchangePublicTPDataChannelProps, tpData),
           s"$exchangeName.TPDataManager-${tp.baseAsset.officialSymbol}-${tp.quoteAsset.officialSymbol}"))
     }
   }
@@ -128,7 +128,7 @@ case class Exchange(exchangeName: String,
 
     // Messages from TradePairDataManager
 
-    case ExchangeTPDataManager.Initialized(t) =>
+    case ExchangePublicTPDataManager.Initialized(t) =>
       tpDataInitPending -= t
       log.debug(s"[$exchangeName]: [$t] initialized. Still pending: $tpDataInitPending")
       if (tpDataInitPending.isEmpty) {

@@ -3,6 +3,7 @@ package org.purevalue.arbitrage
 import akka.Done
 import akka.actor.{Actor, ActorRef, Props}
 import akka.stream.scaladsl.Sink
+import org.purevalue.arbitrage.ExchangeAccountDataManager.CancelOrder
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.StartStreamRequest
 import org.slf4j.LoggerFactory
@@ -10,39 +11,22 @@ import org.slf4j.LoggerFactory
 import scala.collection._
 import scala.concurrent.Future
 
-trait ExchangeAccountStreamData
-
-case class Balance(asset: Asset, amountAvailable: Double, amountLocked: Double) {
-  def toCryptoValue: CryptoValue = CryptoValue(asset, amountAvailable)
-
-  override def toString: String = s"Balance(${asset.officialSymbol}: " +
-    s"available:${formatDecimal(amountAvailable, asset.visibleFractionDigits)}, " +
-    s"locked: ${formatDecimal(amountLocked, asset.visibleFractionDigits)})"
-}
-// we use a [var immutable map] instead of mutable one here, to be able to update the whole map at once without a race condition
-case class Wallet(var balances: Map[Asset, Balance]) extends ExchangeAccountStreamData
-case class WalletAssetUpdate(balances: Map[Asset, Balance]) extends ExchangeAccountStreamData
-case class WalletBalanceUpdate(asset:Asset, balanceDelta:Double) extends ExchangeAccountStreamData
-
-
-case class Fee(exchange: String,
-               makerFee: Double,
-               takerFee: Double)
-
-
-case class ExchangeAccountData(wallet: Wallet, orders: concurrent.Map[String, Order])
 
 object ExchangeAccountDataManager {
+  case class FetchOrder(tradePair:TradePair, externalOrderId:String) // order shall be queried from exchange and feed into the data stream (e.g. for refreshing persisted open orders after restart)
+  case class CancelOrder(tradePair:TradePair,
+                         externalOrderId:String) // response is a boolean indicating the success of the operation
+
   def props(config: ExchangeConfig,
             exchangePublicDataInquirer: ActorRef,
             exchangeAccountDataChannelInit: Function2[ExchangeConfig, ActorRef, Props],
-            accountData: ExchangeAccountData): Props =
+            accountData: IncomingExchangeAccountData): Props =
     Props(new ExchangeAccountDataManager(config, exchangePublicDataInquirer, exchangeAccountDataChannelInit, accountData))
 }
 class ExchangeAccountDataManager(config: ExchangeConfig,
                                  exchangePublicDataInquirer: ActorRef,
                                  exchangeAccountDataChannelInit: Function2[ExchangeConfig, ActorRef, Props],
-                                 accountData: ExchangeAccountData) extends Actor {
+                                 accountData: IncomingExchangeAccountData) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[ExchangeAccountDataManager])
   var accountDataChannel: ActorRef = _
 
@@ -70,6 +54,28 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
   }
 
   override def receive: Receive = {
-    case _ =>
+    case c:CancelOrder => accountDataChannel.forward(c)
   }
 }
+
+
+trait ExchangeAccountStreamData
+
+case class Balance(asset: Asset, amountAvailable: Double, amountLocked: Double) {
+  def toCryptoValue: CryptoValue = CryptoValue(asset, amountAvailable)
+
+  override def toString: String = s"Balance(${asset.officialSymbol}: " +
+    s"available:${formatDecimal(amountAvailable, asset.visibleFractionDigits)}, " +
+    s"locked: ${formatDecimal(amountLocked, asset.visibleFractionDigits)})"
+}
+// we use a [var immutable map] instead of mutable one here, to be able to update the whole map at once without a race condition
+case class Wallet(var balances: Map[Asset, Balance]) extends ExchangeAccountStreamData
+case class WalletAssetUpdate(balances: Map[Asset, Balance]) extends ExchangeAccountStreamData
+case class WalletBalanceUpdate(asset:Asset, balanceDelta:Double) extends ExchangeAccountStreamData
+
+
+case class Fee(exchange: String,
+               makerFee: Double,
+               takerFee: Double)
+
+case class IncomingExchangeAccountData(wallet: Wallet, orders: concurrent.Map[String, Order])

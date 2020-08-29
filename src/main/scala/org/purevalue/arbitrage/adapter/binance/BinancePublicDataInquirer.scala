@@ -49,7 +49,7 @@ object BinancePublicDataInquirer {
     )
   }
 
-  val BaseRestEndpoint = "https://api.binance.com"
+  val BinanceBaseRestEndpoint = "https://api.binance.com"
 
   def props(config: ExchangeConfig): Props = Props(new BinancePublicDataInquirer(config))
 }
@@ -71,7 +71,7 @@ class BinancePublicDataInquirer(config: ExchangeConfig) extends Actor {
     import BinanceJsonProtocol._
 
     exchangeInfo = Await.result(
-      httpGetJson[RawBinanceExchangeInformationJson](s"$BaseRestEndpoint/api/v3/exchangeInfo"),
+      httpGetJson[RawBinanceExchangeInformationJson](s"$BinanceBaseRestEndpoint/api/v3/exchangeInfo"),
       Config.httpTimeout.plus(500.millis))
     binanceTradePairs = exchangeInfo.symbols
       .filter(s => s.status == "TRADING" && s.orderTypes.contains("LIMIT") /* && s.orderTypes.contains("LIMIT_MAKER")*/ && s.permissions.contains("SPOT"))
