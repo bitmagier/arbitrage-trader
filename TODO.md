@@ -1,9 +1,10 @@
 #IN PROGRESS
-- Receive own Orders:  API implementation for binance [roman]
+- Receive own order updates:  API implementation for binance [roman]
 
 #TODO
+- automatic integration tests for order pipeline (create -> fill -> finish) against exchanges with minimal value
 - Receive Wallet data from bitfinex
-- Receive own Orders:  API implementation for bitfinex
+- Receive own order updates:  API implementation for bitfinex
 - blacklist assets per exchange (e.g. for NOT touching personal investments)
 - decouple delivery of reference ticker from ExchangeTPDataManager channel, because ReferenceTicker shall contain as much TradePairs as possible and not just the ones remaining after trade pair cleanup
 

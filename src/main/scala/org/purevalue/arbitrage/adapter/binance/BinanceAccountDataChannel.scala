@@ -6,13 +6,15 @@ import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{HttpMethods, StatusCodes, Uri}
+import akka.pattern.ask
 import akka.stream.OverflowStrategy
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source, SourceQueueWithComplete}
+import akka.util.Timeout
 import akka.{Done, NotUsed}
 import org.purevalue.arbitrage.HttpUtils.httpRequestJsonBinanceAccount
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.{QueryAccountInformation, SendPing, StartStreamRequest}
-import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.BaseRestEndpoint
+import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.{BaseRestEndpoint, GetBinanceTradePairs}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsonParser, RootJsonFormat, enrichAny}
 
@@ -47,7 +49,7 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
   val externalAccountUpdateSchedule: Cancellable = system.scheduler.scheduleAtFixedRate(1.minute, 1.minute, self, QueryAccountInformation())
 
   var listenKey: String = _
-  var tradePairResolveFunction: String => TradePair = _
+  var binanceTradePairs: Set[BinanceTradePair] = _
 
   val restSource: (SourceQueueWithComplete[IncomingBinanceAccountJson], Source[IncomingBinanceAccountJson, NotUsed]) =
     Source.queue[IncomingBinanceAccountJson](1, OverflowStrategy.backpressure).preMaterialize()
@@ -96,7 +98,7 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
     case a: AccountInformationJson => a.toWallet
     case a: OutboundAccountPositionJson => a.toWalletUpdate
     case b: BalanceUpdateJson => b.toWalletBalanceUpdate
-    case o: OrderExecutionReportJson => o.toOrderOrOrderUpdate(tradePairResolveFunction)
+    case o: OrderExecutionReportJson => o.toOrderOrOrderUpdate(symbol => binanceTradePairs.find(_.symbol == symbol).get) // expecting, that we have all relevant trade pairs
     case _ => throw new NotImplementedError
   }
 
@@ -155,13 +157,17 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
     log.debug(s"got listenKey: $listenKey")
   }
 
-  def getTradePairResolveFunction(): Unit = {
-    // TODO
+  def pullTradePairResolveFunction(): Unit = {
+    implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
+    binanceTradePairs = Await.result(
+      (exchangePublicDataInquirer ? GetBinanceTradePairs()).mapTo[Set[BinanceTradePair]],
+      timeout.duration.plus(500.millis)
+    )
   }
 
   override def preStart(): Unit = {
     createListenKey()
-    getTradePairResolveFunction()
+    pullTradePairResolveFunction()
   }
 
   override def receive: Receive = {
