@@ -197,7 +197,7 @@ case class BalanceJson(asset: String, free: String, locked: String) {
   def toBalance: Option[Balance] = {
     if (free.toDouble == 0.0 && locked.toDouble == 0.0)
       None
-    else if (!GlobalConfig.AllAssets.keySet.contains(asset))
+    else if (!StaticConfig.AllAssets.keySet.contains(asset))
       throw new Exception(s"We need to ignore a filled balance here, because it's asset is unknown: $this")
     else
       Some(Balance(
@@ -262,7 +262,7 @@ case class BalanceUpdateJson(e: String, // event type
                              T: Long // clear time
                             ) extends IncomingBinanceAccountJson {
   def toWalletBalanceUpdate: WalletBalanceUpdate = {
-    if (!GlobalConfig.AllAssets.keySet.contains(a)) throw new Exception(s"We need to ignore a BalanceUpdateJson here, because it's asset is unknown: $this")
+    if (!StaticConfig.AllAssets.keySet.contains(a)) throw new Exception(s"We need to ignore a BalanceUpdateJson here, because it's asset is unknown: $this")
     WalletBalanceUpdate(Asset(a), d.toDouble)
   }
 }

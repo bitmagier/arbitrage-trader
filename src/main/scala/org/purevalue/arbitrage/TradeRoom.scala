@@ -7,7 +7,7 @@ import akka.actor.SupervisorStrategy.Restart
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, OneForOneStrategy, Props, Status}
 import akka.pattern.ask
 import akka.util.Timeout
-import org.purevalue.arbitrage.Asset.Bitcoin
+import org.purevalue.arbitrage.Asset.{Bitcoin, USDT}
 import org.purevalue.arbitrage.Exchange.{GetTradePairs, RemoveTradePair, StartStreaming}
 import org.purevalue.arbitrage.TradeRoom.{DeathWatch, LogStats, TradeContext}
 import org.purevalue.arbitrage.Utils.formatDecimal
@@ -92,7 +92,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
   private val orderBundleSafetyGuard = OrderBundleSafetyGuard(config.orderBundleSafetyGuard, tickers, extendedTickers, dataAge)
 
-  val logScheduleRate: FiniteDuration = FiniteDuration(config.statsInterval.toNanos, TimeUnit.NANOSECONDS)
+  val logScheduleRate: FiniteDuration = FiniteDuration(config.stats.reportInterval.toNanos, TimeUnit.NANOSECONDS)
   val logSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(30.seconds, logScheduleRate, self, LogStats())
 
   val deathWatchSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(3.minutes, 1.minute, self, DeathWatch())
@@ -123,21 +123,22 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
         .mkString(", ")
     }
 
+    val liquiditySumCurrency:Asset = Config.tradeRoom.stats.aggregatedliquidityReportAsset
     val inconvertibleAssets = wallets
         .flatMap(_._2.balances.keys)
-        .filter(e => CryptoValue(e, 1.0).convertTo(Bitcoin, tradeContext).isEmpty)
+        .filter(e => CryptoValue(e, 1.0).convertTo(liquiditySumCurrency, tradeContext).isEmpty)
         .toSet
     if (inconvertibleAssets.nonEmpty) {
-      log.warn(s"Currently we cannot calculate the correct balance, because no reference ticker available for converting them to Bitcoin: $inconvertibleAssets")
+      log.warn(s"Currently we cannot calculate the correct balance, because no reference ticker available for converting them to $liquiditySumCurrency: $inconvertibleAssets")
     }
     val liquidityPerExchange: String =
       wallets.map { case (exchange, b) => (
         exchange,
         CryptoValue(
-          Bitcoin,
+          liquiditySumCurrency,
           b.balances
             .filterNot(e => inconvertibleAssets.contains(e._1))
-            .map(e => CryptoValue(e._2.asset, e._2.amountAvailable).convertTo(Bitcoin, tradeContext).get)
+            .map(e => CryptoValue(e._2.asset, e._2.amountAvailable).convertTo(liquiditySumCurrency, tradeContext).get)
             .map(_.amount)
             .sum
         ))
@@ -255,7 +256,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
   def startExchanges(): Unit = {
     for (name: String <- Config.activeExchanges) {
-      runExchange(name, GlobalConfig.AllExchanges(name))
+      runExchange(name, StaticConfig.AllExchanges(name))
     }
   }
 
@@ -340,41 +341,4 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       log.error("received failure", cause)
   }
 }
-
-
-case class CryptoValue(asset: Asset, amount: Double) {
-  override def toString: String = s"${formatDecimal(amount)} ${asset.officialSymbol}"
-
-  def convertTo(targetAsset: Asset, findConversionRate: TradePair => Option[Double]): Option[CryptoValue] = {
-    if (this.asset == targetAsset)
-      Some(this)
-    else {
-      // try direct conversion first
-      findConversionRate(TradePair.of(this.asset, targetAsset)) match {
-        case Some(rate) =>
-          Some(CryptoValue(targetAsset, amount * rate))
-        case None =>
-          findConversionRate(TradePair.of(targetAsset, this.asset)) match { // try reverse ticker
-            case Some(rate) =>
-              Some(CryptoValue(targetAsset, amount / rate))
-            case None => // try conversion via BTC as last option
-              if ((this.asset != Bitcoin && targetAsset != Bitcoin)
-                && findConversionRate(TradePair.of(this.asset, Bitcoin)).isDefined
-                && findConversionRate(TradePair.of(targetAsset, Bitcoin)).isDefined) {
-                this.convertTo(Bitcoin, findConversionRate).get.convertTo(targetAsset, findConversionRate)
-              } else {
-                None
-              }
-          }
-      }
-    }
-  }
-
-  def convertTo(targetAsset: Asset, tc: TradeContext): Option[CryptoValue] =
-    convertTo(targetAsset, tp => tc.findReferenceTicker(tp).map(_.weightedAveragePrice))
-}
-/**
- * CryptoValue on a specific exchange
- */
-case class LocalCryptoValue(exchange: String, asset: Asset, amount: Double)
 

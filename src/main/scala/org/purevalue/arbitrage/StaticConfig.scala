@@ -5,61 +5,13 @@ import org.purevalue.arbitrage.adapter.binance.{BinanceAccountDataChannel, Binan
 import org.purevalue.arbitrage.adapter.bitfinex.{BitfinexPublicDataInquirer, BitfinexPublicTPDataChannel}
 import org.slf4j.LoggerFactory
 
-// Crypto asset / coin.
-// It should NOT be created somewhere else. The way to get it is via Asset(officialSymbol)
-case class Asset(officialSymbol: String, name: String) {
-  override def equals(obj: Any): Boolean = {
-    obj.isInstanceOf[Asset] &&
-      this.officialSymbol == obj.asInstanceOf[Asset].officialSymbol
-  }
-
-  override def hashCode(): Int = officialSymbol.hashCode
-}
-object Asset {
-  // very often used assets
-  val Bitcoin:Asset = Asset("BTC")
-  val USDT:Asset = Asset("USDT")
-
-  def apply(officialSymbol: String): Asset = {
-    if (!GlobalConfig.AllAssets.contains(officialSymbol)) {
-      throw new RuntimeException(s"Unknown asset with officialSymbol $officialSymbol")
-    }
-    GlobalConfig.AllAssets(officialSymbol)
-  }
-}
-
-
-// a universal usable trade-pair
-abstract class TradePair {
-  val baseAsset: Asset
-  val quoteAsset: Asset
-
-  override def toString: String = s"${baseAsset.officialSymbol}:${quoteAsset.officialSymbol}"
-
-  override def equals(obj: Any): Boolean = {
-    obj.isInstanceOf[TradePair] &&
-      this.baseAsset == obj.asInstanceOf[TradePair].baseAsset &&
-      this.quoteAsset == obj.asInstanceOf[TradePair].quoteAsset
-  }
-
-  override def hashCode(): Int = {
-    val state = Seq(baseAsset, quoteAsset)
-    state.map(_.hashCode()).foldLeft(0)((a, b) => 31 * a + b)
-  }
-}
-object TradePair {
-  def of(b: Asset, q: Asset): TradePair = new TradePair {
-    override val baseAsset: Asset = b
-    override val quoteAsset: Asset = q
-  }
-}
 
 case class ExchangeInitStuff(publicDataInquirerProps: Function1[ExchangeConfig, Props],
                              exchangePublicTPDataChannelProps: Function3[ExchangeConfig, TradePair, ActorRef, Props],
                              exchangeAccountDataChannelProps: Function2[ExchangeConfig, ActorRef, Props])
 
-object GlobalConfig {
-  private val log = LoggerFactory.getLogger("GlobalConfig")
+object StaticConfig {
+  private val log = LoggerFactory.getLogger("StaticConfig")
 
   // all exchanges - used for init routine
   val AllExchanges: Map[String, ExchangeInitStuff] = Map(
@@ -77,10 +29,10 @@ object GlobalConfig {
 
   // this is the reference to know exactly about which asset (or coin) we are talking (no matter at which exchange)
   val AllAssets: Map[String, Asset] = Seq(
-    Asset("BTC", "Bitcoin"),
-    Asset("ETH", "Ethereum"),
+    Asset("BTC", "Bitcoin", 8),
+    Asset("ETH", "Ethereum", 6),
     Asset("XRP", "Ripple"),
-    Asset("USDT", "Tether"),
+    Asset("USDT", "Tether", 2),
     Asset("BCH", "Bitcoin Cash"),
     Asset("BSV", "Bitcoin SV"),
     Asset("LTC", "Litecoin"),
@@ -131,7 +83,7 @@ object GlobalConfig {
     Asset("ICX", "ICON"),
     Asset("ZIL", "Zilliqa"),
     Asset("DCR", "Decred"),
-    // Asset("BTG", "Bitcoin Gold"),
+    Asset("BTG", "Bitcoin Gold"),
     Asset("BCD", "Bitcoin Diamond"),
     Asset("LSK", "Lisk"),
     Asset("WAVES", "Waves"),

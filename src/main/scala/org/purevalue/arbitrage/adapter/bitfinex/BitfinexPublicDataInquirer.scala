@@ -60,7 +60,7 @@ class BitfinexPublicDataInquirer(config: ExchangeConfig) extends Actor {
 
     bitfinexAssets = currencies // apiSymbol, name
       .map(e => (e._1, apiSymbolToOfficialCurrencySymbolMapping.getOrElse(e._1, e._1))) // apiSymbol, officialSymbol
-      .filter(e => GlobalConfig.AllAssets.keySet.contains(e._2)) // global crosscheck
+      .filter(e => StaticConfig.AllAssets.keySet.contains(e._2)) // global crosscheck
       .filter(e => config.tradeAssets.contains(e._2)) // bitfinex config crosscheck
       .map(e => BitfinexSymbol(Asset(e._2), e._1))
       .toSet
@@ -78,8 +78,8 @@ class BitfinexPublicDataInquirer(config: ExchangeConfig) extends Actor {
         (apiSymbolToOfficialCurrencySymbolMapping.getOrElse(e._1, e._1), // resolve official currency symbols
           apiSymbolToOfficialCurrencySymbolMapping.getOrElse(e._2, e._2), e._3))
       .filter(e =>
-        GlobalConfig.AllAssets.keySet.contains(e._1)
-          && GlobalConfig.AllAssets.keySet.contains(e._2)) // crosscheck with global assets
+        StaticConfig.AllAssets.keySet.contains(e._1)
+          && StaticConfig.AllAssets.keySet.contains(e._2)) // crosscheck with global assets
       .filter(e =>
         bitfinexAssets.exists(_.currencySymbol.officialSymbol == e._1)
           && bitfinexAssets.exists(_.currencySymbol.officialSymbol == e._2)) // crosscheck with bitfinex (configured) assets

@@ -3,6 +3,7 @@ package org.purevalue.arbitrage
 import akka.Done
 import akka.actor.{Actor, ActorRef, Props}
 import akka.stream.scaladsl.Sink
+import org.purevalue.arbitrage.Utils.formatDecimal
 import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.StartStreamRequest
 import org.slf4j.LoggerFactory
 
@@ -13,6 +14,10 @@ trait ExchangeAccountStreamData
 
 case class Balance(asset: Asset, amountAvailable: Double, amountLocked: Double) {
   def toCryptoValue: CryptoValue = CryptoValue(asset, amountAvailable)
+
+  override def toString: String = s"Balance(${asset.officialSymbol}: " +
+    s"available:${formatDecimal(amountAvailable, asset.visibleFractionDigits)}, " +
+    s"locked: ${formatDecimal(amountLocked, asset.visibleFractionDigits)})"
 }
 // we use a [var immutable map] instead of mutable one here, to be able to update the whole map at once without a race condition
 case class Wallet(var balances: Map[Asset, Balance]) extends ExchangeAccountStreamData
