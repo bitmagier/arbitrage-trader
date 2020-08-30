@@ -102,14 +102,16 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   }
 
   def placeOrderBundleOrders(t: OrderRequestBundle): Unit = {
-    if (orderBundleSafetyGuard.isSafe(t)) {
-      val requiredLiquidity: Seq[LocalCryptoValue] = t.orders.map(_.calcOutgoingLiquidity)
-      if (checkAndLockRequiredLiquidity(requiredLiquidity)) {
-        log.info(s"${Emoji.Excited}  [simulated] Placing checked $t")
+    orderBundleSafetyGuard.isSafe(t) match {
+      case (true, Some(totalWin)) =>
+        val requiredLiquidity: Seq[LocalCryptoValue] = t.orders.map(_.calcOutgoingLiquidity)
+        if (checkAndLockRequiredLiquidity(requiredLiquidity)) {
+          log.info(s"${Emoji.Excited}  [simulated] Placing checked $t (total estimated win: $totalWin)")
         // TODO don't forget to unlock requested liquidity after order is completed
-      } else {
-        log.info(s"${Emoji.Robot}  [simulated] Requesting liquidity for $t: $requiredLiquidity")
-      }
+        } else {
+          log.info(s"${Emoji.Robot}  [simulated] Requesting liquidity for $t: $requiredLiquidity")
+        }
+      case _ => // ignore others
     }
   }
 
@@ -219,7 +221,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       val tradePairsToDrop: Set[Tuple2[String, TradePair]] =
         eTradePairs.filter(_._2.baseAsset == asset)
 
-      log.info(s"${Emoji.Robot}  Dropping all TradePairs connected to $asset, because there are not enough (> 1) compatible TradePairs on any exchange:  $tradePairsToDrop")
+      log.info(s"${Emoji.Robot}  Dropping all TradePairs involving $asset, because there are not enough (> 1) compatible TradePairs on any exchange:  $tradePairsToDrop")
       tradePairsToDrop.foreach(e => dropTradePairSync(e._1, e._2))
     }
   }

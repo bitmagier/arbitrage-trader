@@ -126,46 +126,48 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
   }
 
 
-  def totalTransactionCostsInRage(t: OrderRequestBundle): Boolean = {
+  // returns decision-result and the total win in case the decision-result is true
+  def totalTransactionsWinInRage(t: OrderRequestBundle): (Boolean, Option[Double]) = {
     val b: Option[Double] = balanceOfLiquidityTransformationCompensationTransactionsInUSDT(t)
-    if (b.isEmpty) return false
+    if (b.isEmpty) return (false, None)
     if ((t.bill.sumUSDT + b.get) < config.minTotalGainInUSDT) {
       log.debug(s"${Emoji.LookingDown}  Got interesting $t, but the sum of costs (${formatDecimal(b.get)} USDT) of the necessary " +
         s"liquidity transformation transactions makes the whole thing uneconomic (total gain: ${formatDecimal(t.bill.sumUSDT + b.get)} USDT = lower than threshold ${config.minTotalGainInUSDT} USDT).")
-      false
-    } else true
+      (false, None)
+    } else (true, Some(t.bill.sumUSDT))
   }
 
   // ^^^ TODO instead of taking only the first possible one, better try all alternatives of reserve liquidity asset conversion before giving up here
 
 
-  def isSafe(t: OrderRequestBundle): Boolean = {
+  // returns decision result and the total win. in case of a positive decision result
+  def isSafe(t: OrderRequestBundle): (Boolean, Option[Double]) = {
     _isSafe(t) match {
-      case (result, reason) =>
+      case (result, reason, win) =>
         this.synchronized {
           stats = stats + (reason -> (stats.getOrElse(reason, 0) + 1))
         }
-        result
+        (result, win)
     }
   }
 
-  private def _isSafe(t: OrderRequestBundle): (Boolean, SafetyGuardDecision) = {
+  private def _isSafe(t: OrderRequestBundle): (Boolean, SafetyGuardDecision, Option[Double]) = {
     if (t.bill.sumUSDT <= 0) {
       log.warn(s"${Emoji.Disagree}  Got OrderBundle with negative balance: ${t.bill.sumUSDT}. I will not execute that one!")
       log.debug(s"$t")
-      (false, NegativeBalance)
+      (false, NegativeBalance, None)
     } else if (!t.orders.forall(tickerDataUpToDate)) {
-      (false, TickerOutdated)
+      (false, TickerOutdated, None)
     } else if (t.bill.sumUSDT >= config.maximumReasonableWinPerOrderBundleUSDT) {
       log.warn(s"${Emoji.Disagree}  Got OrderBundle with unbelievable high estimated win of ${formatDecimal(t.bill.sumUSDT)} USDT. I will rather not execute that one - seem to be a bug!")
       log.debug(s"${Emoji.Disagree}  $t")
-      (false, TooFantasticWin)
+      (false, TooFantasticWin, None)
     } else if (!t.orders.forall(orderLimitCloseToTicker))
-      (false, OrderLimitFarAwayFromTicker)
-    else if (!totalTransactionCostsInRage(t)) {
-      (false, TotalTransactionUneconomic)
-    } else {
-      (true, Okay)
+      (false, OrderLimitFarAwayFromTicker, None)
+    else {
+      val r: (Boolean, Option[Double]) = totalTransactionsWinInRage(t)
+      if (!r._1) (false, TotalTransactionUneconomic, None)
+      else (true, Okay, r._2)
     }
   }
 }
