@@ -1,10 +1,10 @@
 package org.purevalue.arbitrage
 
-import java.time.{Duration, LocalDateTime}
+import java.time.{Duration, Instant, LocalDateTime}
 import java.util.UUID
 
 import akka.actor.{Actor, Props}
-import org.purevalue.arbitrage.ExchangeLiquidityManager.LiquidityRequest
+import org.purevalue.arbitrage.ExchangeLiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityRequest}
 
 /*
 - LiquidityManager responsible for providing the Assets which are demanded by Traders.
@@ -12,7 +12,7 @@ import org.purevalue.arbitrage.ExchangeLiquidityManager.LiquidityRequest
         - requests withdrawal jobs to balance liquidity among exchanges
      and one manager per exchange, which:
         - manages liquidity storing assets (like BTC, USDT) (currently unused altcoin liquidity goes back to these)
-        - provides urgent requests for liquidity demands of assets (non liquitidy storing assets) required for upcoming trade requests
+        - provides/creates liquidity of specific assets requested by liquidity demands (non liquidity storing assets) required for upcoming trade requests
 
    [Concept]
    - Every single valid TradeRequest (no matter if enough balance is available or not) will result in a Liquidity-Request,
@@ -43,7 +43,9 @@ import org.purevalue.arbitrage.ExchangeLiquidityManager.LiquidityRequest
 
 object ExchangeLiquidityManager {
 
-  case class LiquidityRequest(id: UUID, asset: Asset, amount: Double, intendedBuyAsset: Asset)
+  case class LiquidityRequest(id: UUID, createTime: Instant, exchange: String, coins: Seq[LocalCryptoValue], dontUseTheseReserveAssets: Set[Asset])
+  case class LiquidityLock(exchange: String, liquidityRequestId: UUID, coins: Set[LocalCryptoValue])
+  case class LiquidityLockClearance(liquidityRequestId: UUID)
 
   def props(config: LiquidityManagerConfig, exchangeConfig: ExchangeConfig, wallet: Wallet): Props =
     Props(new ExchangeLiquidityManager(config, exchangeConfig, wallet))
@@ -54,10 +56,21 @@ class ExchangeLiquidityManager(config: LiquidityManagerConfig,
 
   case class RunningDemand(asset: Asset, amount: Double, requestTime: LocalDateTime)
 
-  val liquidityRequestLifetime: Duration = Duration.ofSeconds(10) // TODO config
+  val liquidityLockMaxLifetime: Duration = Duration.ofSeconds(10) // TODO config | When a liquidity lock is not cleared, this is the maximum time, it can stay active
+  val unusedLiquidityDemandActiveTime: Duration = Duration.ofSeconds(90) // TODO config | When demanded liquidity is not requested within that time, the coins are transferred back to a reserve asset
 
+  def lockLiquidity(r: LiquidityRequest): Option[LiquidityLock] = ???
+
+  def demandMissingLiquidity(r: LiquidityRequest): Unit = ???
+
+  def clearLock(id: UUID): Unit = ???
 
   override def receive: Receive = {
     case r: LiquidityRequest =>
+      val result: Option[LiquidityLock] = lockLiquidity(r)
+      if (result.isEmpty) demandMissingLiquidity(r)
+      sender() ! result
+
+    case LiquidityLockClearance(id) => clearLock(id)
   }
 }

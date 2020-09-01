@@ -18,4 +18,10 @@
 
 
 #NOTES
-- TradeRoom: reject OrderBundles, where another active Order of the same TradePair is still active
+Test strategy: 
+    - Unit tests
+    - Expectation validations wherever possible in production code
+       
+       Because a lot of things can only be tested with responses from real-world exchanges,
+       I prefer in-code expectation validations instead of integration-tests.
+      

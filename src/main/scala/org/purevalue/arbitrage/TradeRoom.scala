@@ -1,22 +1,26 @@
 package org.purevalue.arbitrage
 
 import java.time.{Duration, Instant}
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 import akka.actor.SupervisorStrategy.Restart
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, OneForOneStrategy, Props, Status}
 import akka.pattern.ask
 import akka.util.Timeout
-import org.purevalue.arbitrage.Asset.{Bitcoin, USDT}
 import org.purevalue.arbitrage.Exchange.{GetTradePairs, RemoveTradePair, StartStreaming}
-import org.purevalue.arbitrage.TradeRoom.{DeathWatch, LogStats, TradeContext}
+import org.purevalue.arbitrage.ExchangeAccountDataManager.{CancelOrder, CancelOrderResult, NewLimitOrder, NewOrderAck}
+import org.purevalue.arbitrage.ExchangeLiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityRequest}
+import org.purevalue.arbitrage.TradeRoom.{DeathWatch, LogStats, OrderBundle, OrderManagementSupervisor, OrderRef, OrderUpdateTrigger, TradeContext}
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.purevalue.arbitrage.trader.FooTrader
 import org.slf4j.LoggerFactory
 
 import scala.collection.concurrent.TrieMap
+import scala.collection.mutable.ListBuffer
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
-import scala.concurrent.{Await, ExecutionContextExecutor}
+import scala.concurrent.{Await, ExecutionContextExecutor, Future}
+import scala.util.Success
 
 
 object TradeRoom {
@@ -34,9 +38,19 @@ object TradeRoom {
     def findReferenceTicker(tp: TradePair): Option[ExtendedTicker] = TradeRoom.findReferenceTicker(tp, extendedTickers)
   }
 
+  case class OrderRef(exchange: String, tradePair: TradePair, externalOrderId: String)
+  case class OrderBundle(orderRequestBundle: OrderRequestBundle,
+                         lockedLiquidity: Seq[LiquidityLock],
+                         orders: Seq[OrderRef],
+                         var finishTime: Option[Instant] = None)
+
   // communication with ourself
+  case class OrderManagementSupervisor()
   case class LogStats()
   case class DeathWatch()
+  // from ExchangeAccountDataManager
+  case class OrderUpdateTrigger(exchange: String, externalOrderId: String) // status of an order has changed
+  case class BalanceUpdateTrigger(exchange: String)
 
   /**
    * find the best ticker stats for the tradepair prioritized by exchange via config
@@ -77,44 +91,93 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   private val tickers: ConcurrentMap[String, ConcurrentMap[TradePair, Ticker]] = TrieMap()
   private val extendedTickers: ConcurrentMap[String, ConcurrentMap[TradePair, ExtendedTicker]] = TrieMap()
   private val orderBooks: ConcurrentMap[String, ConcurrentMap[TradePair, OrderBook]] = TrieMap()
-  private val wallets: ConcurrentMap[String, Wallet] = TrieMap()
+  private var wallets: Map[String, Wallet] = Map()
   private val dataAge: ConcurrentMap[String, TPDataTimestamps] = TrieMap()
 
-  private val fees: Map[String, Fee] = Map( // TODO
+  // Map(exchange-name -> Map(external-order-id -> order)) contains incoming order & order-update data from exchanges
+  private val activeOrders: ConcurrentMap[String, ConcurrentMap[String, Order]] = TrieMap()
+  private var activeOrderBundles: Map[UUID, OrderBundle] = Map() // Map(order-bundle-id -> OrderBundle) maintained by TradeRoom
+  private var finishedOrderBundles: ListBuffer[OrderBundle] = ListBuffer()
+
+  private val fees: Map[String, Fee] = Map( // TODO query from exchange
     "binance" -> Fee("binance", Config.exchange("binance").makerFee, Config.exchange("binance").takerFee),
     "bitfinex" -> Fee("bitfinex", Config.exchange("bitfinex").makerFee, Config.exchange("bitfinex").takerFee)
   )
 
-  // Map(exchange-name -> Map(external-order-id -> order))
-  private val orders: ConcurrentMap[String, ConcurrentMap[String, Order]] = TrieMap()
-
   private val tradeContext: TradeContext = TradeContext(tickers, extendedTickers, orderBooks, wallets, fees)
+  private var firstOrdersAlreadyPlaced: Boolean = false
 
   private val orderBundleSafetyGuard = OrderBundleSafetyGuard(config.orderBundleSafetyGuard, tickers, extendedTickers, dataAge)
 
+  val orderManagementSupervisorSchedule: Cancellable = actorSystem.scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, OrderManagementSupervisor())
   val logScheduleRate: FiniteDuration = FiniteDuration(config.stats.reportInterval.toNanos, TimeUnit.NANOSECONDS)
   val logSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(30.seconds, logScheduleRate, self, LogStats())
-
   val deathWatchSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(3.minutes, 1.minute, self, DeathWatch())
 
-  def checkAndLockRequiredLiquidity(values: Iterable[LocalCryptoValue]): Boolean = {
-    true // TODO ask liquidity manager to lock that amount of CryptoValue on the specified exchanges for us
-  }
-
-  def placeOrderBundleOrders(t: OrderRequestBundle): Unit = {
-    orderBundleSafetyGuard.isSafe(t) match {
-      case (true, Some(totalWin)) =>
-        val requiredLiquidity: Seq[LocalCryptoValue] = t.orders.map(_.calcOutgoingLiquidity)
-        if (checkAndLockRequiredLiquidity(requiredLiquidity)) {
-          log.info(s"${Emoji.Excited}  [simulated] Placing checked $t (total estimated win: $totalWin)")
-        // TODO don't forget to unlock requested liquidity after order is completed
-        } else {
-          log.info(s"${Emoji.Robot}  [simulated] Requesting liquidity for $t: $requiredLiquidity")
+  /**
+   * Lock liquidity
+   *
+   * @return all (locked=true) or nothing
+   */
+  def lockRequiredLiquidity(coins: Seq[LocalCryptoValue], dontUseTheseReserveAssets: Set[Asset]): Future[List[LiquidityLock]] = {
+    implicit val timeout: Timeout = Config.internalCommunicationTimeout
+    Future.sequence(
+      coins
+        .groupBy(_.exchange)
+        .map {
+          x => (exchanges(x._1) ? LiquidityRequest(UUID.randomUUID(), Instant.now(), x._1, x._2, dontUseTheseReserveAssets)).mapTo[Option[LiquidityLock]]
+        }) map {
+      case x if x.forall(_.isDefined) =>
+        x.flatten.toList
+      case x => // release all other locks in case of partial non-success
+        x.filter(_.isDefined).flatten.foreach { e =>
+          exchanges(e.exchange) ! LiquidityLockClearance(e.liquidityRequestId)
         }
-      case _ => // ignore others
+        List()
+    } recover {
+      case e: Exception =>
+        log.error("Error while locking liquidity", e)
+        List()
     }
   }
 
+  def placeOrders(orderRequests: List[OrderRequest]): List[OrderRef] = {
+    implicit val timeout: Timeout = Config.internalCommunicationTimeout
+    val orders: List[NewOrderAck] = Await.result(
+      (context.actorOf(OrderSetPlacer.props(exchanges)) ? orderRequests.map(o => NewLimitOrder(o))).mapTo[List[NewOrderAck]],
+      timeout.duration.plus(500.millis))
+    orders.map(e => OrderRef(e.exchange, e.tradePair, e.externalOrderId))
+  }
+
+  def registerOrderBundle(b: OrderRequestBundle, lockedLiquidity: Seq[LiquidityLock], orders: Seq[OrderRef]): Unit = {
+    activeOrderBundles = activeOrderBundles + (b.id -> OrderBundle(b, lockedLiquidity, orders))
+  }
+
+  def tryToPlaceOrderBundle(bundle: OrderRequestBundle): Unit = {
+    if (!config.productionMode && firstOrdersAlreadyPlaced) {
+      log.debug("Ignoring further order request bundle, because we are NOT in production mode")
+      return
+    }
+
+    val isSafe: (Boolean, Option[Double]) = orderBundleSafetyGuard.isSafe(bundle, activeOrderBundles)
+    if (isSafe._1) {
+      val totalWin: Double = isSafe._2.get
+      val requiredLiquidity: Seq[LocalCryptoValue] = bundle.orders.map(_.calcOutgoingLiquidity)
+
+      lockRequiredLiquidity(requiredLiquidity, bundle.involvedReserveAssets) onComplete {
+
+        case Success(lockedLiquidity: List[LiquidityLock]) if lockedLiquidity.nonEmpty =>
+          val orderRefs: List[OrderRef] = placeOrders(bundle.orders)
+          registerOrderBundle(bundle, lockedLiquidity, orderRefs)
+          firstOrdersAlreadyPlaced = true
+          log.info(s"${Emoji.Excited}  Placed checked $bundle (estimated total win: ${formatDecimal(totalWin, 2)})")
+        // TODO don't forget to unlock requested liquidity after order is completed
+
+        case Success(x) if x.isEmpty =>
+          log.info(s"${Emoji.Robot}  Liquidity for trades not yet available: $requiredLiquidity")
+      }
+    }
+  }
 
   def logStats(): Unit = {
     def toEntriesPerExchange[T](m: scala.collection.Map[String, scala.collection.Map[TradePair, T]]): String = {
@@ -125,11 +188,11 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
         .mkString(", ")
     }
 
-    val liquiditySumCurrency:Asset = Config.tradeRoom.stats.aggregatedliquidityReportAsset
+    val liquiditySumCurrency: Asset = Config.tradeRoom.stats.aggregatedliquidityReportAsset
     val inconvertibleAssets = wallets
-        .flatMap(_._2.balances.keys)
-        .filter(e => CryptoValue(e, 1.0).convertTo(liquiditySumCurrency, tradeContext).isEmpty)
-        .toSet
+      .flatMap(_._2.balances.keys)
+      .filter(e => CryptoValue(e, 1.0).convertTo(liquiditySumCurrency, tradeContext).isEmpty)
+      .toSet
     if (inconvertibleAssets.nonEmpty) {
       log.warn(s"Currently we cannot calculate the correct balance, because no reference ticker available for converting them to $liquiditySumCurrency: $inconvertibleAssets")
     }
@@ -190,7 +253,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
    *
    * Reason: We need two TradePairs at least, to have one for the main-trdade and the other for the reserve-liquidity transaction.
    * (still we cannot be 100% sure, that every tried transaction can be fulfilled with providing liquidity via an uninvolved reserve-asset,
-   *  but we can increase the chances via that cleanup here)
+   * but we can increase the chances via that cleanup here)
    *
    * For instance we have an asset X (which is not one of the reserve assets), and the only tradable options are:
    * X:BTC & X:ETH on exchange1 and X:ETH on exchange2.
@@ -235,7 +298,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     dataAge += exchangeName -> TPDataTimestamps(Instant.MIN, Instant.MIN, Instant.MIN)
 
     wallets += exchangeName -> Wallet(Map())
-    orders += exchangeName -> TrieMap()
+    activeOrders += exchangeName -> TrieMap()
 
     exchanges += exchangeName -> context.actorOf(
       Exchange.props(
@@ -251,7 +314,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
         ),
         IncomingExchangeAccountData(
           wallets(exchangeName),
-          orders(exchangeName)
+          activeOrders(exchangeName)
         )
       ), camelName)
   }
@@ -283,21 +346,8 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
   def initialized: Boolean = exchanges.keySet == initializedExchanges
 
-  override def preStart(): Unit = {
-    startExchanges()
-    // REMARK: doing the tradepair cleanup here causes loss of some options for the reference ticker which leads to lesser balance conversion calculation options
-    // TODO decouple reference-ticker delivery from ExchangeTPDataManager (=active trade pairs)
-    cleanupTradePairs()
-    startStreaming()
-  }
-
-  override val supervisorStrategy: OneForOneStrategy =
-    OneForOneStrategy(maxNrOfRetries = 3, withinTimeRange = 10.minutes, loggingEnabled = true) {
-      case _ => Restart
-    }
-
   /**
-   * Watches for stale data and will trigger a restart of the TradeRoom
+   * Will trigger a restart of the TradeRoom if stale data is found
    */
   def deathWatch(): Unit = {
     dataAge.keys.foreach {
@@ -311,25 +361,101 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     }
   }
 
+  def shutdownAfterFirstOrderInNonProductionMode(): Unit = {
+    if (!config.productionMode && firstOrdersAlreadyPlaced) {
+      activeOrders.nonEmpty
+    }
+  }
+
+
+  override val supervisorStrategy: OneForOneStrategy =
+    OneForOneStrategy(maxNrOfRetries = 3, withinTimeRange = 90.minutes, loggingEnabled = true) {
+      case _ => Restart
+    }
+
+  override def preStart(): Unit = {
+    startExchanges()
+    // REMARK: doing the tradepair cleanup here causes loss of some options for the reference ticker which leads to lesser balance conversion calculation options
+    // TODO decouple reference-ticker delivery from ExchangeTPDataManager (=active trade pairs)
+    cleanupTradePairs()
+    startStreaming()
+  }
+
+  def activeOrder(ref: OrderRef): Option[Order] = {
+    activeOrders(ref.exchange).get(ref.externalOrderId) match {
+      case o: Some[Order] => o
+      case _ =>
+        log.warn(s"active order for $ref not found")
+        None
+    }
+  }
+
+  def clearLockedLiquidity(lockedLiquidity: Seq[LiquidityLock]): Unit = {
+    lockedLiquidity.foreach { e =>
+      exchanges(e.exchange) ! LiquidityLockClearance(e.liquidityRequestId)
+    }
+  }
+
+  // cleanup completed "active" order bundle
+  def cleanupOrderBundle(orderBundleId: UUID): Unit = {
+    val orderBundle = activeOrderBundles(orderBundleId)
+    orderBundle.finishTime = Some(Instant.now)
+    finishedOrderBundles.append(orderBundle)
+    activeOrderBundles = activeOrderBundles - orderBundleId
+    clearLockedLiquidity(orderBundle.lockedLiquidity)
+  }
+
+  def checkActiveOrderBundleForCompletion(orderBundle: OrderBundle): Unit = {
+    val orderBundleId: UUID = orderBundle.orderRequestBundle.id
+    val orders: Seq[Order] = orderBundle.orders.flatMap(ref => activeOrder(ref))
+    orders match {
+      case o: Seq[Order] if o.isEmpty =>
+        log.error(s"No order present for $orderBundle -> finishing it")
+        cleanupOrderBundle(orderBundleId)
+      case o: Seq[Order] if o.forall(_.orderStatus == OrderStatus.FILLED) =>
+        log.debug(s"All orders of $orderBundle FILLED -> finishing it")
+        cleanupOrderBundle(orderBundleId)
+        log.info(s"OrderBundle $orderBundleId successfully finished")
+      case o: Seq[Order] if o.forall(_.orderStatus.isFinal) =>
+        log.debug(s"All orders of $orderBundle have a final state -> finishing it")
+        cleanupOrderBundle(orderBundleId)
+        log.warn(s"Finished OrderBundle $orderBundleId, but NOT all order are FILLED: $orders")
+      case o: Seq[Order] => // order bundle still active
+    }
+  }
+
+  def onOrderUpdate(exchange: String, externalOrderId: String): Unit = {
+    val orderBundle: Option[OrderBundle] = activeOrderBundles.values.find(e =>
+      e.orders.exists(o => o.exchange == exchange && o.externalOrderId == externalOrderId))
+
+    if (orderBundle.isEmpty) {
+      log.error(s"Got order-update but cannot find active order bundle with OrderUpdate")
+    } else {
+      checkActiveOrderBundleForCompletion(orderBundle.get)
+    }
+  }
+
   def receive: Receive = {
 
     // messages from Exchanges
     case Exchange.Initialized(exchange) =>
       initializedExchanges = initializedExchanges + exchange
       if (initialized) {
-        log.info(s"${
-          Emoji.Satisfied
-        }  All exchanges initialized")
+        log.info(s"${Emoji.Satisfied}  All exchanges initialized")
         self ! LogStats()
         startTraders()
       }
 
     // messages from Traders
-
-    case ob: OrderRequestBundle =>
-      placeOrderBundleOrders(ob)
+    case ob: OrderRequestBundle => tryToPlaceOrderBundle(ob)
 
     // messages from outself
+    case OrderManagementSupervisor() =>
+      shutdownAfterFirstOrderInNonProductionMode()
+    // TODO handleNotWorkingAgedOrderBundles()
+
+    case OrderUpdateTrigger(exchange, externalOrderId) =>
+      onOrderUpdate(exchange, externalOrderId)
 
     case LogStats() =>
       if (initialized)
@@ -343,4 +469,3 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       log.error("received failure", cause)
   }
 }
-

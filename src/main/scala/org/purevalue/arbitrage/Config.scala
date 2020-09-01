@@ -22,7 +22,8 @@ case class OrderBundleSafetyGuardConfig(maximumReasonableWinPerOrderBundleUSDT: 
                                         maxOrderLimitTickerVariance: Double,
                                         maxTickerAge: Duration,
                                         minTotalGainInUSDT: Double)
-case class TradeRoomConfig(extendedTickerExchanges: List[String],
+case class TradeRoomConfig(productionMode: Boolean,
+                           extendedTickerExchanges: List[String],
                            orderBooksEnabled: Boolean,
                            stats: TradeRoomStatsConfig,
                            restartWhenAnExchangeDataStreamIsOlderThan: Duration,
@@ -44,6 +45,7 @@ object Config {
   private val tradeRoomConfig = config.getConfig("trade-room")
   val tradeRoom: TradeRoomConfig = {
     TradeRoomConfig(
+      tradeRoomConfig.getBoolean("production-mode"),
       tradeRoomConfig.getStringList("reference-ticker-exchanges").asScala.toList,
       tradeRoomConfig.getBoolean("order-books-enabled"),
       TradeRoomStatsConfig(

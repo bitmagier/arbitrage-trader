@@ -1,7 +1,9 @@
 package org.purevalue.arbitrage
 
 import java.time.{Duration, Instant}
+import java.util.UUID
 
+import org.purevalue.arbitrage.TradeRoom.OrderBundle
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.slf4j.LoggerFactory
 
@@ -11,6 +13,7 @@ case object NegativeBalance extends SafetyGuardDecision
 case object TickerOutdated extends SafetyGuardDecision
 case object TooFantasticWin extends SafetyGuardDecision
 case object OrderLimitFarAwayFromTicker extends SafetyGuardDecision
+case object SameTradePairOrderStillActive extends SafetyGuardDecision
 case object TotalTransactionUneconomic extends SafetyGuardDecision
 
 case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
@@ -141,8 +144,8 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
 
 
   // returns decision result and the total win. in case of a positive decision result
-  def isSafe(t: OrderRequestBundle): (Boolean, Option[Double]) = {
-    _isSafe(t) match {
+  def isSafe(bundle: OrderRequestBundle, activeOrderBundles: Map[UUID, OrderBundle]): (Boolean, Option[Double]) = {
+    _isSafe(bundle, activeOrderBundles) match {
       case (result, reason, win) =>
         this.synchronized {
           stats = stats + (reason -> (stats.getOrElse(reason, 0) + 1))
@@ -151,22 +154,40 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
     }
   }
 
-  private def _isSafe(t: OrderRequestBundle): (Boolean, SafetyGuardDecision, Option[Double]) = {
-    if (t.bill.sumUSDT <= 0) {
-      log.warn(s"${Emoji.Disagree}  Got OrderBundle with negative balance: ${t.bill.sumUSDT}. I will not execute that one!")
-      log.debug(s"$t")
-      (false, NegativeBalance, None)
-    } else if (!t.orders.forall(tickerDataUpToDate)) {
-      (false, TickerOutdated, None)
-    } else if (t.bill.sumUSDT >= config.maximumReasonableWinPerOrderBundleUSDT) {
-      log.warn(s"${Emoji.Disagree}  Got OrderBundle with unbelievable high estimated win of ${formatDecimal(t.bill.sumUSDT)} USDT. I will rather not execute that one - seem to be a bug!")
-      log.debug(s"${Emoji.Disagree}  $t")
-      (false, TooFantasticWin, None)
-    } else if (!t.orders.forall(orderLimitCloseToTicker))
-      (false, OrderLimitFarAwayFromTicker, None)
-    else {
-      val r: (Boolean, Option[Double]) = totalTransactionsWinInRage(t)
-      if (!r._1) (false, TotalTransactionUneconomic, None)
+  // reject OrderBundles, when there is another active order of the same exchange+tradepair still active
+  def sameTradePairOrdersStillActive(bundle: OrderRequestBundle, activeOrderBundles: Map[UUID, OrderBundle]): Boolean = {
+    val activeExchangeOrderPairs: Set[(String, TradePair)] = activeOrderBundles.values
+      .flatMap(_.orders.map(o =>
+        (o.exchange, o.tradePair))).toSet
+    if (bundle.orders.exists(o => activeExchangeOrderPairs.contains((o.exchange, o.tradePair)))) {
+      if (log.isDebugEnabled())
+        log.debug(s"rejecting new $bundle because another order of same exchange+tradepair is still active. Active trade pairs: $activeExchangeOrderPairs")
+      else
+        log.info(s"${Emoji.Disagree} rejecting new order bundle because same exchange+tradepair is still active")
+      true
+    } else false
+  }
+
+  private def _isSafe(bundle: OrderRequestBundle, activeOrderBundles: Map[UUID, OrderBundle]): (Boolean, SafetyGuardDecision, Option[Double]) = {
+    def unsafe(d: SafetyGuardDecision): (Boolean, SafetyGuardDecision, Option[Double]) = (false, d, None)
+
+    if (bundle.bill.sumUSDT <= 0) {
+      log.warn(s"${Emoji.Disagree}  Got OrderBundle with negative balance: ${bundle.bill.sumUSDT}. I will not execute that one!")
+      log.debug(s"$bundle")
+      unsafe(NegativeBalance)
+    } else if (!bundle.orders.forall(tickerDataUpToDate)) {
+      unsafe(TickerOutdated)
+    } else if (bundle.bill.sumUSDT >= config.maximumReasonableWinPerOrderBundleUSDT) {
+      log.warn(s"${Emoji.Disagree}  Got OrderBundle with unbelievable high estimated win of ${formatDecimal(bundle.bill.sumUSDT)} USDT. I will rather not execute that one - seem to be a bug!")
+      log.debug(s"${Emoji.Disagree}  $bundle")
+      unsafe(TooFantasticWin)
+    } else if (!bundle.orders.forall(orderLimitCloseToTicker))
+      unsafe(OrderLimitFarAwayFromTicker)
+    else if (sameTradePairOrdersStillActive(bundle, activeOrderBundles)) {
+      unsafe(SameTradePairOrderStillActive)
+    } else {
+      val r: (Boolean, Option[Double]) = totalTransactionsWinInRage(bundle)
+      if (!r._1) unsafe(TotalTransactionUneconomic)
       else (true, Okay, r._2)
     }
   }

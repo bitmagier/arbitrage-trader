@@ -1,6 +1,7 @@
 package org.purevalue.arbitrage.adapter.binance
 
 import java.time.Instant
+import java.util.UUID
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props}
 import akka.http.scaladsl.Http
@@ -11,7 +12,7 @@ import akka.stream.OverflowStrategy
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source, SourceQueueWithComplete}
 import akka.util.Timeout
 import akka.{Done, NotUsed}
-import org.purevalue.arbitrage.ExchangeAccountDataManager.{CancelOrder, FetchOrder, NewLimitOrder, NewOrderAck}
+import org.purevalue.arbitrage.ExchangeAccountDataManager.{CancelOrder, CancelOrderResult, FetchOrder, NewLimitOrder, NewOrderAck}
 import org.purevalue.arbitrage.HttpUtils.{httpRequestJsonBinanceAccount, httpRequestPureJsonBinanceAccount}
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.purevalue.arbitrage._
@@ -167,7 +168,7 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
   def resolveSymbol(tp: TradePair): String = binanceTradePairs.find(e => e.baseAsset == tp.baseAsset && e.quoteAsset == tp.quoteAsset).map(_.symbol).get
 
   // fire and forget - error logging in case of failure
-  def cancelOrder(tradePair: TradePair, externalOrderId: Long): Future[Boolean] = {
+  def cancelOrder(tradePair: TradePair, externalOrderId: Long): Future[CancelOrderResult] = {
     val symbol = resolveSymbol(tradePair)
     httpRequestPureJsonBinanceAccount(HttpMethods.DELETE,
       s"$BinanceBaseRestEndpoint/api/v3/order?symbol=$symbol&orderId=$externalOrderId", None, config.secrets, signed = true) map {
@@ -176,15 +177,15 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
         if (r.fields.contains("status") && r.fields("status").convertTo[String] == "CANCELED"
           && r.fields.contains("orderId") && r.fields("orderId").convertTo[Long] == externalOrderId) {
           log.debug(s"Order successfully cancelled: $response")
-          true
+          CancelOrderResult(tradePair, externalOrderId.toString, success = true)
         } else {
-          log.error(s"CancelOrder received an unidentified response: $r")
-          false
+          log.warn(s"CancelOrder did not succeed: $r")
+          CancelOrderResult(tradePair, externalOrderId.toString, success = false)
         }
     } recover {
       case e: Exception =>
         log.error(s"CancelOrder failed", e)
-        false
+        CancelOrderResult(tradePair, externalOrderId.toString, success = false)
     }
   }
 
@@ -193,10 +194,12 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
       j.asJsObject match {
         case j: JsObject if j.fields.contains("orderId") && j.fields.contains("clientOrderId") =>
           NewOrderAck(
+            config.exchangeName,
+            o.tradePair,
             j.fields("orderId").convertTo[Long].toString,
-            j.fields("clientOrderId").convertTo[String]
+            UUID.fromString(j.fields("clientOrderId").convertTo[String])
           )
-        case _ => throw new RuntimeException(s"NewLimitOrder: Unidentified response $j")
+        case _ => throw new RuntimeException(s"NewLimitOrder: unidentified response: $j")
       }
     }
 
@@ -262,7 +265,7 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
     case FetchOrder(tradePair, externalOrderId) => ???
     //      restSource._1.offer(queryOrder(resolveSymbol(tradePair), externalOrderId.toLong))
 
-    case NewLimitOrder(o: OrderRequest) =>
+    case NewLimitOrder(o) =>
       newLimitOrder(o).pipeTo(sender())
   }
 }
@@ -349,14 +352,14 @@ case class BalanceUpdateJson(e: String, // event type
 
 case class OpenOrderJson(symbol: String,
                          orderId: Long,
-                         //                         orderListId: Long,
+                         // orderListId: Long,
                          clientOrderId: String,
                          price: String,
                          origQty: String,
                          executedQty: String,
-                         cummulativeQuoteQty: String,
+                         cumulativeQuoteQty: String,
                          status: String,
-                         //                         timeInForce: String,
+                         //timeInForce: String,
                          `type`: String,
                          side: String,
                          stopPrice: String,
@@ -369,19 +372,19 @@ case class OpenOrderJson(symbol: String,
   def toOrder(resolveTradePair: String => TradePair): Order = Order(
     orderId.toString,
     resolveTradePair(symbol),
-    Instant.ofEpochMilli(time),
     toTradeSide(side),
+    toOrderType(`type`),
     price.toDouble,
     stopPrice.toDouble match {
       case 0.0 => None
       case x => Some(x)
     },
     origQty.toDouble,
-    toOrderType(`type`),
     None,
+    Instant.ofEpochMilli(time),
     toOrderStatus(status),
-    cummulativeQuoteQty.toDouble,
-    cummulativeQuoteQty.toDouble / executedQty.toDouble,
+    cumulativeQuoteQty.toDouble,
+    cumulativeQuoteQty.toDouble / executedQty.toDouble,
     Instant.ofEpochMilli(updateTime))
 }
 
@@ -425,33 +428,40 @@ case class OrderExecutionReportJson(e: String, // Event type
     if (X == "NEW") toOrder(resolveTradePair)
     else toOrderUpdate(resolveTradePair)
 
+  // creationTime, orderPrice, stopPrice, originalQuantity
   def toOrderUpdate(resolveTradePair: String => TradePair): OrderUpdate = OrderUpdate(
     i.toString,
     resolveTradePair(s),
     toTradeSide(S),
     toOrderType(o),
-    toOrderStatus(X),
-    z.toDouble,
-    Z.toDouble / z.toDouble,
-    Instant.ofEpochMilli(E),
-  )
-
-  def toOrder(resolveTradePair: String => TradePair): Order = Order(
-    i.toString,
-    resolveTradePair(s),
-    Instant.ofEpochMilli(E),
-    toTradeSide(S),
     p.toDouble,
     P.toDouble match {
       case 0.0 => None
       case x => Some(x)
     },
     q.toDouble,
+    Instant.ofEpochMilli(O),
+    toOrderStatus(X),
+    z.toDouble,
+    Z.toDouble / z.toDouble,
+    Instant.ofEpochMilli(E))
+
+  def toOrder(resolveTradePair: String => TradePair): Order = Order(
+    i.toString,
+    resolveTradePair(s),
+    toTradeSide(S),
     toOrderType(o),
+    p.toDouble,
+    P.toDouble match {
+      case 0.0 => None
+      case x => Some(x)
+    },
+    q.toDouble,
     r match {
       case "NONE" => None
       case x => Some(x)
     },
+    Instant.ofEpochMilli(E),
     toOrderStatus(X),
     z.toDouble,
     Z.toDouble / z.toDouble,

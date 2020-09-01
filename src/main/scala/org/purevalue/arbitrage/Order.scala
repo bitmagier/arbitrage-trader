@@ -16,13 +16,13 @@ import scala.collection.mutable.ArrayBuffer
  */
 case class Order(externalId: String,
                  tradePair: TradePair,
-                 creationTime: Instant,
                  side: TradeSide,
+                 orderType: OrderType,
                  orderPrice: Double,
                  stopPrice: Option[Double], // for STOP_LIMIT
                  quantity: Double, // (TODO check what AMOUNT + AMOUNT_ORIG means on bitfinex)
-                 orderType: OrderType,
                  orderRejectReason: Option[String],
+                 creationTime: Instant,
                  var orderStatus: OrderStatus,
                  var cumulativeFilledQuantity: Double,
                  var priceAverage: Double,
@@ -58,32 +58,52 @@ object OrderType {
   case object STOP_LOSS_LIMIT extends OrderType
   case object TAKE_PROFIT extends OrderType // binance only
   case object TAKE_PROFIT_LIMIT extends OrderType // binance only
-  case object LIMIT_MAKER extends OrderType   // binance only
+  case object LIMIT_MAKER extends OrderType // binance only
   // bitfinex extras: TRAILING_STOP, EXCHANGE_MARKET, EXCHANGE_LIMIT, EXCHANGE_STOP, EXCHANGE_STOP_LIMIT, EXCHANGE TRAILING STOP, FOK, EXCHANGE FOK, IOC, EXCHANGE IOC
 }
 
-sealed trait OrderStatus
+sealed case class OrderStatus(isFinal: Boolean)
 object OrderStatus {
-  case object NEW extends OrderStatus
-  case object PARTIALLY_FILLED extends OrderStatus
-  case object FILLED extends OrderStatus
-  case object CANCELED extends OrderStatus // cancelled by user
-  case object EXPIRED extends OrderStatus // order was canceled acording to order type's rules
-  case object REJECTED extends OrderStatus
-  case object PAUSE extends OrderStatus
+  object NEW extends OrderStatus(false)
+  object PARTIALLY_FILLED extends OrderStatus(false)
+  object FILLED extends OrderStatus(true)
+  object CANCELED extends OrderStatus(true) // cancelled by user
+  object EXPIRED extends OrderStatus(true) // order was canceled acording to order type's rules
+  object REJECTED extends OrderStatus(true)
+  object PAUSE extends OrderStatus(false)
 }
 
 /**
  * Order update coming from exchange data flow
  */
 case class OrderUpdate(externalOrderId: String,
-                       tradePair: TradePair, // for validation only
-                       side: TradeSide, // for validation only
-                       orderType: OrderType, // for validation only
+                       tradePair: TradePair,
+                       side: TradeSide,
+                       orderType: OrderType,
+                       orderPrice: Double,
+                       stopPrice: Option[Double],
+                       originalQuantity: Double,
+                       orderCreationTime: Instant,
                        orderStatus: OrderStatus,
                        cumulativeFilledQuantity: Double,
                        priceAverage: Double,
-                       updateTime: Instant) extends ExchangeAccountStreamData
+                       updateTime: Instant) extends ExchangeAccountStreamData {
+  def toOrder: Order = Order(
+    externalOrderId,
+    tradePair,
+    side,
+    orderType,
+    orderPrice,
+    stopPrice,
+    originalQuantity,
+    None,
+    orderCreationTime,
+    orderStatus,
+    cumulativeFilledQuantity,
+    priceAverage,
+    updateTime
+  )
+}
 
 /**
  * OrderRequest: a single trade request before it is sent to an exchange
@@ -98,7 +118,6 @@ case class OrderRequest(id: UUID,
                         fee: Fee,
                         amountBaseAsset: Double,
                         limit: Double) {
-  var externalOrderId: Option[String] = None
 
   override def toString: String = s"OrderRequest($id, orderBundleId:$orderBundleId, $exchange, $tradePair, $tradeSide, $fee, " +
     s"amountBaseAsset:${formatDecimal(amountBaseAsset)}, limit:${formatDecimal(limit)})"
@@ -123,7 +142,7 @@ case class OrderRequest(id: UUID,
  * (direct costs only, not including liquidity TXs)
  */
 case class OrderBill(balanceSheet: Seq[CryptoValue], sumUSDT: Double) {
-  override def toString: String = s"OrderRequestBill(balanceSheet:$balanceSheet, sumUSDT:${formatDecimal(sumUSDT)})"
+  override def toString: String = s"OrderRequestBill(balanceSheet:$balanceSheet, sumUSDT:${formatDecimal(sumUSDT, 2)})"
 }
 object OrderBill {
   /**
@@ -171,7 +190,10 @@ case class OrderRequestBundle(id: UUID,
                               traderName: String,
                               trader: ActorRef,
                               creationTime: LocalDateTime,
-                              orders: Seq[OrderRequest],
+                              orders: List[OrderRequest],
                               bill: OrderBill) {
+
+  def involvedReserveAssets: Set[Asset] = orders.flatMap(e => Seq(e.tradePair.baseAsset, e.tradePair.quoteAsset)).toSet
+
   override def toString: String = s"OrderRequestBundle($id, $traderName, creationTime:$creationTime, orders:$orders, $bill)"
 }

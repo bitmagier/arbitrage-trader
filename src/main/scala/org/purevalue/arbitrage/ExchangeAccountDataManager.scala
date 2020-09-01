@@ -1,9 +1,12 @@
 package org.purevalue.arbitrage
 
+import java.util.UUID
+
 import akka.Done
 import akka.actor.{Actor, ActorRef, Props}
 import akka.stream.scaladsl.Sink
 import org.purevalue.arbitrage.ExchangeAccountDataManager.{CancelOrder, FetchOrder, NewLimitOrder}
+import org.purevalue.arbitrage.TradeRoom.{BalanceUpdateTrigger, OrderUpdateTrigger}
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.StartStreamRequest
 import org.slf4j.LoggerFactory
@@ -13,20 +16,22 @@ import scala.concurrent.Future
 
 
 object ExchangeAccountDataManager {
-  case class FetchOrder(tradePair:TradePair, externalOrderId:String) // order shall be queried from exchange and feed into the data stream (e.g. for refreshing persisted open orders after restart)
-  case class CancelOrder(tradePair:TradePair,
-                         externalOrderId:String) // response is a boolean indicating the success of the operation
-  case class NewLimitOrder(o:OrderRequest) // response is NewOrderAck
-  case class NewOrderAck(externalOrderId:String, clientOrderId:String)
+  case class FetchOrder(tradePair: TradePair, externalOrderId: String) // order shall be queried from exchange and feed into the data stream (e.g. for refreshing persisted open orders after restart)
+  case class CancelOrder(tradePair: TradePair, externalOrderId: String)
+  case class CancelOrderResult(tradePair: TradePair, externalOrderId: String, success: Boolean)
+  case class NewLimitOrder(o: OrderRequest) // response is NewOrderAck
+  case class NewOrderAck(exchange: String, tradePair: TradePair, externalOrderId: String, orderId: UUID)
 
   def props(config: ExchangeConfig,
             exchangePublicDataInquirer: ActorRef,
+            tradeRoom: ActorRef,
             exchangeAccountDataChannelInit: Function2[ExchangeConfig, ActorRef, Props],
             accountData: IncomingExchangeAccountData): Props =
-    Props(new ExchangeAccountDataManager(config, exchangePublicDataInquirer, exchangeAccountDataChannelInit, accountData))
+    Props(new ExchangeAccountDataManager(config, exchangePublicDataInquirer, tradeRoom, exchangeAccountDataChannelInit, accountData))
 }
 class ExchangeAccountDataManager(config: ExchangeConfig,
                                  exchangePublicDataInquirer: ActorRef,
+                                 tradeRoom: ActorRef,
                                  exchangeAccountDataChannelInit: Function2[ExchangeConfig, ActorRef, Props],
                                  accountData: IncomingExchangeAccountData) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[ExchangeAccountDataManager])
@@ -35,8 +40,14 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
   val sink: Sink[ExchangeAccountStreamData, Future[Done]] = Sink.foreach[ExchangeAccountStreamData] { x =>
     if (log.isTraceEnabled()) log.trace(s"${config.exchangeName}: received $x")
     x match {
-      case w: Wallet              => accountData.wallet.balances = w.balances
-      case w: WalletAssetUpdate   => accountData.wallet.balances = accountData.wallet.balances -- w.balances.keys ++ w.balances
+      case w: Wallet =>
+        accountData.wallet.balances = w.balances
+        tradeRoom ! BalanceUpdateTrigger(config.exchangeName)
+
+      case w: WalletAssetUpdate =>
+        accountData.wallet.balances = accountData.wallet.balances -- w.balances.keys ++ w.balances
+        tradeRoom ! BalanceUpdateTrigger(config.exchangeName)
+
       case w: WalletBalanceUpdate =>
         accountData.wallet.balances = accountData.wallet.balances.map {
           // TODO validate if an update of amountAvailable is the right thing, that is meant by this message (I'm 95% sure so far)
@@ -44,9 +55,20 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
             (a, Balance(b.asset, b.amountAvailable + w.balanceDelta, b.amountLocked))
           case x => x
         }
-      case o: Order               => accountData.orders.update(o.externalId, o)
-      case o: OrderUpdate         => accountData.orders(o.externalOrderId).applyUpdate(o)
-      case _                      => throw new NotImplementedError
+        tradeRoom ! BalanceUpdateTrigger(config.exchangeName)
+
+      case o: Order =>
+        accountData.activeOrders.update(o.externalId, o)
+        tradeRoom ! OrderUpdateTrigger(config.exchangeName, o.externalId)
+
+      case o: OrderUpdate =>
+        if (accountData.activeOrders.contains(o.externalOrderId))
+          accountData.activeOrders(o.externalOrderId).applyUpdate(o)
+        else accountData.activeOrders.update(o.externalOrderId, o.toOrder) // covers a restart-scenario (tradeRoom / arbitrage-trader)
+
+        tradeRoom ! OrderUpdateTrigger(config.exchangeName, o.externalOrderId)
+
+      case _ => throw new NotImplementedError
     }
   }
 
@@ -56,9 +78,9 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
   }
 
   override def receive: Receive = {
-    case f:FetchOrder  => accountDataChannel.forward(f)
-    case c:CancelOrder => accountDataChannel.forward(c)
-    case o:NewLimitOrder => accountDataChannel.forward(o)
+    case f: FetchOrder => accountDataChannel.forward(f)
+    case c: CancelOrder => accountDataChannel.forward(c)
+    case o: NewLimitOrder => accountDataChannel.forward(o)
   }
 }
 
@@ -75,11 +97,11 @@ case class Balance(asset: Asset, amountAvailable: Double, amountLocked: Double) 
 // we use a [var immutable map] instead of mutable one here, to be able to update the whole map at once without a race condition
 case class Wallet(var balances: Map[Asset, Balance]) extends ExchangeAccountStreamData
 case class WalletAssetUpdate(balances: Map[Asset, Balance]) extends ExchangeAccountStreamData
-case class WalletBalanceUpdate(asset:Asset, balanceDelta:Double) extends ExchangeAccountStreamData
+case class WalletBalanceUpdate(asset: Asset, balanceDelta: Double) extends ExchangeAccountStreamData
 
 
 case class Fee(exchange: String,
                makerFee: Double,
                takerFee: Double)
 
-case class IncomingExchangeAccountData(wallet: Wallet, orders: concurrent.Map[String, Order])
+case class IncomingExchangeAccountData(wallet: Wallet, activeOrders: concurrent.Map[String, Order])
