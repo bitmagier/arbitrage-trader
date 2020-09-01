@@ -6,7 +6,7 @@ import akka.Done
 import akka.actor.{Actor, ActorRef, Props}
 import akka.stream.scaladsl.Sink
 import org.purevalue.arbitrage.ExchangeAccountDataManager.{CancelOrder, FetchOrder, NewLimitOrder}
-import org.purevalue.arbitrage.TradeRoom.{BalanceUpdateTrigger, OrderUpdateTrigger}
+import org.purevalue.arbitrage.TradeRoom.{WalletUpdateTrigger, OrderUpdateTrigger}
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.StartStreamRequest
 import org.slf4j.LoggerFactory
@@ -41,21 +41,21 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
     if (log.isTraceEnabled()) log.trace(s"${config.exchangeName}: received $x")
     x match {
       case w: Wallet =>
-        accountData.wallet.balances = w.balances
-        tradeRoom ! BalanceUpdateTrigger(config.exchangeName)
+        accountData.wallet.balance = w.balance
+        tradeRoom ! WalletUpdateTrigger(config.exchangeName)
 
       case w: WalletAssetUpdate =>
-        accountData.wallet.balances = accountData.wallet.balances -- w.balances.keys ++ w.balances
-        tradeRoom ! BalanceUpdateTrigger(config.exchangeName)
+        accountData.wallet.balance = accountData.wallet.balance -- w.balance.keys ++ w.balance
+        tradeRoom ! WalletUpdateTrigger(config.exchangeName)
 
       case w: WalletBalanceUpdate =>
-        accountData.wallet.balances = accountData.wallet.balances.map {
+        accountData.wallet.balance = accountData.wallet.balance.map {
           // TODO validate if an update of amountAvailable is the right thing, that is meant by this message (I'm 95% sure so far)
           case (a: Asset, b: Balance) if a == w.asset =>
-            (a, Balance(b.asset, b.amountAvailable + w.balanceDelta, b.amountLocked))
+            (a, Balance(b.asset, b.amountAvailable + w.amountDelta, b.amountLocked))
           case x => x
         }
-        tradeRoom ! BalanceUpdateTrigger(config.exchangeName)
+        tradeRoom ! WalletUpdateTrigger(config.exchangeName)
 
       case o: Order =>
         accountData.activeOrders.update(o.externalId, o)
@@ -95,9 +95,9 @@ case class Balance(asset: Asset, amountAvailable: Double, amountLocked: Double) 
     s"locked: ${formatDecimal(amountLocked, asset.visibleAmountFractionDigits)})"
 }
 // we use a [var immutable map] instead of mutable one here, to be able to update the whole map at once without a race condition
-case class Wallet(var balances: Map[Asset, Balance]) extends ExchangeAccountStreamData
-case class WalletAssetUpdate(balances: Map[Asset, Balance]) extends ExchangeAccountStreamData
-case class WalletBalanceUpdate(asset: Asset, balanceDelta: Double) extends ExchangeAccountStreamData
+case class Wallet(var balance: Map[Asset, Balance]) extends ExchangeAccountStreamData
+case class WalletAssetUpdate(balance: Map[Asset, Balance]) extends ExchangeAccountStreamData
+case class WalletBalanceUpdate(asset: Asset, amountDelta: Double) extends ExchangeAccountStreamData
 
 
 case class Fee(exchange: String,

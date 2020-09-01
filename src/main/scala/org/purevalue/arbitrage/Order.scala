@@ -187,7 +187,7 @@ object OrderBill {
 
 /** High level order request bundle, covering 2 or more trader orders */
 case class OrderRequestBundle(id: UUID,
-                              traderName: String,
+                              tradePattern: String,
                               trader: ActorRef,
                               creationTime: LocalDateTime,
                               orders: List[OrderRequest],
@@ -195,5 +195,5 @@ case class OrderRequestBundle(id: UUID,
 
   def involvedReserveAssets: Set[Asset] = orders.flatMap(e => Seq(e.tradePair.baseAsset, e.tradePair.quoteAsset)).toSet
 
-  override def toString: String = s"OrderRequestBundle($id, $traderName, creationTime:$creationTime, orders:$orders, $bill)"
+  override def toString: String = s"OrderRequestBundle($id, $tradePattern, creationTime:$creationTime, orders:$orders, $bill)"
 }

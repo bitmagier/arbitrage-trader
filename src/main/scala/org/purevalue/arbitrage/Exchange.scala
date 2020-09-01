@@ -7,6 +7,7 @@ import akka.util.Timeout
 import org.purevalue.arbitrage.Exchange.{GetTradePairs, RemoveTradePair, StartStreaming, TradePairs}
 import org.purevalue.arbitrage.ExchangeAccountDataManager.{CancelOrder, FetchOrder, NewLimitOrder}
 import org.purevalue.arbitrage.ExchangeLiquidityManager.{LiquidityLockClearance, LiquidityRequest}
+import org.purevalue.arbitrage.TradeRoom.WalletUpdateTrigger
 import org.slf4j.LoggerFactory
 
 import scala.collection._
@@ -120,6 +121,8 @@ case class Exchange(exchangeName: String,
 
     case l: LiquidityRequest => liquidityManager.forward(l)
     case c: LiquidityLockClearance => liquidityManager.forward(c)
+
+    case t: WalletUpdateTrigger => liquidityManager.forward(t)
 
     // removes tradepair before streaming has started
     case RemoveTradePair(tp) =>
