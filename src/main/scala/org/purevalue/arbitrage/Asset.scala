@@ -1,7 +1,7 @@
 package org.purevalue.arbitrage
 
 import org.purevalue.arbitrage.Asset.Bitcoin
-import org.purevalue.arbitrage.TradeRoom.TradeContext
+import org.purevalue.arbitrage.TradeRoom.ReferenceTicker
 import org.purevalue.arbitrage.Utils.formatDecimal
 
 
@@ -14,12 +14,13 @@ case class Asset(officialSymbol: String, name: String, visibleAmountFractionDigi
   }
 
   override def hashCode: Int = officialSymbol.hashCode
+
   override def toString: String = s"$officialSymbol ($name)"
 }
 object Asset {
   // very often used assets
-  val Bitcoin:Asset = Asset("BTC")
-  val USDT:Asset = Asset("USDT")
+  val Bitcoin: Asset = Asset("BTC")
+  val USDT: Asset = Asset("USDT")
 
   def apply(officialSymbol: String): Asset = {
     if (!StaticConfig.AllAssets.contains(officialSymbol)) {
@@ -32,6 +33,9 @@ object Asset {
 
 // a universal usable trade-pair
 abstract class TradePair {
+
+  def reverse: TradePair = TradePair.of(quoteAsset, baseAsset)
+
   val baseAsset: Asset
   val quoteAsset: Asset
 
@@ -84,8 +88,11 @@ case class CryptoValue(asset: Asset, amount: Double) {
     }
   }
 
-  def convertTo(targetAsset: Asset, tc: TradeContext): Option[CryptoValue] =
-    convertTo(targetAsset, tp => tc.findReferenceTicker(tp).map(_.weightedAveragePrice))
+  def convertTo(targetAsset: Asset, referenceTicker: ReferenceTicker): Option[CryptoValue] =
+    convertTo(targetAsset, tp => referenceTicker.values.get(tp).map(_.currentPriceEstimate))
+
+  def convertTo(targetAsset: Asset, localTicker: scala.collection.Map[TradePair, Ticker]): Option[CryptoValue] =
+    convertTo(targetAsset, tp => localTicker.get(tp).map(_.priceEstimate))
 }
 /**
  * CryptoValue on a specific exchange

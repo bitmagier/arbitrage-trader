@@ -4,7 +4,7 @@ import java.time.{Instant, LocalDateTime}
 import java.util.UUID
 
 import akka.actor.ActorRef
-import org.purevalue.arbitrage.TradeRoom.TradeContext
+import org.purevalue.arbitrage.TradeRoom.{OrderRef, ReferenceTicker}
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.slf4j.LoggerFactory
 
@@ -15,18 +15,21 @@ import scala.collection.mutable.ArrayBuffer
  * A (real) order, which comes from exchange data feed
  */
 case class Order(externalId: String,
+                 exchange: String,
                  tradePair: TradePair,
                  side: TradeSide,
                  orderType: OrderType,
                  orderPrice: Double,
                  stopPrice: Option[Double], // for STOP_LIMIT
-                 quantity: Double, // (TODO check what AMOUNT + AMOUNT_ORIG means on bitfinex)
+                 quantity: Double, // (TODO check what AMOUNT & AMOUNT_ORIG means on bitfinex)
                  orderRejectReason: Option[String],
                  creationTime: Instant,
                  var orderStatus: OrderStatus,
                  var cumulativeFilledQuantity: Double,
                  var priceAverage: Double,
                  var lastUpdateTime: Instant) extends ExchangeAccountStreamData {
+  def ref: TradeRoom.OrderRef = OrderRef(exchange, tradePair, externalId)
+
 
   private val log = LoggerFactory.getLogger(classOf[Order])
 
@@ -88,8 +91,9 @@ case class OrderUpdate(externalOrderId: String,
                        cumulativeFilledQuantity: Double,
                        priceAverage: Double,
                        updateTime: Instant) extends ExchangeAccountStreamData {
-  def toOrder: Order = Order(
+  def toOrder(exchange:String): Order = Order(
     externalOrderId,
+    exchange,
     tradePair,
     side,
     orderType,
@@ -111,7 +115,7 @@ case class OrderUpdate(externalOrderId: String,
  * This is the order flow: [Trader] -> OrderRequest -> [Exchange] -> Order(OrderStatus)
  */
 case class OrderRequest(id: UUID,
-                        orderBundleId: UUID,
+                        orderBundleId: UUID, // nullable TODO: convert to Option
                         exchange: String,
                         tradePair: TradePair,
                         tradeSide: TradeSide,
@@ -174,12 +178,12 @@ object OrderBill {
     }.sum
   }
 
-  def aggregateValues(balanceSheet: Iterable[CryptoValue], targetAsset: Asset, tc: TradeContext): Double =
-    aggregateValues(balanceSheet, targetAsset, tp => tc.findReferenceTicker(tp).map(_.weightedAveragePrice))
+  def aggregateValues(balanceSheet: Iterable[CryptoValue], targetAsset: Asset, referenceTicker: ReferenceTicker): Double =
+    aggregateValues(balanceSheet, targetAsset, tp => referenceTicker.values.get(tp).map(_.currentPriceEstimate))
 
-  def calc(orders: Seq[OrderRequest], tc: TradeContext): OrderBill = {
+  def calc(orders: Seq[OrderRequest], referenceTicker: ReferenceTicker): OrderBill = {
     val balanceSheet: Seq[CryptoValue] = orders.flatMap(calcBalanceSheet)
-    val sumUSDT: Double = aggregateValues(balanceSheet, Asset("USDT"), tc)
+    val sumUSDT: Double = aggregateValues(balanceSheet, Asset("USDT"), referenceTicker)
     OrderBill(balanceSheet, sumUSDT)
   }
 }
@@ -190,10 +194,10 @@ case class OrderRequestBundle(id: UUID,
                               tradePattern: String,
                               trader: ActorRef,
                               creationTime: LocalDateTime,
-                              orders: List[OrderRequest],
+                              orderRequests: List[OrderRequest],
                               bill: OrderBill) {
 
-  def involvedReserveAssets: Set[Asset] = orders.flatMap(e => Seq(e.tradePair.baseAsset, e.tradePair.quoteAsset)).toSet
+  def involvedReserveAssets: Set[Asset] = orderRequests.flatMap(e => Seq(e.tradePair.baseAsset, e.tradePair.quoteAsset)).toSet
 
-  override def toString: String = s"OrderRequestBundle($id, $tradePattern, creationTime:$creationTime, orders:$orders, $bill)"
+  override def toString: String = s"OrderRequestBundle($id, $tradePattern, creationTime:$creationTime, orders:$orderRequests, $bill)"
 }

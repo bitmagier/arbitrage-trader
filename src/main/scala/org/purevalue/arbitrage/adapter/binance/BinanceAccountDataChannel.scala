@@ -103,8 +103,8 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
     case a: AccountInformationJson      => a.toWallet
     case a: OutboundAccountPositionJson => a.toWalletUpdate
     case b: BalanceUpdateJson           => b.toWalletBalanceUpdate
-    case o: OrderExecutionReportJson    => o.toOrderOrOrderUpdate(symbol => binanceTradePairs.find(_.symbol == symbol).get) // expecting, that we have all relevant trade pairs
-    case o: OpenOrderJson               => o.toOrder(symbol => binanceTradePairs.find(_.symbol == symbol).get)
+    case o: OrderExecutionReportJson    => o.toOrderOrOrderUpdate(config.exchangeName, symbol => binanceTradePairs.find(_.symbol == symbol).get) // expecting, that we have all relevant trade pairs
+    case o: OpenOrderJson               => o.toOrder(config.exchangeName, symbol => binanceTradePairs.find(_.symbol == symbol).get)
     case _                              => throw new NotImplementedError
     // @formatter:on
   }
@@ -261,7 +261,7 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
     case CancelOrder(tradePair, externalOrderId) =>
       cancelOrder(tradePair, externalOrderId.toLong).pipeTo(sender())
 
-    // TODO query unfinished persisted orders from TradeRoom after application restart
+    // TODO currently unused: query unfinished persisted orders from TradeRoom after application restart
     case FetchOrder(tradePair, externalOrderId) => ???
     //      restSource._1.offer(queryOrder(resolveSymbol(tradePair), externalOrderId.toLong))
 
@@ -369,8 +369,9 @@ case class OpenOrderJson(symbol: String,
                          isWorking: Boolean
                          // origQuoteOrderQty: String
                         ) extends IncomingBinanceAccountJson {
-  def toOrder(resolveTradePair: String => TradePair): Order = Order(
+  def toOrder(exchange:String, resolveTradePair: String => TradePair): Order = Order(
     orderId.toString,
+    exchange,
     resolveTradePair(symbol),
     toTradeSide(side),
     toOrderType(`type`),
@@ -424,8 +425,8 @@ case class OrderExecutionReportJson(e: String, // Event type
                                     // Q: String // Quote Order Qty
                                    ) extends IncomingBinanceAccountJson {
 
-  def toOrderOrOrderUpdate(resolveTradePair: String => TradePair): ExchangeAccountStreamData =
-    if (X == "NEW") toOrder(resolveTradePair)
+  def toOrderOrOrderUpdate(exchange:String, resolveTradePair: String => TradePair): ExchangeAccountStreamData =
+    if (X == "NEW") toOrder(exchange, resolveTradePair)
     else toOrderUpdate(resolveTradePair)
 
   // creationTime, orderPrice, stopPrice, originalQuantity
@@ -446,8 +447,9 @@ case class OrderExecutionReportJson(e: String, // Event type
     Z.toDouble / z.toDouble,
     Instant.ofEpochMilli(E))
 
-  def toOrder(resolveTradePair: String => TradePair): Order = Order(
+  def toOrder(exchange:String, resolveTradePair: String => TradePair): Order = Order(
     i.toString,
+    exchange,
     resolveTradePair(s),
     toTradeSide(S),
     toOrderType(o),

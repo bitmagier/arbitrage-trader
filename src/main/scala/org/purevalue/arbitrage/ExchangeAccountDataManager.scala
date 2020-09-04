@@ -6,7 +6,7 @@ import akka.Done
 import akka.actor.{Actor, ActorRef, Props}
 import akka.stream.scaladsl.Sink
 import org.purevalue.arbitrage.ExchangeAccountDataManager.{CancelOrder, FetchOrder, NewLimitOrder}
-import org.purevalue.arbitrage.TradeRoom.{WalletUpdateTrigger, OrderUpdateTrigger}
+import org.purevalue.arbitrage.TradeRoom.{OrderRef, OrderUpdateTrigger, WalletUpdateTrigger}
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.StartStreamRequest
 import org.slf4j.LoggerFactory
@@ -20,7 +20,9 @@ object ExchangeAccountDataManager {
   case class CancelOrder(tradePair: TradePair, externalOrderId: String)
   case class CancelOrderResult(tradePair: TradePair, externalOrderId: String, success: Boolean)
   case class NewLimitOrder(o: OrderRequest) // response is NewOrderAck
-  case class NewOrderAck(exchange: String, tradePair: TradePair, externalOrderId: String, orderId: UUID)
+  case class NewOrderAck(exchange: String, tradePair: TradePair, externalOrderId: String, orderId: UUID) {
+    def toOrderRef: OrderRef = OrderRef(exchange, tradePair, externalOrderId)
+  }
 
   def props(config: ExchangeConfig,
             exchangePublicDataInquirer: ActorRef,
@@ -58,15 +60,18 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
         tradeRoom ! WalletUpdateTrigger(config.exchangeName)
 
       case o: Order =>
-        accountData.activeOrders.update(o.externalId, o)
-        tradeRoom ! OrderUpdateTrigger(config.exchangeName, o.externalId)
+        val ref = o.ref
+        accountData.activeOrders.update(ref, o)
+        tradeRoom ! OrderUpdateTrigger(ref)
 
       case o: OrderUpdate =>
-        if (accountData.activeOrders.contains(o.externalOrderId))
-          accountData.activeOrders(o.externalOrderId).applyUpdate(o)
-        else accountData.activeOrders.update(o.externalOrderId, o.toOrder) // covers a restart-scenario (tradeRoom / arbitrage-trader)
+        val ref = OrderRef(config.exchangeName, o.tradePair, o.externalOrderId)
+        if (accountData.activeOrders.contains(ref))
+          accountData.activeOrders(ref).applyUpdate(o)
+        else
+          accountData.activeOrders.update(ref, o.toOrder(config.exchangeName)) // covers a restart-scenario (tradeRoom / arbitrage-trader)
 
-        tradeRoom ! OrderUpdateTrigger(config.exchangeName, o.externalOrderId)
+        tradeRoom ! OrderUpdateTrigger(ref)
 
       case _ => throw new NotImplementedError
     }
@@ -104,4 +109,4 @@ case class Fee(exchange: String,
                makerFee: Double,
                takerFee: Double)
 
-case class IncomingExchangeAccountData(wallet: Wallet, activeOrders: concurrent.Map[String, Order])
+case class IncomingExchangeAccountData(wallet: Wallet, activeOrders: concurrent.Map[OrderRef, Order])

@@ -3,7 +3,7 @@ package org.purevalue.arbitrage
 import java.time.{Duration, Instant}
 import java.util.UUID
 
-import org.purevalue.arbitrage.TradeRoom.OrderBundle
+import org.purevalue.arbitrage.TradeRoom.{OrderBundle, ReferenceTicker}
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.slf4j.LoggerFactory
 
@@ -18,8 +18,9 @@ case object TotalTransactionUneconomic extends SafetyGuardDecision
 
 case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
                                   tickers: scala.collection.Map[String, scala.collection.concurrent.Map[TradePair, Ticker]],
-                                  extendedTicker: scala.collection.Map[String, scala.collection.Map[TradePair, ExtendedTicker]],
-                                  dataAge: scala.collection.Map[String, TPDataTimestamps]) {
+                                  dataAge: scala.collection.Map[String, TPDataTimestamps],
+                                  referenceTicker: ReferenceTicker,
+                                  activeOrderBundles: scala.collection.Map[UUID, OrderBundle]) {
   private val log = LoggerFactory.getLogger(classOf[OrderBundleSafetyGuard])
   private var stats: Map[SafetyGuardDecision, Int] = Map()
 
@@ -66,11 +67,11 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
    */
   def balanceOfLiquidityTransformationCompensationTransactionsInUSDT(t: OrderRequestBundle): Option[Double] = {
     val allReserveAssets: List[Asset] = Config.liquidityManager.reserveAssets
-    val involvedAssets: Set[Asset] = t.orders.flatMap(e => Seq(e.tradePair.baseAsset, e.tradePair.quoteAsset)).toSet
+    val involvedAssets: Set[Asset] = t.orderRequests.flatMap(e => Seq(e.tradePair.baseAsset, e.tradePair.quoteAsset)).toSet
     val uninvolvedReserveAssets: List[Asset] = allReserveAssets.filterNot(involvedAssets.contains)
 
-    val toProvide: Iterable[LocalCryptoValue] = t.orders.map(_.calcOutgoingLiquidity).filterNot(e => allReserveAssets.contains(e.asset))
-    val toConvertBack: Iterable[LocalCryptoValue] = t.orders.map(_.calcIncomingLiquidity).filterNot(e => allReserveAssets.contains(e.asset))
+    val toProvide: Iterable[LocalCryptoValue] = t.orderRequests.map(_.calcOutgoingLiquidity).filterNot(e => allReserveAssets.contains(e.asset))
+    val toConvertBack: Iterable[LocalCryptoValue] = t.orderRequests.map(_.calcIncomingLiquidity).filterNot(e => allReserveAssets.contains(e.asset))
 
     def findUsableReserveAsset(exchange: String, coin: Asset, possibleReserveAssets: List[Asset]): Option[Asset] = {
       possibleReserveAssets.find(r => tickers(exchange).contains(TradePair.of(coin, r)))
@@ -91,7 +92,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
           e.exchange,
           tradePair,
           TradeSide.Buy,
-          Fee(e.exchange, Config.exchange(e.exchange).makerFee, Config.exchange(e.exchange).takerFee), // TODO take real values
+          Config.exchange(e.exchange).fee, // TODO take real values
           e.amount,
           tickers(e.exchange)(tradePair).priceEstimate
         )
@@ -101,7 +102,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
           e.exchange,
           tradePair,
           TradeSide.Sell,
-          Fee(e.exchange, Config.exchange(e.exchange).makerFee, Config.exchange(e.exchange).takerFee), // TODO take real values
+          Config.exchange(e.exchange).fee, // TODO take real values
           e.amount,
           tickers(e.exchange)(tradePair).priceEstimate
         )
@@ -125,7 +126,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
       OrderBill.aggregateValues(
         groupedAndCleanedUpBalanceSheet,
         Asset.USDT,
-        tp => TradeRoom.findReferenceTicker(tp, extendedTicker).map(_.weightedAveragePrice)))
+        referenceTicker))
   }
 
 
@@ -144,8 +145,8 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
 
 
   // returns decision result and the total win. in case of a positive decision result
-  def isSafe(bundle: OrderRequestBundle, activeOrderBundles: Map[UUID, OrderBundle]): (Boolean, Option[Double]) = {
-    _isSafe(bundle, activeOrderBundles) match {
+  def isSafe(bundle: OrderRequestBundle): (Boolean, Option[Double]) = {
+    _isSafe(bundle) match {
       case (result, reason, win) =>
         this.synchronized {
           stats = stats + (reason -> (stats.getOrElse(reason, 0) + 1))
@@ -155,11 +156,11 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
   }
 
   // reject OrderBundles, when there is another active order of the same exchange+tradepair still active
-  def sameTradePairOrdersStillActive(bundle: OrderRequestBundle, activeOrderBundles: Map[UUID, OrderBundle]): Boolean = {
+  def sameTradePairOrdersStillActive(bundle: OrderRequestBundle): Boolean = {
     val activeExchangeOrderPairs: Set[(String, TradePair)] = activeOrderBundles.values
-      .flatMap(_.orders.map(o =>
+      .flatMap(_.ordersRefs.map(o =>
         (o.exchange, o.tradePair))).toSet
-    if (bundle.orders.exists(o => activeExchangeOrderPairs.contains((o.exchange, o.tradePair)))) {
+    if (bundle.orderRequests.exists(o => activeExchangeOrderPairs.contains((o.exchange, o.tradePair)))) {
       if (log.isDebugEnabled())
         log.debug(s"rejecting new $bundle because another order of same exchange+tradepair is still active. Active trade pairs: $activeExchangeOrderPairs")
       else
@@ -168,22 +169,23 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
     } else false
   }
 
-  private def _isSafe(bundle: OrderRequestBundle, activeOrderBundles: Map[UUID, OrderBundle]): (Boolean, SafetyGuardDecision, Option[Double]) = {
+  private def _isSafe(bundle: OrderRequestBundle): (Boolean, SafetyGuardDecision, Option[Double]) = {
+
     def unsafe(d: SafetyGuardDecision): (Boolean, SafetyGuardDecision, Option[Double]) = (false, d, None)
 
     if (bundle.bill.sumUSDT <= 0) {
       log.warn(s"${Emoji.Disagree}  Got OrderBundle with negative balance: ${bundle.bill.sumUSDT}. I will not execute that one!")
       log.debug(s"$bundle")
       unsafe(NegativeBalance)
-    } else if (!bundle.orders.forall(tickerDataUpToDate)) {
+    } else if (!bundle.orderRequests.forall(tickerDataUpToDate)) {
       unsafe(TickerOutdated)
     } else if (bundle.bill.sumUSDT >= config.maximumReasonableWinPerOrderBundleUSDT) {
       log.warn(s"${Emoji.Disagree}  Got OrderBundle with unbelievable high estimated win of ${formatDecimal(bundle.bill.sumUSDT)} USDT. I will rather not execute that one - seem to be a bug!")
       log.debug(s"${Emoji.Disagree}  $bundle")
       unsafe(TooFantasticWin)
-    } else if (!bundle.orders.forall(orderLimitCloseToTicker))
+    } else if (!bundle.orderRequests.forall(orderLimitCloseToTicker))
       unsafe(OrderLimitFarAwayFromTicker)
-    else if (sameTradePairOrdersStillActive(bundle, activeOrderBundles)) {
+    else if (sameTradePairOrdersStillActive(bundle)) {
       unsafe(SameTradePairOrderStillActive)
     } else {
       val r: (Boolean, Option[Double]) = totalTransactionsWinInRage(bundle)

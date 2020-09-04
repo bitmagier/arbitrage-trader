@@ -7,7 +7,7 @@ import akka.util.Timeout
 import org.purevalue.arbitrage.Exchange.{GetTradePairs, RemoveTradePair, StartStreaming, TradePairs}
 import org.purevalue.arbitrage.ExchangeAccountDataManager.{CancelOrder, FetchOrder, NewLimitOrder}
 import org.purevalue.arbitrage.ExchangeLiquidityManager.{LiquidityLockClearance, LiquidityRequest}
-import org.purevalue.arbitrage.TradeRoom.WalletUpdateTrigger
+import org.purevalue.arbitrage.TradeRoom.{ReferenceTicker, WalletUpdateTrigger}
 import org.slf4j.LoggerFactory
 
 import scala.collection._
@@ -28,8 +28,9 @@ object Exchange {
             tradeRoom: ActorRef,
             initStuff: ExchangeInitStuff,
             tpData: ExchangeTPData,
-            accountData: IncomingExchangeAccountData): Props =
-    Props(new Exchange(exchangeName, config, tradeRoom, initStuff, tpData, accountData))
+            accountData: IncomingExchangeAccountData,
+            referenceTicker: ReferenceTicker): Props =
+    Props(new Exchange(exchangeName, config, tradeRoom, initStuff, tpData, accountData, referenceTicker))
 }
 
 case class Exchange(exchangeName: String,
@@ -37,7 +38,8 @@ case class Exchange(exchangeName: String,
                     tradeRoom: ActorRef,
                     initStuff: ExchangeInitStuff,
                     tpData: ExchangeTPData,
-                    accountData: IncomingExchangeAccountData) extends Actor {
+                    accountData: IncomingExchangeAccountData,
+                    referenceTicker: ReferenceTicker) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[Exchange])
   implicit val system: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = system.dispatcher
@@ -103,7 +105,7 @@ case class Exchange(exchangeName: String,
   override def preStart(): Unit = {
     log.info(s"Initializing Exchange $exchangeName")
     publicDataInquirer = context.actorOf(initStuff.publicDataInquirerProps(config), s"$exchangeName-PublicDataInquirer")
-    liquidityManager = context.actorOf(ExchangeLiquidityManager.props(Config.liquidityManager, config, accountData.wallet))
+    liquidityManager = context.actorOf(ExchangeLiquidityManager.props(Config.liquidityManager, config, tradeRoom, tpData, accountData.wallet, referenceTicker))
 
     implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
     tradePairs = Await.result((publicDataInquirer ? GetTradePairs()).mapTo[TradePairs], timeout.duration.plus(500.millis)).value

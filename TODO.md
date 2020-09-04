@@ -2,9 +2,10 @@
 - Receive own order updates:  API implementation for binance [roman]
 
 #TODO
+- provide reference ticker for currency conversion calculations: use extended ticker with weighted average prices from binance 
 - automatic integration tests for order pipeline (create -> fill -> finish) against exchanges with minimal value
-- Receive Wallet data from bitfinex
-- Receive own order updates:  API implementation for bitfinex
+- bitfinex: Receive Wallet data
+- bitfinex: Receive own order updates:  API implementation
 - blacklist assets per exchange (e.g. for NOT touching personal investments)
 - decouple delivery of reference ticker from ExchangeTPDataManager channel, because ReferenceTicker shall contain as much TradePairs as possible and not just the ones remaining after trade pair cleanup
 

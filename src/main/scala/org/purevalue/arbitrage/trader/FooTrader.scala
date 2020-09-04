@@ -42,8 +42,6 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
   val scheduleDelay: FiniteDuration = FiniteDuration(config.getDuration("schedule-delay").toNanos, TimeUnit.NANOSECONDS)
   val schedule: Cancellable = actorSystem.scheduler.scheduleWithFixedDelay(30.seconds, scheduleDelay, self, Trigger())
 
-  def newUUID(): UUID = UUID.randomUUID() // switch to Time based UUID when connecting a DB like cassandra
-
   sealed trait NoResultReason
   case class BuyOrSellBookEmpty() extends NoResultReason
   case class BidAskGap() extends NoResultReason
@@ -85,9 +83,13 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
       return (None, Some(Confused()))
     }
 
-    val orderBundleId = newUUID()
+    val orderBundleId = UUID.randomUUID()
     val orderLimitAdditionRate: Double = config.getDouble("order-bundle.order-limit-addition-rate")
-    val amountBaseAsset: Double = CryptoValue(USDT, tradeQuantityUSDT).convertTo(tradePair.baseAsset, tc) match {
+
+    val buyExchange: String = lowestAsk._1
+    val sellExchange: String = highestBid._1
+
+    val amountBaseAsset: Double = CryptoValue(USDT, tradeQuantityUSDT).convertTo(tradePair.baseAsset, tc.referenceTicker) match {
       case Some(v) => v.amount
       case None =>
         log.warn(s"Unable to convert ${tradePair.baseAsset} to USDT")
@@ -96,28 +98,28 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
 
     val ourBuyBaseAssetOrder =
       OrderRequest(
-        newUUID(),
+        UUID.randomUUID(),
         orderBundleId,
-        lowestAsk._1,
+        buyExchange,
         tradePair,
         TradeSide.Buy,
-        tc.fees(lowestAsk._1),
+        tc.fees(buyExchange),
         amountBaseAsset,
         lowestAsk._2.price * (1.0d + orderLimitAdditionRate))
 
     val ourSellBaseAssetOrder =
       OrderRequest(
-        newUUID(),
+        UUID.randomUUID(),
         orderBundleId,
-        highestBid._1,
+        sellExchange,
         tradePair,
         TradeSide.Sell,
-        tc.fees(highestBid._1),
+        tc.fees(sellExchange),
         amountBaseAsset,
         highestBid._2.price * (1.0d - orderLimitAdditionRate)
       )
 
-    val bill: OrderBill = OrderBill.calc(Seq(ourBuyBaseAssetOrder, ourSellBaseAssetOrder), tc)
+    val bill: OrderBill = OrderBill.calc(Seq(ourBuyBaseAssetOrder, ourSellBaseAssetOrder), tc.referenceTicker)
     if (bill.sumUSDT >= config.getDouble("order-bundle.min-gain-in-usdt")) {
       (Some(OrderRequestBundle(
         orderBundleId,

@@ -1,9 +1,13 @@
 package org.purevalue.arbitrage
 
-import akka.actor.{Actor, ActorRef, Props, Status}
+import akka.actor.{Actor, ActorRef, PoisonPill, Props, Status}
 import org.purevalue.arbitrage.ExchangeAccountDataManager.{CancelOrder, CancelOrderResult, NewLimitOrder, NewOrderAck}
 import org.slf4j.LoggerFactory
 
+/**
+ * Places all orders in parallel.
+ * If one order placement fails, it tries to immediately cancel the successful ones
+ */
 object OrderSetPlacer {
   def props(exchanges: Map[String, ActorRef]): Props = Props(new OrderSetPlacer(exchanges))
 }
@@ -13,12 +17,13 @@ case class OrderSetPlacer(exchanges: Map[String, ActorRef]) extends Actor {
   private var numFailures: Int = 0
   private var answers: List[NewOrderAck] = List()
   private var requestSender: ActorRef = _
+  private var expectedCancelOrderResults: Int = 0
 
   override def receive: Receive = {
-    case requests: List[NewLimitOrder] =>
+    case request: List[NewLimitOrder] =>
       requestSender = sender()
-      numRequests = requests.length
-      requests.foreach { o =>
+      numRequests = request.length
+      request.foreach { o =>
         exchanges(o.o.exchange) ! o
       }
 
@@ -31,13 +36,20 @@ case class OrderSetPlacer(exchanges: Map[String, ActorRef]) extends Actor {
           answers.foreach { e =>
             exchanges(e.exchange) ! CancelOrder(e.tradePair, e.externalOrderId)
           }
+          expectedCancelOrderResults = answers.size
           requestSender ! answers
+        }
+        if (expectedCancelOrderResults == 0) { // nothing more to do here
+          self ! PoisonPill
         }
       }
 
     case c: CancelOrderResult =>
-      if (c.success) log.info(s"$c")
-      else log.warn(s"$c")
+      expectedCancelOrderResults -= 1
+      if (c.success) log.info(s"$c")      else log.warn(s"$c")
+      if (expectedCancelOrderResults == 0) { // nothing more to do here
+        self ! PoisonPill
+      }
 
     case Status.Failure(e) =>
       log.warn(s"MultipleOrderPlacer received a failure: ${e.getMessage}")

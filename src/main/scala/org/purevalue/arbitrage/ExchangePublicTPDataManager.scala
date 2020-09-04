@@ -22,7 +22,10 @@ case class Ticker(exchange: String,
                   lowestAskPrice: Double,
                   lowestAskQuantity: Option[Double],
                   lastPrice: Option[Double]) extends ExchangeTPStreamData {
-  def priceEstimate: Double = lastPrice.getOrElse((highestBidPrice + lowestAskPrice) / 2)
+  def priceEstimate: Double = lastPrice match {
+    case Some(last) => (highestBidPrice + last + lowestAskPrice) / 3
+    case None => (highestBidPrice + lowestAskPrice) / 2
+  }
 }
 case class ExtendedTicker(exchange: String,
                           tradePair: TradePair,
@@ -32,18 +35,26 @@ case class ExtendedTicker(exchange: String,
                           lowestAskQuantity: Double,
                           lastPrice: Double,
                           lastQuantity: Double,
-                          weightedAveragePrice: Double) extends ExchangeTPStreamData
+                          weightedAveragePrice24h: Double) extends ExchangeTPStreamData {
+  def currentPriceEstimate: Double = (highestBidPrice + lastPrice + lowestAskPrice ) / 3
+}
 case class OrderBookSnapshot(bids: Seq[Bid], asks: Seq[Ask]) extends ExchangeTPStreamData
 case class OrderBookUpdate(bids: Seq[Bid], asks: Seq[Ask]) extends ExchangeTPStreamData
 case class Balances(all: List[Balance]) extends ExchangeTPStreamData
 
 //////////////////////
 
-case class Bid(price: Double, quantity: Double) { // A bid is an offer to buy an asset; (likely aggregated) bid position(s) for a price level
+/**
+ * A bid is an offer to buy an asset; (likely aggregated) bid position(s) for a price level
+ */
+case class Bid(price: Double, quantity: Double) {
   override def toString: String = s"Bid(price=${formatDecimal(price)}, amount=${formatDecimal(quantity)})"
 }
 
-case class Ask(price: Double, quantity: Double) { // An ask is an offer to sell an asset; (likely aggregated) ask position(s) for a price level
+/**
+ * An ask is an offer to sell an asset; (likely aggregated) ask position(s) for a price level
+ */
+case class Ask(price: Double, quantity: Double) {
   override def toString: String = s"Ask(price=${formatDecimal(price)}, amount=${formatDecimal(quantity)})"
 }
 
