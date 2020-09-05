@@ -17,7 +17,6 @@ import org.purevalue.arbitrage.trader.FooTrader
 import org.slf4j.LoggerFactory
 
 import scala.collection.concurrent.TrieMap
-import scala.collection.mutable.ListBuffer
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.concurrent.{Await, ExecutionContextExecutor, Future}
 import scala.util.{Failure, Success}
@@ -36,7 +35,10 @@ object TradeRoom {
                           fees: scala.collection.Map[String, Fee],
                           referenceTicker: ReferenceTicker)
 
-  case class ReferenceTicker(var values: scala.collection.concurrent.Map[TradePair, ExtendedTicker])
+  case class ReferenceTicker(var values: scala.collection.concurrent.Map[TradePair, ExtendedTicker]) {
+    def readonly: ReferenceTickerReadonly = ReferenceTickerReadonly(values)
+  }
+  case class ReferenceTickerReadonly(values: scala.collection.Map[TradePair, ExtendedTicker])
 
   case class OrderRef(exchange: String, tradePair: TradePair, externalOrderId: String)
 

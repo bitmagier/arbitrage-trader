@@ -1,8 +1,9 @@
 package org.purevalue.arbitrage
 
 import org.purevalue.arbitrage.Asset.Bitcoin
-import org.purevalue.arbitrage.TradeRoom.ReferenceTicker
+import org.purevalue.arbitrage.TradeRoom.{ReferenceTicker, ReferenceTickerReadonly}
 import org.purevalue.arbitrage.Utils.formatDecimal
+import org.slf4j.LoggerFactory
 
 
 // Crypto asset / coin.
@@ -61,6 +62,7 @@ object TradePair {
 
 
 case class CryptoValue(asset: Asset, amount: Double) {
+  private val log = LoggerFactory.getLogger(classOf[CryptoValue])
   override def toString: String = s"${formatDecimal(amount, asset.visibleAmountFractionDigits)} ${asset.officialSymbol}"
 
   def convertTo(targetAsset: Asset, findConversionRate: TradePair => Option[Double]): Option[CryptoValue] = {
@@ -81,14 +83,17 @@ case class CryptoValue(asset: Asset, amount: Double) {
                 && findConversionRate(TradePair.of(targetAsset, Bitcoin)).isDefined) {
                 this.convertTo(Bitcoin, findConversionRate).get.convertTo(targetAsset, findConversionRate)
               } else {
+                log.debug(s"unable to convert $asset -> $targetAsset")
                 None
               }
           }
       }
     }
   }
-
   def convertTo(targetAsset: Asset, referenceTicker: ReferenceTicker): Option[CryptoValue] =
+    convertTo(targetAsset, referenceTicker.readonly)
+
+  def convertTo(targetAsset: Asset, referenceTicker: ReferenceTickerReadonly): Option[CryptoValue] =
     convertTo(targetAsset, tp => referenceTicker.values.get(tp).map(_.currentPriceEstimate))
 
   def convertTo(targetAsset: Asset, localTicker: scala.collection.Map[TradePair, Ticker]): Option[CryptoValue] =
@@ -97,4 +102,7 @@ case class CryptoValue(asset: Asset, amount: Double) {
 /**
  * CryptoValue on a specific exchange
  */
-case class LocalCryptoValue(exchange: String, asset: Asset, amount: Double)
+case class LocalCryptoValue(exchange: String, asset: Asset, amount: Double) {
+  def convertTo(targetAsset:Asset, localTicker: scala.collection.Map[TradePair, Ticker]): Option[CryptoValue] =
+    CryptoValue(asset, amount).convertTo(targetAsset, localTicker)
+}

@@ -105,7 +105,7 @@ case class Exchange(exchangeName: String,
   override def preStart(): Unit = {
     log.info(s"Initializing Exchange $exchangeName")
     publicDataInquirer = context.actorOf(initStuff.publicDataInquirerProps(config), s"$exchangeName-PublicDataInquirer")
-    liquidityManager = context.actorOf(ExchangeLiquidityManager.props(Config.liquidityManager, config, tradeRoom, tpData, accountData.wallet, referenceTicker))
+    liquidityManager = context.actorOf(ExchangeLiquidityManager.props(Config.liquidityManager, exchangeName, tradeRoom, tpData.readonly, accountData.wallet, config.fee, referenceTicker.readonly))
 
     implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
     tradePairs = Await.result((publicDataInquirer ? GetTradePairs()).mapTo[TradePairs], timeout.duration.plus(500.millis)).value

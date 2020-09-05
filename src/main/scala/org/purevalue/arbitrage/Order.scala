@@ -128,7 +128,7 @@ case class OrderRequest(id: UUID,
 
   // absolute (positive) amount minus fees
   def calcOutgoingLiquidity: LocalCryptoValue = tradeSide match {
-    case TradeSide.Buy => LocalCryptoValue(exchange, tradePair.quoteAsset, limit * amountBaseAsset * (1.0 + fee.takerFee))
+    case TradeSide.Buy => LocalCryptoValue(exchange, tradePair.quoteAsset, limit * amountBaseAsset * (1.0 + fee.average))
     case TradeSide.Sell => LocalCryptoValue(exchange, tradePair.baseAsset, amountBaseAsset)
     case _ => throw new IllegalArgumentException
   }
@@ -136,7 +136,7 @@ case class OrderRequest(id: UUID,
   // absolute (positive) amount minus fees
   def calcIncomingLiquidity: LocalCryptoValue = tradeSide match {
     case TradeSide.Buy => LocalCryptoValue(exchange, tradePair.baseAsset, amountBaseAsset)
-    case TradeSide.Sell => LocalCryptoValue(exchange, tradePair.quoteAsset, limit * amountBaseAsset * (1.0 - fee.takerFee))
+    case TradeSide.Sell => LocalCryptoValue(exchange, tradePair.quoteAsset, limit * amountBaseAsset * (1.0 - fee.average))
     case _ => throw new IllegalArgumentException
   }
 }

@@ -104,9 +104,13 @@ case class Wallet(var balance: Map[Asset, Balance]) extends ExchangeAccountStrea
 case class WalletAssetUpdate(balance: Map[Asset, Balance]) extends ExchangeAccountStreamData
 case class WalletBalanceUpdate(asset: Asset, amountDelta: Double) extends ExchangeAccountStreamData
 
-
+/**
+ * @see https://academy.binance.com/economics/what-are-makers-and-takers
+ */
 case class Fee(exchange: String,
                makerFee: Double,
-               takerFee: Double)
+               takerFee: Double) {
+  def average: Double = (makerFee + takerFee)/2
+}
 
 case class IncomingExchangeAccountData(wallet: Wallet, activeOrders: concurrent.Map[OrderRef, Order])

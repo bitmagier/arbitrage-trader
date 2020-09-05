@@ -36,7 +36,7 @@ case class ExtendedTicker(exchange: String,
                           lastPrice: Double,
                           lastQuantity: Double,
                           weightedAveragePrice24h: Double) extends ExchangeTPStreamData {
-  def currentPriceEstimate: Double = (highestBidPrice + lastPrice + lowestAskPrice ) / 3
+  def currentPriceEstimate: Double = (highestBidPrice + lastPrice + lowestAskPrice) / 3
 }
 case class OrderBookSnapshot(bids: Seq[Bid], asks: Seq[Ask]) extends ExchangeTPStreamData
 case class OrderBookUpdate(bids: Seq[Bid], asks: Seq[Ask]) extends ExchangeTPStreamData
@@ -76,7 +76,12 @@ case class OrderBook(exchange: String,
 
 case class TPDataTimestamps(var tickerTS: Instant,
                             var extendedTickerTS: Instant,
-                            var orderBookTS: Instant)
+                            var orderBookTS: Instant) {
+  def readonly: TPDataTimestampsReadonly = TPDataTimestampsReadonly(tickerTS, extendedTickerTS, orderBookTS)
+}
+case class TPDataTimestampsReadonly(tickerTS: Instant,
+                                    extendedTickerTS: Instant,
+                                    orderBookTS: Instant)
 
 /**
  * Exchange-part of the global data structure the TPDataManager shall write to
@@ -84,7 +89,13 @@ case class TPDataTimestamps(var tickerTS: Instant,
 case class ExchangeTPData(ticker: concurrent.Map[TradePair, Ticker],
                           extendedTicker: concurrent.Map[TradePair, ExtendedTicker],
                           orderBook: concurrent.Map[TradePair, OrderBook],
-                          age: TPDataTimestamps)
+                          age: TPDataTimestamps) {
+  def readonly: ExchangeTPDataReadonly = ExchangeTPDataReadonly(ticker, extendedTicker, orderBook, age.readonly)
+}
+case class ExchangeTPDataReadonly(ticker: scala.collection.Map[TradePair, Ticker],
+                                  extendedTicker: scala.collection.Map[TradePair, ExtendedTicker],
+                                  orderBook: scala.collection.Map[TradePair, OrderBook],
+                                  age: TPDataTimestampsReadonly)
 
 object ExchangePublicTPDataManager {
   case class InitCheck()
