@@ -37,14 +37,12 @@ object BinanceAccountDataChannel {
 class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BinanceAccountDataChannel])
 
-  private val OutboundAccountInfoStreamName = "outboundAccountInfo"
-  private val IdOutboundAccountInfoStream = 1
   private val OutboundAccountPositionStreamName = "outboundAccountPosition"
-  private val IdOutboundAccountPositionStream = 2
+  private val IdOutboundAccountPositionStream = 1
   private val BalanceUpdateStreamName = "balanceUpdate"
-  private val IdBalanceUpdateStream = 3
+  private val IdBalanceUpdateStream = 2
   private val OrderExecutionReportStreamName = "executionReport"
-  private val IdOrderExecutionResportStream = 4
+  private val IdOrderExecutionResportStream = 3
 
   implicit val system: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = system.dispatcher
@@ -74,7 +72,6 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
             case j: JsObject if j.fields.contains("e") =>
               if (log.isTraceEnabled) log.trace(s"received $j")
               j.fields("e").convertTo[String] match {
-                case OutboundAccountInfoStreamName => Some(j.convertTo[OutboundAccountInfoJson])
                 case OutboundAccountPositionStreamName => Some(j.convertTo[OutboundAccountPositionJson])
                 case BalanceUpdateStreamName => Some(j.convertTo[BalanceUpdateJson])
                 case OrderExecutionReportStreamName => Some(j.convertTo[OrderExecutionReportJson])
@@ -100,7 +97,6 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
 
   val downStreamFlow: Flow[IncomingBinanceAccountJson, ExchangeAccountStreamData, NotUsed] = Flow.fromFunction {
     // @formatter:off
-    case a: AccountInformationJson      => a.toWallet
     case a: OutboundAccountPositionJson => a.toWalletUpdate
     case b: BalanceUpdateJson           => b.toWalletBalanceUpdate
     case o: OrderExecutionReportJson    => o.toOrderOrOrderUpdate(config.exchangeName, symbol => binanceTradePairs.find(_.symbol == symbol).get) // expecting, that we have all relevant trade pairs
@@ -110,7 +106,6 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
   }
 
   val SubscribeMessages: List[AccountStreamSubscribeRequestJson] = List(
-    AccountStreamSubscribeRequestJson(params = Seq(OutboundAccountInfoStreamName), id = IdOutboundAccountInfoStream),
     AccountStreamSubscribeRequestJson(params = Seq(OutboundAccountPositionStreamName), id = IdOutboundAccountPositionStream),
     AccountStreamSubscribeRequestJson(params = Seq(BalanceUpdateStreamName), id = IdBalanceUpdateStream),
     AccountStreamSubscribeRequestJson(params = Seq(OrderExecutionReportStreamName), id = IdOrderExecutionResportStream)
