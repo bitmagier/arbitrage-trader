@@ -54,15 +54,18 @@ abstract class TradePair {
   }
 }
 object TradePair {
-  def of(b: Asset, q: Asset): TradePair = new TradePair {
+  def apply(b: Asset, q: Asset): TradePair = new TradePair {
     override val baseAsset: Asset = b
     override val quoteAsset: Asset = q
   }
+
+  def of(b: Asset, q: Asset): TradePair = apply(b, q)
 }
 
 
 case class CryptoValue(asset: Asset, amount: Double) {
   private val log = LoggerFactory.getLogger(classOf[CryptoValue])
+
   override def toString: String = s"${formatDecimal(amount, asset.visibleAmountFractionDigits)} ${asset.officialSymbol}"
 
   def convertTo(targetAsset: Asset, findConversionRate: TradePair => Option[Double]): Option[CryptoValue] = {
@@ -90,6 +93,7 @@ case class CryptoValue(asset: Asset, amount: Double) {
       }
     }
   }
+
   def convertTo(targetAsset: Asset, referenceTicker: ReferenceTicker): Option[CryptoValue] =
     convertTo(targetAsset, referenceTicker.readonly)
 
@@ -103,6 +107,6 @@ case class CryptoValue(asset: Asset, amount: Double) {
  * CryptoValue on a specific exchange
  */
 case class LocalCryptoValue(exchange: String, asset: Asset, amount: Double) {
-  def convertTo(targetAsset:Asset, localTicker: scala.collection.Map[TradePair, Ticker]): Option[CryptoValue] =
+  def convertTo(targetAsset: Asset, localTicker: scala.collection.Map[TradePair, Ticker]): Option[CryptoValue] =
     CryptoValue(asset, amount).convertTo(targetAsset, localTicker)
 }
