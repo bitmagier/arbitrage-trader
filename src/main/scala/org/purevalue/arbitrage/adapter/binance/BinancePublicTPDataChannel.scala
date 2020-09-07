@@ -43,6 +43,9 @@ class BinancePublicTPDataChannel(config: ExchangeConfig, tradePair: TradePair, b
     case t: RawBookTickerStreamJson =>
       Seq(t.toTicker(config.exchangeName, tradePair))
 
+    case t: RawExtendedTickerRestJson =>
+      Seq(t.toExtendedTicker(config.exchangeName, tradePair))
+
     case t: RawExtendedTickerStreamJson =>
       Seq(t.toExtendedTicker(config.exchangeName, tradePair))
 

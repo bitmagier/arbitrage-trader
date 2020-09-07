@@ -5,7 +5,7 @@ import java.util.UUID
 import akka.Done
 import akka.actor.{Actor, ActorRef, Props}
 import akka.stream.scaladsl.Sink
-import org.purevalue.arbitrage.ExchangeAccountDataManager.{CancelOrder, FetchOrder, NewLimitOrder}
+import org.purevalue.arbitrage.ExchangeAccountDataManager.{CancelOrder, FetchOrder, NewLimitOrder, SimulatedData}
 import org.purevalue.arbitrage.TradeRoom.{OrderRef, OrderUpdateTrigger, WalletUpdateTrigger}
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.StartStreamRequest
@@ -23,6 +23,7 @@ object ExchangeAccountDataManager {
   case class NewOrderAck(exchange: String, tradePair: TradePair, externalOrderId: String, orderId: UUID) {
     def toOrderRef: OrderRef = OrderRef(exchange, tradePair, externalOrderId)
   }
+  case class SimulatedData(dataset: ExchangeAccountStreamData)
 
   def props(config: ExchangeConfig,
             exchangePublicDataInquirer: ActorRef,
@@ -41,7 +42,11 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
 
   val sink: Sink[ExchangeAccountStreamData, Future[Done]] = Sink.foreach[ExchangeAccountStreamData] { x =>
     if (log.isTraceEnabled()) log.trace(s"${config.exchangeName}: received $x")
-    x match {
+    applyData(x)
+  }
+
+  private def applyData(dataset: ExchangeAccountStreamData): Unit = {
+    dataset match {
       case w: Wallet =>
         accountData.wallet.balance = w.balance
         tradeRoom ! WalletUpdateTrigger(config.exchangeName)
@@ -86,6 +91,11 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
     case f: FetchOrder => accountDataChannel.forward(f)
     case c: CancelOrder => accountDataChannel.forward(c)
     case o: NewLimitOrder => accountDataChannel.forward(o)
+
+    case SimulatedData(dataset) =>
+      if (!Config.tradeRoom.tradeSimulation) throw new RuntimeException
+      log.debug(s"Applying simulation data: $dataset")
+      applyData(dataset)
   }
 }
 
@@ -110,7 +120,7 @@ case class WalletBalanceUpdate(asset: Asset, amountDelta: Double) extends Exchan
 case class Fee(exchange: String,
                makerFee: Double,
                takerFee: Double) {
-  def average: Double = (makerFee + takerFee)/2
+  def average: Double = (makerFee + takerFee) / 2
 }
 
 case class IncomingExchangeAccountData(wallet: Wallet, activeOrders: concurrent.Map[OrderRef, Order])

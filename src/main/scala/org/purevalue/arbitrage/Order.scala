@@ -126,17 +126,22 @@ case class OrderRequest(id: UUID,
   override def toString: String = s"OrderRequest($id, orderBundleId:$orderBundleId, $exchange, $tradePair, $tradeSide, $fee, " +
     s"amountBaseAsset:${formatDecimal(amountBaseAsset)}, limit:${formatDecimal(limit)})"
 
+
+  // from cointracking.freshdesk.com/en/support/solutions/articles/29000021505-bnb-balance-wrong-due-to-fees-not-being-deducted-
+  // In case of a sell, the fee needs to be entered as additional amount on the sell side.
+  // In case of a buy, the fee needs to be subtracted from the buy side.
+
   // absolute (positive) amount minus fees
   def calcOutgoingLiquidity: LocalCryptoValue = tradeSide match {
-    case TradeSide.Buy => LocalCryptoValue(exchange, tradePair.quoteAsset, limit * amountBaseAsset * (1.0 + fee.average))
-    case TradeSide.Sell => LocalCryptoValue(exchange, tradePair.baseAsset, amountBaseAsset)
+    case TradeSide.Buy => LocalCryptoValue(exchange, tradePair.quoteAsset, limit * amountBaseAsset)
+    case TradeSide.Sell => LocalCryptoValue(exchange, tradePair.baseAsset, amountBaseAsset * (1.0 + fee.average))
     case _ => throw new IllegalArgumentException
   }
 
   // absolute (positive) amount minus fees
   def calcIncomingLiquidity: LocalCryptoValue = tradeSide match {
-    case TradeSide.Buy => LocalCryptoValue(exchange, tradePair.baseAsset, amountBaseAsset)
-    case TradeSide.Sell => LocalCryptoValue(exchange, tradePair.quoteAsset, limit * amountBaseAsset * (1.0 - fee.average))
+    case TradeSide.Buy => LocalCryptoValue(exchange, tradePair.baseAsset, amountBaseAsset * (1.0 - fee.average))
+    case TradeSide.Sell => LocalCryptoValue(exchange, tradePair.quoteAsset, limit * amountBaseAsset)
     case _ => throw new IllegalArgumentException
   }
 }
@@ -154,7 +159,8 @@ object OrderBill {
    * incoming value have positive amount; outgoing value have negative amount
    */
   def calcBalanceSheet(order: OrderRequest): Seq[LocalCryptoValue] = {
-    Seq(order.calcIncomingLiquidity, order.calcOutgoingLiquidity)
+    val out = order.calcOutgoingLiquidity
+    Seq(order.calcIncomingLiquidity, LocalCryptoValue(out.exchange, out.asset, -out.amount))
   }
 
   def aggregateValues(balanceSheet: Iterable[LocalCryptoValue],

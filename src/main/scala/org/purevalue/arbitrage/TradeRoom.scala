@@ -11,6 +11,7 @@ import akka.util.Timeout
 import org.purevalue.arbitrage.Exchange.{GetTradePairs, RemoveTradePair, StartStreaming}
 import org.purevalue.arbitrage.ExchangeAccountDataManager.{NewLimitOrder, NewOrderAck}
 import org.purevalue.arbitrage.ExchangeLiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityRequest}
+import org.purevalue.arbitrage.OrderSetPlacer.NewOrderSet
 import org.purevalue.arbitrage.TradeRoom._
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.purevalue.arbitrage.trader.FooTrader
@@ -150,7 +151,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   def placeOrders(orderRequests: List[OrderRequest]): Future[List[OrderRef]] = {
     implicit val timeout: Timeout = Config.httpTimeout.mul(2) // covers parallel order request + possible order cancel operations
 
-    (context.actorOf(OrderSetPlacer.props(exchanges)) ? orderRequests.map(o => NewLimitOrder(o)))
+    (context.actorOf(OrderSetPlacer.props(exchanges)) ? NewOrderSet(orderRequests.map(o => NewLimitOrder(o))))
       .mapTo[List[NewOrderAck]]
       .map(_.map(_.toOrderRef))
   }
@@ -212,6 +213,26 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     Await.result(exchanges(exchangeName) ? RemoveTradePair(tp), timeout.duration.plus(500.millis))
   }
 
+
+  def queryTradePairs(exchange:String): Set[TradePair] = {
+    implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
+    Await.result((exchanges(exchange) ? GetTradePairs()).mapTo[Set[TradePair]], timeout.duration.plus(500.millis))
+  }
+
+  def dropDoNotTouchTradepairs(): Unit = {
+    for (exchange: String <- exchanges.keys) {
+      val doNotTouchAssets = ExchangesConfig(exchange).doNotTouchTheseAssets
+      if (doNotTouchAssets.nonEmpty) {
+        val tp: Set[TradePair] = queryTradePairs(exchange)
+        val tpToDrop = tp.filter(e => doNotTouchAssets.contains(e.baseAsset) || doNotTouchAssets.contains(e.quoteAsset))
+        for (tp: TradePair <- tpToDrop) {
+          dropTradePairSync(exchange, tp)
+        }
+      }
+    }
+  }
+
+
   /**
    * Select none-reserve assets, where not at least two connected compatible TradePairs can be found looking at all exchanges.
    * Then we drop all TradePairs, connected to the selected ones.
@@ -229,10 +250,9 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
    * Parallel optimization is possible but not necessary for this small task
    */
   def dropUnusableTradepairsSync(): Unit = {
-    implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
     var eTradePairs: Set[Tuple2[String, TradePair]] = Set()
     for (exchange: String <- exchanges.keys) {
-      val tp: Set[TradePair] = Await.result((exchanges(exchange) ? GetTradePairs()).mapTo[Set[TradePair]], timeout.duration.plus(500.millis))
+      val tp: Set[TradePair] = queryTradePairs(exchange)
       eTradePairs = eTradePairs ++ tp.map(e => (exchange, e))
     }
     val assetsToRemove = eTradePairs
@@ -302,6 +322,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   }
 
   def cleanupTradePairs(): Unit = {
+    dropDoNotTouchTradepairs()
     dropUnusableTradepairsSync()
     log.info(s"${Emoji.Robot}  Finished cleanup of unusable trade pairs")
   }
@@ -411,6 +432,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     }
 
   override def preStart(): Unit = {
+    log.info(s"Starting with productionMode=${config.productionMode} and tradeSimulation=${config.tradeSimulation}")
     startExchanges()
     // REMARK: doing the tradepair cleanup here causes loss of some options for the reference ticker which leads to lesser balance conversion calculation options
     cleanupTradePairs()

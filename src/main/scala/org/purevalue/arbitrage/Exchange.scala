@@ -10,7 +10,6 @@ import org.purevalue.arbitrage.ExchangeLiquidityManager.{LiquidityLockClearance,
 import org.purevalue.arbitrage.TradeRoom.{ReferenceTicker, WalletUpdateTrigger}
 import org.slf4j.LoggerFactory
 
-import scala.collection._
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor}
 
@@ -44,8 +43,11 @@ case class Exchange(exchangeName: String,
   implicit val system: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = system.dispatcher
 
+  val tradeSimulation: Boolean = Config.tradeRoom.tradeSimulation
+
   var publicDataInquirer: ActorRef = _
   var liquidityManager: ActorRef = _
+  var tradeSimulator: Option[ActorRef] = None
 
   // dynamic
   var tradePairs: Set[TradePair] = _
@@ -66,9 +68,17 @@ case class Exchange(exchangeName: String,
   }
 
   def initAccountDataManager(): Unit = {
-    accountDataManager = context.actorOf(ExchangeAccountDataManager.props(config, publicDataInquirer, tradeRoom,
-      initStuff.exchangeAccountDataChannelProps, accountData),
+    accountDataManager = context.actorOf(
+      ExchangeAccountDataManager.props(
+        config,
+        publicDataInquirer,
+        tradeRoom,
+        initStuff.exchangeAccountDataChannelProps,
+        accountData),
       s"${config.exchangeName}.AccountDataManager")
+
+    if (tradeSimulation)
+      tradeSimulator = Some(context.actorOf(TradeSimulator.props(config, accountDataManager), s"${config.exchangeName}-TradeSimulator"))
   }
 
   def removeTradePairBeforeInitialized(tp: TradePair): Unit = {
@@ -103,7 +113,9 @@ case class Exchange(exchangeName: String,
     }
 
   override def preStart(): Unit = {
-    log.info(s"Initializing Exchange $exchangeName")
+    log.info(s"Initializing Exchange $exchangeName " +
+      s"${if (tradeSimulation) " in TRADE-SIMULATION mode"}" +
+      s"${if (config.doNotTouchTheseAssets.nonEmpty) s" NOT touching ${config.doNotTouchTheseAssets}"}")
     publicDataInquirer = context.actorOf(initStuff.publicDataInquirerProps(config), s"$exchangeName-PublicDataInquirer")
     liquidityManager = context.actorOf(ExchangeLiquidityManager.props(Config.liquidityManager, config, tradeRoom, tpData.readonly, accountData.wallet, referenceTicker.readonly))
 
@@ -113,13 +125,25 @@ case class Exchange(exchangeName: String,
     log.info(s"$exchangeName: ${tradePairs.size} TradePairs: ${tradePairs.toSeq.sortBy(e => e.toString)}")
   }
 
+  def checkValidity(o: NewLimitOrder): Unit = {
+    if (config.doNotTouchTheseAssets.contains(o.o.tradePair.baseAsset) || config.doNotTouchTheseAssets.contains(o.o.tradePair.quoteAsset))
+      throw new IllegalArgumentException("Order with DO-NOT-TOUCH asset")
+  }
+
   override def receive: Receive = {
 
     // Messages from TradeRoom side
     case GetTradePairs() => sender() ! tradePairs
     case f: FetchOrder => accountDataManager.forward(f)
-    case c: CancelOrder => accountDataManager.forward(c)
-    case o: NewLimitOrder => accountDataManager.forward(o)
+
+    case c: CancelOrder =>
+      if (tradeSimulation) tradeSimulator.get.forward(c)
+      else accountDataManager.forward(c)
+
+    case o: NewLimitOrder =>
+      checkValidity(o)
+      if (tradeSimulation) tradeSimulator.get.forward(o)
+      else accountDataManager.forward(o)
 
     case l: LiquidityRequest => liquidityManager.forward(l)
     case c: LiquidityLockClearance => liquidityManager.forward(c)

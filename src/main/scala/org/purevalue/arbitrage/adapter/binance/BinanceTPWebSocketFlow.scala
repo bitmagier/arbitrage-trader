@@ -141,6 +141,15 @@ case class BinanceTPWebSocketFlow(config: ExchangeConfig, tradePair: BinanceTrad
     }
   }
 
+  def deliverExtendedTickerState(): Unit = {
+    httpGetJson[RawExtendedTickerRestJson](s"$BaseRestEndpoint/api/v3/ticker/24hr?symbol=${tradePair.symbol}") onComplete {
+      case Success(eTicker) =>
+        restSource._1.offer(eTicker)
+      case Failure(e) =>
+        log.error("Query/Transform RawExtendedTickerRestJson failed", e)
+    }
+  }
+
   override def receive: Receive = {
 
     case StartStreamRequest(sink) =>
@@ -150,6 +159,7 @@ case class BinanceTPWebSocketFlow(config: ExchangeConfig, tradePair: BinanceTrad
         createFlowTo(sink))
       connected = createConnected
       deliverBookTickerState()
+      deliverExtendedTickerState()
 
     case Status.Failure(cause) =>
       log.error("received failure", cause)
@@ -180,6 +190,30 @@ case class RawPartialOrderBookStreamJson(lastUpdateId: Int, bids: Seq[Seq[String
 //  }
 //}
 
+
+case class RawExtendedTickerRestJson(symbol: String,
+                                     priceChange: String,
+                                     priceChangePercent: String,
+                                     weightedAvgPrice: String,
+                                     prevClosePrice: String,
+                                     lastPrice: String,
+                                     lastQty: String,
+                                     bidPrice: String,
+                                     askPrice: String,
+                                     openPrice: String,
+                                     highPrice: String,
+                                     lowPrice: String,
+                                     volume: String,
+                                     quoteVolume: String,
+                                     openTime: Long,
+                                     closeTime: Long,
+                                     firstId: Long,
+                                     lastId: Long,
+                                     count: Long) extends IncomingBinanceTradepairJson {
+  def toExtendedTicker(exchange: String, tradePair: TradePair): ExtendedTicker =
+    ExtendedTicker(exchange, tradePair, bidPrice.toDouble, askPrice.toDouble, lastPrice.toDouble, lastQty.toDouble, weightedAvgPrice.toDouble)
+}
+
 // {"e":"24hrTicker","E":1596735092288,"s":"ADABTC","p":"-0.00000008","P":"-0.651","w":"0.00001214","x":"0.00001228","c":"0.00001220","Q":"5329.00000000",
 //  "b":"0.00001220","B":"10709.00000000","a":"0.00001221","A":"323762.00000000","o":"0.00001228","h":"0.00001239","l":"0.00001196","v":"147269686.00000000",
 //  "q":"1788.50464895","O":1596648691106,"C":1596735091106,"F":39864151,"L":39900689,"n":36539}
@@ -208,7 +242,7 @@ case class RawExtendedTickerStreamJson(e: String, // e == "24hrTicker"
                                        n: Long // total number of trades
                                       ) extends IncomingBinanceTradepairJson {
   def toExtendedTicker(exchange: String, tradePair: TradePair): ExtendedTicker =
-    ExtendedTicker(exchange, tradePair, b.toDouble, B.toDouble, a.toDouble, A.toDouble, c.toDouble, Q.toDouble, w.toDouble)
+    ExtendedTicker(exchange, tradePair, b.toDouble, a.toDouble, c.toDouble, Q.toDouble, w.toDouble)
 }
 
 
@@ -237,7 +271,8 @@ object WebSocketJsonProtocoll extends DefaultJsonProtocol {
   implicit val subscribeMsg: RootJsonFormat[TPStreamSubscribeRequestJson] = jsonFormat3(TPStreamSubscribeRequestJson)
   //  implicit val bookUpdate: RootJsonFormat[RawOrderBookUpdateJson] = jsonFormat7(RawOrderBookUpdateJson)
   implicit val partialBookStream: RootJsonFormat[RawPartialOrderBookStreamJson] = jsonFormat3(RawPartialOrderBookStreamJson)
-  implicit val rawBookTickerStream: RootJsonFormat[RawBookTickerStreamJson] = jsonFormat6(RawBookTickerStreamJson)
   implicit val rawBookTickerRest: RootJsonFormat[RawBookTickerRestJson] = jsonFormat5(RawBookTickerRestJson)
+  implicit val rawBookTickerStream: RootJsonFormat[RawBookTickerStreamJson] = jsonFormat6(RawBookTickerStreamJson)
+  implicit val rawExtendedTickerRestJson: RootJsonFormat[RawExtendedTickerRestJson] = jsonFormat19(RawExtendedTickerRestJson)
   implicit val rawExtendedTickerStream: RootJsonFormat[RawExtendedTickerStreamJson] = jsonFormat22(RawExtendedTickerStreamJson)
 }

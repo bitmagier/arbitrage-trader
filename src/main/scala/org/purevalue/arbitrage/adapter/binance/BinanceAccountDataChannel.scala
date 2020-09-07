@@ -97,11 +97,12 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
 
   val downStreamFlow: Flow[IncomingBinanceAccountJson, ExchangeAccountStreamData, NotUsed] = Flow.fromFunction {
     // @formatter:off
+    case a: AccountInformationJson      => a.toWallet
     case a: OutboundAccountPositionJson => a.toWalletUpdate
     case b: BalanceUpdateJson           => b.toWalletBalanceUpdate
     case o: OrderExecutionReportJson    => o.toOrderOrOrderUpdate(config.exchangeName, symbol => binanceTradePairs.find(_.symbol == symbol).get) // expecting, that we have all relevant trade pairs
     case o: OpenOrderJson               => o.toOrder(config.exchangeName, symbol => binanceTradePairs.find(_.symbol == symbol).get)
-    case _                              => throw new NotImplementedError
+    case x@_                            => log.debug(s"$x"); throw new NotImplementedError
     // @formatter:on
   }
 
@@ -364,7 +365,7 @@ case class OpenOrderJson(symbol: String,
                          isWorking: Boolean
                          // origQuoteOrderQty: String
                         ) extends IncomingBinanceAccountJson {
-  def toOrder(exchange:String, resolveTradePair: String => TradePair): Order = Order(
+  def toOrder(exchange: String, resolveTradePair: String => TradePair): Order = Order(
     orderId.toString,
     exchange,
     resolveTradePair(symbol),
@@ -420,7 +421,7 @@ case class OrderExecutionReportJson(e: String, // Event type
                                     // Q: String // Quote Order Qty
                                    ) extends IncomingBinanceAccountJson {
 
-  def toOrderOrOrderUpdate(exchange:String, resolveTradePair: String => TradePair): ExchangeAccountStreamData =
+  def toOrderOrOrderUpdate(exchange: String, resolveTradePair: String => TradePair): ExchangeAccountStreamData =
     if (X == "NEW") toOrder(exchange, resolveTradePair)
     else toOrderUpdate(resolveTradePair)
 
@@ -442,7 +443,7 @@ case class OrderExecutionReportJson(e: String, // Event type
     Z.toDouble / z.toDouble,
     Instant.ofEpochMilli(E))
 
-  def toOrder(exchange:String, resolveTradePair: String => TradePair): Order = Order(
+  def toOrder(exchange: String, resolveTradePair: String => TradePair): Order = Order(
     i.toString,
     exchange,
     resolveTradePair(s),

@@ -30,9 +30,7 @@ case class Ticker(exchange: String,
 case class ExtendedTicker(exchange: String,
                           tradePair: TradePair,
                           highestBidPrice: Double,
-                          highestBidQuantity: Double,
                           lowestAskPrice: Double,
-                          lowestAskQuantity: Double,
                           lastPrice: Double,
                           lastQuantity: Double,
                           weightedAveragePrice24h: Double) extends ExchangeTPStreamData {
@@ -140,48 +138,50 @@ case class ExchangePublicTPDataManager(config: ExchangeConfig,
       (if (config.orderBooksEnabled) orderBookInitialized else true)
 
   val sink: Sink[Seq[ExchangeTPStreamData], Future[Done]] = Sink.foreach[Seq[ExchangeTPStreamData]] {
-    data: Seq[ExchangeTPStreamData] =>
-      if (!stopData.get()) {
-        data.foreach {
-          case t: Ticker =>
-            tpData.ticker += tradePair -> t
-            tpData.age.tickerTS = Instant.now
+    applyDataset
+  }
 
-          case t: ExtendedTicker =>
-            tpData.extendedTicker += tradePair -> t
-            tpData.age.extendedTickerTS = Instant.now
+  private def applyDataset(data: Seq[ExchangeTPStreamData]): Unit = {
+    if (!stopData.get()) {
+      data.foreach {
+        case t: Ticker =>
+          tpData.ticker += tradePair -> t
+          tpData.age.tickerTS = Instant.now
 
-          case o: OrderBookSnapshot =>
+        case t: ExtendedTicker =>
+          tpData.extendedTicker += tradePair -> t
+          tpData.age.extendedTickerTS = Instant.now
+
+        case o: OrderBookSnapshot =>
+          tpData.orderBook += tradePair ->
+            OrderBook(
+              config.exchangeName,
+              tradePair,
+              o.bids.filterNot(_.quantity == 0.0d).map(e => (e.price, e)).toMap,
+              o.asks.filterNot(_.quantity == 0.0d).map(e => (e.price, e)).toMap
+            )
+          tpData.age.orderBookTS = Instant.now
+          orderBookInitialized = true
+
+        case o: OrderBookUpdate =>
+          if (tpData.orderBook.isDefinedAt(tradePair)) {
             tpData.orderBook += tradePair ->
               OrderBook(
                 config.exchangeName,
                 tradePair,
-                o.bids.filterNot(_.quantity == 0.0d).map(e => (e.price, e)).toMap,
-                o.asks.filterNot(_.quantity == 0.0d).map(e => (e.price, e)).toMap
+                (tpData.orderBook(tradePair).bids ++ o.bids.map(e => e.price -> e)).filterNot(_._2.quantity == 0.0d),
+                (tpData.orderBook(tradePair).asks ++ o.asks.map(e => e.price -> e)).filterNot(_._2.quantity == 0.0d)
               )
             tpData.age.orderBookTS = Instant.now
-            orderBookInitialized = true
+          } else {
+            log.warn(s"$o received, but no OrderBook present yet")
+          }
 
-          case o: OrderBookUpdate =>
-            if (tpData.orderBook.isDefinedAt(tradePair)) {
-              tpData.orderBook += tradePair ->
-                OrderBook(
-                  config.exchangeName,
-                  tradePair,
-                  (tpData.orderBook(tradePair).bids ++ o.bids.map(e => e.price -> e)).filterNot(_._2.quantity == 0.0d),
-                  (tpData.orderBook(tradePair).asks ++ o.asks.map(e => e.price -> e)).filterNot(_._2.quantity == 0.0d)
-                )
-              tpData.age.orderBookTS = Instant.now
-            } else {
-              log.warn(s"$o received, but no OrderBook present yet")
-            }
-
-          case _ => throw new NotImplementedError
-        }
-        eventuallyInitialized()
+        case _ => throw new NotImplementedError
       }
+      eventuallyInitialized()
+    }
   }
-
 
   def eventuallyInitialized(): Unit = {
     if (!initializedMsgSend && initialized) {

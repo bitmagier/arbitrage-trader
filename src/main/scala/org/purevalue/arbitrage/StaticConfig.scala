@@ -68,7 +68,7 @@ object StaticConfig {
     Asset("SNX", "Synthetix Network Token"),
   //  Asset("DGB", "DigiByte"),
     Asset("KNC", "Kyber Network"),
-    Asset("ERD", "Elrond"),
+    Asset("EGLD", "Elrond"),
     Asset("ZRX", "0x"),
     Asset("THETA", "THETA"),
     Asset("BTT", "BitTorrent"),

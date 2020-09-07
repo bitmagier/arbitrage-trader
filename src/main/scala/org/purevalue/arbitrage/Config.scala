@@ -5,7 +5,6 @@ import java.util.concurrent.TimeUnit
 
 import akka.util.Timeout
 import com.typesafe.config.ConfigFactory
-import org.slf4j.LoggerFactory
 
 import scala.collection.JavaConverters._
 import scala.concurrent.duration.FiniteDuration
@@ -19,20 +18,28 @@ case class ExchangeConfig(exchangeName: String,
                           tradeAssets: Set[String],
                           makerFee: Double,
                           takerFee: Double,
-                          orderBooksEnabled: Boolean) {
-
+                          orderBooksEnabled: Boolean,
+                          doNotTouchTheseAssets: Set[Asset]) {
   def fee: Fee = Fee(exchangeName, makerFee, takerFee)
 }
+
 object ExchangeConfig {
-  def apply(name:String, c:com.typesafe.config.Config): ExchangeConfig = ExchangeConfig(
-    name,
-    secretsConfig(c.getConfig("secrets")),
-    c.getStringList("reserve-assets").asScala.map(e => Asset(e)).toList,
-    c.getStringList("trade-assets").asScala.toSet,
-    c.getDouble("fee.maker"),
-    c.getDouble("fee.taker"),
-    c.getBoolean("order-books-enabled")
-  )
+  def apply(name:String, c:com.typesafe.config.Config): ExchangeConfig = {
+    val doNotTouchTheseAssets = c.getStringList("do-not-touch-these-assets").asScala.map(e => Asset(e)).toSet
+    val reserveAssets = c.getStringList("reserve-assets").asScala.map(e => Asset(e)).toList
+    if (reserveAssets.exists(doNotTouchTheseAssets.contains))
+      throw new IllegalArgumentException(s"$name: reserve-assets & do-not-touch-these-assets overlap!")
+    ExchangeConfig(
+      name,
+      secretsConfig(c.getConfig("secrets")),
+      reserveAssets,
+      c.getStringList("trade-assets").asScala.toSet,
+      c.getDouble("fee.maker"),
+      c.getDouble("fee.taker"),
+      c.getBoolean("order-books-enabled"),
+      doNotTouchTheseAssets
+    )
+  }
 
   private def secretsConfig(c: com.typesafe.config.Config) = SecretsConfig(
     c.getString("api-key"),
@@ -45,6 +52,7 @@ case class OrderBundleSafetyGuardConfig(maximumReasonableWinPerOrderBundleUSDT: 
                                         maxTickerAge: Duration,
                                         minTotalGainInUSDT: Double)
 case class TradeRoomConfig(productionMode: Boolean,
+                           tradeSimulation: Boolean,
                            referenceTickerExchange: String,
                            orderBooksEnabled: Boolean,
                            stats: TradeRoomStatsConfig,
@@ -53,6 +61,7 @@ case class TradeRoomConfig(productionMode: Boolean,
 object TradeRoomConfig {
   def apply(c: com.typesafe.config.Config): TradeRoomConfig = TradeRoomConfig(
     c.getBoolean("production-mode"),
+    c.getBoolean("trade-simulation"),
     c.getString("reference-ticker-exchange"),
     c.getBoolean("order-books-enabled"),
     TradeRoomStatsConfig(
@@ -92,7 +101,6 @@ object LiquidityManagerConfig {
 }
 
 object Config {
-  private val log = LoggerFactory.getLogger("Config")
   private val c = ConfigFactory.load()
 
   val httpTimeout: FiniteDuration = FiniteDuration(c.getDuration("http-timeout").toMillis, TimeUnit.MILLISECONDS)

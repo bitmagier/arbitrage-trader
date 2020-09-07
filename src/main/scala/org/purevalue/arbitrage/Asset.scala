@@ -35,10 +35,10 @@ object Asset {
 // a universal usable trade-pair
 abstract class TradePair {
 
-  def reverse: TradePair = TradePair.of(quoteAsset, baseAsset)
+  def baseAsset: Asset
+  def quoteAsset: Asset
 
-  val baseAsset: Asset
-  val quoteAsset: Asset
+  def reverse: TradePair = TradePair(quoteAsset, baseAsset)
 
   override def toString: String = s"${baseAsset.officialSymbol}:${quoteAsset.officialSymbol}"
 
@@ -58,8 +58,6 @@ object TradePair {
     override val baseAsset: Asset = b
     override val quoteAsset: Asset = q
   }
-
-  def of(b: Asset, q: Asset): TradePair = apply(b, q)
 }
 
 
@@ -73,17 +71,17 @@ case class CryptoValue(asset: Asset, amount: Double) {
       Some(this)
     else {
       // try direct conversion first
-      findConversionRate(TradePair.of(this.asset, targetAsset)) match {
+      findConversionRate(TradePair(this.asset, targetAsset)) match {
         case Some(rate) =>
           Some(CryptoValue(targetAsset, amount * rate))
         case None =>
-          findConversionRate(TradePair.of(targetAsset, this.asset)) match { // try reverse ticker
+          findConversionRate(TradePair(targetAsset, this.asset)) match { // try reverse ticker
             case Some(rate) =>
               Some(CryptoValue(targetAsset, amount / rate))
             case None => // try conversion via BTC as last option
               if ((this.asset != Bitcoin && targetAsset != Bitcoin)
-                && findConversionRate(TradePair.of(this.asset, Bitcoin)).isDefined
-                && findConversionRate(TradePair.of(targetAsset, Bitcoin)).isDefined) {
+                && findConversionRate(TradePair(this.asset, Bitcoin)).isDefined
+                && findConversionRate(TradePair(targetAsset, Bitcoin)).isDefined) {
                 this.convertTo(Bitcoin, findConversionRate).get.convertTo(targetAsset, findConversionRate)
               } else {
                 log.debug(s"unable to convert $asset -> $targetAsset")

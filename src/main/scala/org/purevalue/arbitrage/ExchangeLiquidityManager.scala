@@ -138,8 +138,9 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
       .groupBy(_.asset) // group by asset
       .map(e => (e._1, e._2.map(_.amount).sum)) // sum up values of same asset
 
-    wallet.balance.map(e =>
-      (e._1, Math.max(0.0, e._2.amountAvailable - lockedLiquidity.getOrElse(e._1, 0.0)))
+    wallet.balance
+      .filterNot(e => exchangeConfig.doNotTouchTheseAssets.contains(e._1))
+      .map(e => (e._1, Math.max(0.0, e._2.amountAvailable - lockedLiquidity.getOrElse(e._1, 0.0)))
     )
   }
 
@@ -148,12 +149,12 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
   def lockLiquidity(r: LiquidityRequest): Option[LiquidityLock] = {
     noticeDemand(LiquidityDemand(r)) // we always notice/refresh the demand, when 'someone' wants to lock liquidity
 
-    val freeBalances: Map[Asset, Double] = determineUnlockedBalance
+    val unlockedBalances: Map[Asset, Double] = determineUnlockedBalance
     val sumCoinsPerAsset = r.coins // coins should contain already only values of different assets, but we need to be 100% sure, that we do not work with multiple requests for the same coin
       .groupBy(_.asset)
       .map(x => CryptoValue(x._1, x._2.map(_.amount).sum))
 
-    if (sumCoinsPerAsset.forall(c => freeBalances.getOrElse(c.asset, 0.0) >= c.amount)) {
+    if (sumCoinsPerAsset.forall(c => unlockedBalances.getOrElse(c.asset, 0.0) >= c.amount)) {
       val lock = LiquidityLock(r.exchange, r.id, r.coins, Instant.now)
       addLock(lock)
       Some(lock)
@@ -164,8 +165,8 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
 
   def checkValidity(r: LiquidityRequest): Unit = {
     if (r.exchange != exchangeConfig.exchangeName) throw new IllegalArgumentException
+    if (r.coins.exists(c => exchangeConfig.doNotTouchTheseAssets.contains(c.asset))) throw new IllegalArgumentException("liquidity request for a DO-NOT-TOUCH asset")
   }
-
 
   /**
    * Calculates manufacturing costs for the demand in the reserveAsset unit
@@ -218,12 +219,12 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
     val bestReserveAssets: Option[Tuple2[Asset, Double]] =
       exchangeConfig.reserveAssets
         .filterNot(demand.dontUseTheseReserveAssets.contains)
-        .filter(e => tpData.ticker.keySet.contains(TradePair.of(demand.asset, e))) // ticker available for trade pair?
+        .filter(e => tpData.ticker.keySet.contains(TradePair(demand.asset, e))) // ticker available for trade pair?
         .filter(e => estimatedManufactingCosts(demand, e) match { // enough balance available in liquidity providing asset?
           case Some(costs) => wallet.balance.get(e).map(_.amountAvailable).getOrElse(0.0) >= costs
           case None => false
         })
-        .map(e => (e, localTickerRating(TradePair.of(demand.asset, e), TradeSide.Buy)))
+        .map(e => (e, localTickerRating(TradePair(demand.asset, e), TradeSide.Buy)))
         .filter(_._2.isDefined) // filter available TradePairs (where a local ticker exists)
         .map(e => (e._1, e._2.get))
         .filter(_._2 >= -config.maxAcceptableLocalTickerLossFromReferenceTicker) // ticker rate acceptable?
@@ -236,7 +237,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
     } else {
       if (log.isTraceEnabled) log.trace(s"Found best usable reserve asset: ${bestReserveAssets.get._1}, rating=${bestReserveAssets.get._2} for providing $demand")
       val orderAmount: Double = demand.amount * (1.0 + config.providingLiquidityExtra)
-      val tradePair = TradePair.of(demand.asset, bestReserveAssets.get._1)
+      val tradePair = TradePair(demand.asset, bestReserveAssets.get._1)
       val limit = guessGoodLimit(tradePair, TradeSide.Buy, orderAmount)
       val orderRequest = OrderRequest(UUID.randomUUID(), null, exchangeConfig.exchangeName, tradePair, TradeSide.Buy, exchangeConfig.fee, orderAmount, limit)
 
@@ -291,14 +292,19 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
   //    - [fill-up] Try to reach minimum configured balance of each reserve-assets in their order of preference
   //    - [play safe] Remaining value goes to first (highest prio) reserve-asset (having a acceptable exchange-rate)
   def convertBackToReserveAsset(coins: CryptoValue): Option[CryptoValue] = {
-    val availableReserveAssets: List[Tuple2[Asset, Double]] =
+    val possibleReserveAssets: List[Tuple2[Asset, Double]] =
       exchangeConfig.reserveAssets
-        .map(e => (e, localTickerRating(TradePair.of(coins.asset, e), TradeSide.Sell))) // add rating
+        .map(e => (e, localTickerRating(TradePair(coins.asset, e), TradeSide.Sell))) // add rating
         .filter(_._2.isDefined) // filter available TradePairs only (with a local ticker)
         .map(e => (e._1, e._2.get))
+
+    val availableReserveAssets: List[Tuple2[Asset, Double]] =
+      possibleReserveAssets
         .filter(_._2 >= -config.maxAcceptableLocalTickerLossFromReferenceTicker) // [non-loss-asset-filter]
+
     if (availableReserveAssets.isEmpty) {
-      if (log.isTraceEnabled) log.trace(s"Currently no reserve asset available with a good exchange-rate to convert back $coins")
+      if (possibleReserveAssets.isEmpty) log.debug(s"No reserve asset available to convert back $coins")
+      else log.debug(s"Currently no reserve asset available with a good exchange-rate to convert back $coins")
       return None
     }
 
@@ -319,7 +325,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
       log.debug(s"transferring $coins back to reserve asset ${destinationReserveAsset.get} [play safe]")
     }
 
-    val tradePair = TradePair.of(coins.asset, destinationReserveAsset.get)
+    val tradePair = TradePair(coins.asset, destinationReserveAsset.get)
     val limit: Double = guessGoodLimit(tradePair, TradeSide.Sell, coins.amount)
     val orderRequest = OrderRequest(
       UUID.randomUUID(),
@@ -361,8 +367,8 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
   }
 
   def liquidityConversionPossibleBetween(a: Asset, b: Asset): Boolean = {
-    tpData.ticker.keySet.contains(TradePair.of(a, b)) ||
-      tpData.ticker.keySet.contains(TradePair.of(b, a))
+    tpData.ticker.keySet.contains(TradePair(a, b)) ||
+      tpData.ticker.keySet.contains(TradePair(b, a))
   }
 
   def rebalanceReserveAssetsAmountOrders(pendingIncomingReserveLiquidity: List[CryptoValue]): List[OrderRequest] = {
@@ -444,7 +450,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
           }
 
         val tx: OrderRequest =
-          TradePair.of(sinkAsset, sourceAsset.get) match {
+          TradePair(sinkAsset, sourceAsset.get) match {
 
             case tp if tpData.ticker.contains(tp) =>
               val tradePair = tp

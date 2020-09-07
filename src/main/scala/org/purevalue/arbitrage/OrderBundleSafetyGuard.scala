@@ -98,7 +98,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
         .filterNot(e => exchangesConfig(e.exchange).reserveAssets.contains(e.asset))
 
     def findUsableReserveAsset(exchange: String, coin: Asset, possibleReserveAssets: Set[Asset]): Option[Asset] = {
-      possibleReserveAssets.find(r => tickers(exchange).contains(TradePair.of(coin, r)))
+      possibleReserveAssets.find(r => tickers(exchange).contains(TradePair(coin, r)))
     }
 
     val unableToProvideConversionForCoin: Option[LocalCryptoValue] = {
@@ -111,7 +111,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
 
     val transactions: Iterable[OrderRequest] =
       toProvide.map(e => {
-        val tradePair = TradePair.of(e.asset, findUsableReserveAsset(e.exchange, e.asset, uninvolvedReserveAssetsPerExchange(e.exchange)).get)
+        val tradePair = TradePair(e.asset, findUsableReserveAsset(e.exchange, e.asset, uninvolvedReserveAssetsPerExchange(e.exchange)).get)
         OrderRequest(null, null,
           e.exchange,
           tradePair,
@@ -121,7 +121,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
           tickers(e.exchange)(tradePair).priceEstimate
         )
       }) ++ toConvertBack.map(e => {
-        val tradePair = TradePair.of(e.asset, findUsableReserveAsset(e.exchange, e.asset, uninvolvedReserveAssetsPerExchange(e.exchange)).get)
+        val tradePair = TradePair(e.asset, findUsableReserveAsset(e.exchange, e.asset, uninvolvedReserveAssetsPerExchange(e.exchange)).get)
         OrderRequest(null, null,
           e.exchange,
           tradePair,

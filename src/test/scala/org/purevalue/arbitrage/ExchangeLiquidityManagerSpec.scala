@@ -1,6 +1,5 @@
 package org.purevalue.arbitrage
 
-import java.time.temporal.ChronoUnit
 import java.time.{Duration, Instant}
 import java.util.UUID
 
@@ -9,9 +8,8 @@ import akka.pattern.ask
 import akka.testkit.{ImplicitSender, TestKit, TestProbe}
 import akka.util.Timeout
 import org.purevalue.arbitrage.Asset.{Bitcoin, USDT}
-import org.purevalue.arbitrage.ExchangeLiquidityManager.{LiquidityDemand, LiquidityLock, LiquidityLockClearance, LiquidityRequest}
+import org.purevalue.arbitrage.ExchangeLiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityRequest}
 import org.purevalue.arbitrage.TradeRoom.{LiquidityTransformationOrder, ReferenceTickerReadonly, WalletUpdateTrigger}
-import org.scalamock.scalatest.MockFactory
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpecLike
@@ -25,8 +23,8 @@ class ExchangeLiquidityManagerSpec
     with AnyWordSpecLike
     with Matchers
     with BeforeAndAfterAll
-    with MockFactory {
-
+//    with MockFactory
+{
   private val Config =
     LiquidityManagerConfig(
       Duration.ofSeconds(5),
@@ -45,24 +43,25 @@ class ExchangeLiquidityManagerSpec
       tradeAssets = null,
       makerFee = 0.0, // TODO make everything working including fees
       takerFee = 0.0,
-      orderBooksEnabled = false
+      orderBooksEnabled = false,
+      Set()
     )
 
   private val BitcoinPriceUSD = 10200.24
   private val EthPriceUSD = 342.12
   private val referenceTicker = ReferenceTickerReadonly(
     Map[TradePair, Double](
-      TradePair.of(Bitcoin, USDT) -> BitcoinPriceUSD,
-      TradePair.of(Asset("ETH"), USDT) -> EthPriceUSD,
-      TradePair.of(Asset("ETH"), Bitcoin) -> 0.03348914,
-      TradePair.of(Asset("ALGO"), USDT) -> 0.35,
-      TradePair.of(Asset("ALGO"), Bitcoin) -> 0.089422,
-      TradePair.of(Asset("ADA"), USDT) -> 0.0891,
-      TradePair.of(Asset("ADA"), Bitcoin) -> 0.00000875,
-      TradePair.of(Asset("LINK"), USDT) -> 10.55,
-      TradePair.of(Asset("LINK"), Bitcoin) -> 0.001063,
-      TradePair.of(Asset("LINK"), Asset("ETH")) -> 0.0301,
-    ).map(e => e._1 -> ExtendedTicker("e1", e._1, e._2, 1.0, e._2, 1.0, e._2, 1.0, e._2)))
+      TradePair(Bitcoin, USDT) -> BitcoinPriceUSD,
+      TradePair(Asset("ETH"), USDT) -> EthPriceUSD,
+      TradePair(Asset("ETH"), Bitcoin) -> 0.03348914,
+      TradePair(Asset("ALGO"), USDT) -> 0.35,
+      TradePair(Asset("ALGO"), Bitcoin) -> 0.089422,
+      TradePair(Asset("ADA"), USDT) -> 0.0891,
+      TradePair(Asset("ADA"), Bitcoin) -> 0.00000875,
+      TradePair(Asset("LINK"), USDT) -> 10.55,
+      TradePair(Asset("LINK"), Bitcoin) -> 0.001063,
+      TradePair(Asset("LINK"), Asset("ETH")) -> 0.0301,
+    ).map(e => e._1 -> ExtendedTicker("e1", e._1, e._2, e._2, e._2, 1.0, e._2)))
 
 
   private val tickers: Map[String, Map[TradePair, Ticker]] =
@@ -100,8 +99,8 @@ class ExchangeLiquidityManagerSpec
       tradeRoom.expectNoMessage(1.second)
       println(messages)
       messages should have length 2
-      val tpEthBtc = TradePair.of(Asset("ETH"), Bitcoin)
-      val tpBtcUsdt = TradePair.of(Bitcoin, USDT)
+      val tpEthBtc = TradePair(Asset("ETH"), Bitcoin)
+      val tpBtcUsdt = TradePair(Bitcoin, USDT)
       assert(messages.map(_.orderRequest.tradePair).toSet == Set(tpEthBtc, tpBtcUsdt))
 
       val orderEthBtc = messages.find(_.orderRequest.tradePair == tpEthBtc).get.orderRequest
@@ -157,10 +156,10 @@ class ExchangeLiquidityManagerSpec
       println(s"got expected 4 messages: \n${messages.mkString("\n")}")
 
       messages should have length 4
-      val algoToUsdtOrder = messages.find(_.orderRequest.tradePair == TradePair.of(Asset("ALGO"), USDT)).map(_.orderRequest)
-      val ethToLinkOrder = messages.find(_.orderRequest.tradePair == TradePair.of(Asset("LINK"), Asset("ETH"))).map(_.orderRequest)
-      val ethToUsdtOrder = messages.find(_.orderRequest.tradePair == TradePair.of(Asset("ETH"), USDT)).map(_.orderRequest)
-      val btcToUsdtOrder = messages.find(_.orderRequest.tradePair == TradePair.of(Bitcoin, USDT)).map(_.orderRequest)
+      val algoToUsdtOrder = messages.find(_.orderRequest.tradePair == TradePair(Asset("ALGO"), USDT)).map(_.orderRequest)
+      val ethToLinkOrder = messages.find(_.orderRequest.tradePair == TradePair(Asset("LINK"), Asset("ETH"))).map(_.orderRequest)
+      val ethToUsdtOrder = messages.find(_.orderRequest.tradePair == TradePair(Asset("ETH"), USDT)).map(_.orderRequest)
+      val btcToUsdtOrder = messages.find(_.orderRequest.tradePair == TradePair(Bitcoin, USDT)).map(_.orderRequest)
 
       assert(algoToUsdtOrder.isDefined)
       algoToUsdtOrder.get.tradeSide shouldBe TradeSide.Sell
@@ -213,7 +212,7 @@ class ExchangeLiquidityManagerSpec
       val message1: LiquidityTransformationOrder = tradeRoom.expectMsgClass(2.seconds, classOf[LiquidityTransformationOrder])
       tradeRoom.expectNoMessage(1.second)
 
-      message1.orderRequest.tradePair shouldBe TradePair.of(Asset("ALGO"), USDT)
+      message1.orderRequest.tradePair shouldBe TradePair(Asset("ALGO"), USDT)
       message1.orderRequest.tradeSide shouldBe TradeSide.Sell
       message1.orderRequest.calcOutgoingLiquidity.asset shouldBe Asset("ALGO")
       message1.orderRequest.calcOutgoingLiquidity.amount shouldBe 200.0 +- CheckSpread

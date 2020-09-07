@@ -2,6 +2,7 @@ package org.purevalue.arbitrage
 
 import akka.actor.{Actor, ActorRef, PoisonPill, Props, Status}
 import org.purevalue.arbitrage.ExchangeAccountDataManager.{CancelOrder, CancelOrderResult, NewLimitOrder, NewOrderAck}
+import org.purevalue.arbitrage.OrderSetPlacer.NewOrderSet
 import org.slf4j.LoggerFactory
 
 /**
@@ -9,6 +10,8 @@ import org.slf4j.LoggerFactory
  * If one order placement fails, it tries to immediately cancel the successful ones
  */
 object OrderSetPlacer {
+  case class NewOrderSet(orders:Seq[NewLimitOrder])
+
   def props(exchanges: Map[String, ActorRef]): Props = Props(new OrderSetPlacer(exchanges))
 }
 case class OrderSetPlacer(exchanges: Map[String, ActorRef]) extends Actor {
@@ -20,10 +23,10 @@ case class OrderSetPlacer(exchanges: Map[String, ActorRef]) extends Actor {
   private var expectedCancelOrderResults: Int = 0
 
   override def receive: Receive = {
-    case request: List[NewLimitOrder] =>
+    case request: NewOrderSet =>
       requestSender = sender()
-      numRequests = request.length
-      request.foreach { o =>
+      numRequests = request.orders.length
+      request.orders.foreach { o =>
         exchanges(o.o.exchange) ! o
       }
 
