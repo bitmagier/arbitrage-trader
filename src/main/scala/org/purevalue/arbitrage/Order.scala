@@ -4,7 +4,7 @@ import java.time.{Instant, LocalDateTime}
 import java.util.UUID
 
 import akka.actor.ActorRef
-import org.purevalue.arbitrage.TradeRoom.{OrderRef, ReferenceTicker}
+import org.purevalue.arbitrage.TradeRoom.{OrderRef, ReferenceTicker, TickersReadonly}
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.slf4j.LoggerFactory
 
@@ -145,7 +145,7 @@ case class OrderRequest(id: UUID,
  * The bill which is expected from executing an OrderRequest
  * (direct costs only, not including liquidity TXs)
  */
-case class OrderBill(balanceSheet: Seq[CryptoValue], sumUSDT: Double) {
+case class OrderBill(balanceSheet: Seq[LocalCryptoValue], sumUSDT: Double) {
   override def toString: String = s"OrderRequestBill(balanceSheet:$balanceSheet, sumUSDT:${formatDecimal(sumUSDT, 2)})"
 }
 object OrderBill {
@@ -153,24 +153,19 @@ object OrderBill {
    * Calculates the balance sheet of that order
    * incoming value have positive amount; outgoing value have negative amount
    */
-  def calcBalanceSheet(order: OrderRequest): Seq[CryptoValue] = {
-    val result = ArrayBuffer[CryptoValue]()
-    order.calcIncomingLiquidity match {
-      case v: LocalCryptoValue => result.append(CryptoValue(v.asset, v.amount))
-    }
-    order.calcOutgoingLiquidity match {
-      case v: LocalCryptoValue => result.append(CryptoValue(v.asset, -v.amount))
-    }
-    result
+  def calcBalanceSheet(order: OrderRequest): Seq[LocalCryptoValue] = {
+    Seq(order.calcIncomingLiquidity, order.calcOutgoingLiquidity)
   }
 
-  def aggregateValues(balanceSheet: Iterable[CryptoValue], targetAsset: Asset, findReferenceRate: TradePair => Option[Double]): Double = {
-    val sumByAsset: Iterable[CryptoValue] = balanceSheet
-      .groupBy(_.asset)
-      .map(e => CryptoValue(e._1, e._2.map(_.amount).sum))
+  def aggregateValues(balanceSheet: Iterable[LocalCryptoValue],
+                      targetAsset: Asset,
+                      findConversionRate: (String,TradePair) => Option[Double]): Double = {
+    val sumByLocalAsset: Iterable[LocalCryptoValue] = balanceSheet
+      .groupBy(e => (e.exchange,e.asset))
+      .map(e => LocalCryptoValue(e._1._1, e._1._2, e._2.map(_.amount).sum))
 
-    sumByAsset.map { v =>
-      v.convertTo(targetAsset, findReferenceRate) match {
+    sumByLocalAsset.map { v =>
+      v.convertTo(targetAsset, findConversionRate) match {
         case Some(v) => v.amount
         case None =>
           throw new RuntimeException(s"Unable to convert ${v.asset} to $targetAsset")
@@ -178,16 +173,18 @@ object OrderBill {
     }.sum
   }
 
-  def aggregateValues(balanceSheet: Iterable[CryptoValue], targetAsset: Asset, referenceTicker: ReferenceTicker): Double =
-    aggregateValues(balanceSheet, targetAsset, tp => referenceTicker.values.get(tp).map(_.currentPriceEstimate))
+  def aggregateValues(balanceSheet: Iterable[LocalCryptoValue],
+                      targetAsset: Asset,
+                      tickers: TickersReadonly): Double =
+    aggregateValues(balanceSheet, targetAsset, (exchange, tradePair) => tickers(exchange).get(tradePair).map(_.priceEstimate))
 
-  def calc(orders: Seq[OrderRequest], referenceTicker: ReferenceTicker): OrderBill = {
-    val balanceSheet: Seq[CryptoValue] = orders.flatMap(calcBalanceSheet)
-    val sumUSDT: Double = aggregateValues(balanceSheet, Asset("USDT"), referenceTicker)
+  def calc(orders: Seq[OrderRequest],
+           tickers: TickersReadonly): OrderBill = {
+    val balanceSheet: Seq[LocalCryptoValue] = orders.flatMap(calcBalanceSheet)
+    val sumUSDT: Double = aggregateValues(balanceSheet, Asset("USDT"), tickers)
     OrderBill(balanceSheet, sumUSDT)
   }
 }
-
 
 /** High level order request bundle, covering 2 or more trader orders */
 case class OrderRequestBundle(id: UUID,

@@ -69,15 +69,14 @@ object ExchangeLiquidityManager {
       LiquidityDemand(r.exchange, r.tradePattern, r.coins, r.dontUseTheseReserveAssets)
   }
 
-  def props(config: LiquidityManagerConfig, exchangeName: String, tradeRoom: ActorRef, tpData: ExchangeTPDataReadonly, wallet: Wallet, fee: Fee, referenceTicker: ReferenceTickerReadonly): Props =
-    Props(new ExchangeLiquidityManager(config, exchangeName, tradeRoom, tpData, wallet, fee, referenceTicker))
+  def props(config: LiquidityManagerConfig, exchangeConfig: ExchangeConfig, tradeRoom: ActorRef, tpData: ExchangeTPDataReadonly, wallet: Wallet, referenceTicker: ReferenceTickerReadonly): Props =
+    Props(new ExchangeLiquidityManager(config, exchangeConfig, tradeRoom, tpData, wallet, referenceTicker))
 }
 class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
-                               val exchangeName: String,
+                               val exchangeConfig: ExchangeConfig,
                                val tradeRoom: ActorRef,
                                val tpData: ExchangeTPDataReadonly,
                                val wallet: Wallet,
-                               val fee: Fee,
                                val referenceTicker: ReferenceTickerReadonly) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[ExchangeLiquidityManager])
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
@@ -164,7 +163,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
   }
 
   def checkValidity(r: LiquidityRequest): Unit = {
-    if (r.exchange != exchangeName) throw new IllegalArgumentException
+    if (r.exchange != exchangeConfig.exchangeName) throw new IllegalArgumentException
   }
 
 
@@ -217,7 +216,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
    */
   def tryToPlaceALiquidityProvidingOrder(demand: UniqueDemand): Option[CryptoValue] = {
     val bestReserveAssets: Option[Tuple2[Asset, Double]] =
-      config.reserveAssets
+      exchangeConfig.reserveAssets
         .filterNot(demand.dontUseTheseReserveAssets.contains)
         .filter(e => tpData.ticker.keySet.contains(TradePair.of(demand.asset, e))) // ticker available for trade pair?
         .filter(e => estimatedManufactingCosts(demand, e) match { // enough balance available in liquidity providing asset?
@@ -239,8 +238,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
       val orderAmount: Double = demand.amount * (1.0 + config.providingLiquidityExtra)
       val tradePair = TradePair.of(demand.asset, bestReserveAssets.get._1)
       val limit = guessGoodLimit(tradePair, TradeSide.Buy, orderAmount)
-      val orderRequest = OrderRequest(UUID.randomUUID(), null, exchangeName, tradePair, TradeSide.Buy,
-        fee, orderAmount, limit)
+      val orderRequest = OrderRequest(UUID.randomUUID(), null, exchangeConfig.exchangeName, tradePair, TradeSide.Buy, exchangeConfig.fee, orderAmount, limit)
 
       tradeRoom ! LiquidityTransformationOrder(orderRequest)
 
@@ -294,7 +292,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
   //    - [play safe] Remaining value goes to first (highest prio) reserve-asset (having a acceptable exchange-rate)
   def convertBackToReserveAsset(coins: CryptoValue): Option[CryptoValue] = {
     val availableReserveAssets: List[Tuple2[Asset, Double]] =
-      config.reserveAssets
+      exchangeConfig.reserveAssets
         .map(e => (e, localTickerRating(TradePair.of(coins.asset, e), TradeSide.Sell))) // add rating
         .filter(_._2.isDefined) // filter available TradePairs only (with a local ticker)
         .map(e => (e._1, e._2.get))
@@ -326,10 +324,10 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
     val orderRequest = OrderRequest(
       UUID.randomUUID(),
       null,
-      exchangeName,
+      exchangeConfig.exchangeName,
       tradePair,
       TradeSide.Sell,
-      fee,
+      exchangeConfig.fee,
       coins.amount,
       limit
     )
@@ -342,7 +340,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
   def convertBackNotNeededNoneReserveAssetLiquidity(): List[CryptoValue] = {
     val freeUnusedNoneReserveAssetLiquidity: Map[Asset, Double] =
       determineUnlockedBalance
-        .filterNot(e => config.reserveAssets.contains(e._1)) // only select non-reserve-assets
+        .filterNot(e => exchangeConfig.reserveAssets.contains(e._1)) // only select non-reserve-assets
         .map(e => ( // reduced by demand for that asset
           e._1,
           Math.max(
@@ -370,10 +368,10 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
   def rebalanceReserveAssetsAmountOrders(pendingIncomingReserveLiquidity: List[CryptoValue]): List[OrderRequest] = {
     log.trace(s"re-balancing reserve assets with pending incoming $pendingIncomingReserveLiquidity")
     val currentReserveAssetsBalance: List[CryptoValue] = wallet.balance
-      .filter(e => config.reserveAssets.contains(e._1))
+      .filter(e => exchangeConfig.reserveAssets.contains(e._1))
       .map(e => CryptoValue(e._1, e._2.amountAvailable))
       .toList :::
-      config.reserveAssets // add zero balance for reserve assets not contained in wallet
+      exchangeConfig.reserveAssets // add zero balance for reserve assets not contained in wallet
         .filterNot(wallet.balance.keySet.contains)
         .map(e => CryptoValue(e, 0.0)) // so consider not delivered, empty balances too
 
@@ -415,12 +413,12 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
       log.debug(s"Re-balance reserve assets: sources: $liquiditySourcesBuckets / sinks: $liquiditySinkBuckets")
       import util.control.Breaks._
       breakable {
-        val DefaultSink = config.reserveAssets.head
-        val sinkAsset: Asset = config.reserveAssets
+        val DefaultSink = exchangeConfig.reserveAssets.head
+        val sinkAsset: Asset = exchangeConfig.reserveAssets
           .find(liquiditySinkBuckets.keySet.contains) // highest priority reserve asset [unsatisfied] sinks first
           .getOrElse(DefaultSink) // or DefaultSink
 
-        val sourceAsset: Option[Asset] = config.reserveAssets
+        val sourceAsset: Option[Asset] = exchangeConfig.reserveAssets
           .reverse
           .filter(a => liquidityConversionPossibleBetween(a, sinkAsset))
           .find(liquiditySourcesBuckets.keySet.contains) // lowest priority reserve asset with liquidity to provide
@@ -457,7 +455,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
               }
               val orderAmountBaseAsset = bucketsToTransfer * baseAssetBucketValue
               val limit = guessGoodLimit(tradePair, tradeSide, orderAmountBaseAsset)
-              OrderRequest(UUID.randomUUID(), null, exchangeName, tradePair, tradeSide, fee, orderAmountBaseAsset, limit)
+              OrderRequest(UUID.randomUUID(), null, exchangeConfig.exchangeName, tradePair, tradeSide, exchangeConfig.fee, orderAmountBaseAsset, limit)
 
             case tp if tpData.ticker.contains(tp.reverse) =>
               val tradePair = tp.reverse
@@ -469,9 +467,9 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
               val amountBaseAssetEstimate = bucketsToTransfer * quoteAssetBucketValue / tpData.ticker(tradePair).priceEstimate
               val limit = guessGoodLimit(tradePair, tradeSide, amountBaseAssetEstimate)
               val orderAmountBaseAsset = bucketsToTransfer * quoteAssetBucketValue / limit
-              OrderRequest(UUID.randomUUID(), null, exchangeName, tradePair, tradeSide, fee, orderAmountBaseAsset, limit)
+              OrderRequest(UUID.randomUUID(), null, exchangeConfig.exchangeName, tradePair, tradeSide, exchangeConfig.fee, orderAmountBaseAsset, limit)
 
-            case _ => throw new RuntimeException(s"$exchangeName: No local tradepair found to convert $sourceAsset to $sinkAsset")
+            case _ => throw new RuntimeException(s"${exchangeConfig.exchangeName}: No local tradepair found to convert $sourceAsset to $sinkAsset")
           }
 
         liquidityTransactions = tx :: liquidityTransactions
@@ -503,7 +501,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
     val incomingReserveLiquidity: List[CryptoValue] = convertBackNotNeededNoneReserveAssetLiquidity()
 
     val totalIncomingReserveLiquidity: List[CryptoValue] =
-      incomingReserveLiquidity ::: demanded.filter(e => config.reserveAssets.contains(e.asset))
+      incomingReserveLiquidity ::: demanded.filter(e => exchangeConfig.reserveAssets.contains(e.asset))
 
     rebalanceReserveAssetsAmountOrders(totalIncomingReserveLiquidity).foreach { o =>
       tradeRoom ! LiquidityTransformationOrder(o)

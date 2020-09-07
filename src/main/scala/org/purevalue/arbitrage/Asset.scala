@@ -107,6 +107,13 @@ case class CryptoValue(asset: Asset, amount: Double) {
  * CryptoValue on a specific exchange
  */
 case class LocalCryptoValue(exchange: String, asset: Asset, amount: Double) {
-  def convertTo(targetAsset: Asset, localTicker: scala.collection.Map[TradePair, Ticker]): Option[CryptoValue] =
-    CryptoValue(asset, amount).convertTo(targetAsset, localTicker)
+  def convertTo(targetAsset: Asset, findConversionRate: (String, TradePair) => Option[Double]): Option[LocalCryptoValue] =
+    CryptoValue(asset, amount)
+      .convertTo(targetAsset, tradepair => findConversionRate(exchange, tradepair))
+      .map(e => LocalCryptoValue(exchange, e.asset, e.amount))
+
+  def convertTo(targetAsset: Asset, tickers: Map[String, Map[TradePair, Ticker]]): Option[LocalCryptoValue] =
+    CryptoValue(asset, amount)
+      .convertTo(targetAsset, tickers(exchange))
+      .map(e => LocalCryptoValue(exchange, e.asset, e.amount))
 }

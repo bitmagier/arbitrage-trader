@@ -27,18 +27,27 @@ class ExchangeLiquidityManagerSpec
     with BeforeAndAfterAll
     with MockFactory {
 
-  private val Config = LiquidityManagerConfig(List(USDT, Bitcoin, Asset("ETH")),
-    Duration.ofSeconds(5),
-    Duration.ofSeconds(5),
-    providingLiquidityExtra = 0.02,
-    maxAcceptableLocalTickerLossFromReferenceTicker = 0.01,
-    minimumKeepReserveLiquidityPerAssetInUSDT = 50.0,
-    txLimitBelowOrAboveBestBidOrAsk = 0.00005,
-    rebalanceTxGranularityInUSDT = 20.0)
+  private val Config =
+    LiquidityManagerConfig(
+      Duration.ofSeconds(5),
+      Duration.ofSeconds(5),
+      providingLiquidityExtra = 0.02,
+      maxAcceptableLocalTickerLossFromReferenceTicker = 0.01,
+      minimumKeepReserveLiquidityPerAssetInUSDT = 50.0,
+      txLimitBelowOrAboveBestBidOrAsk = 0.00005,
+      rebalanceTxGranularityInUSDT = 20.0)
 
+  private val exchangeConfig: ExchangeConfig =
+    ExchangeConfig(
+      "e1",
+      secrets = null,
+      reserveAssets = List(USDT, Bitcoin, Asset("ETH")),
+      tradeAssets = null,
+      makerFee = 0.0, // TODO make everything working including fees
+      takerFee = 0.0,
+      orderBooksEnabled = false
+    )
 
-  //private val fee = Fee("e1", 0.002, 0.002)
-  private val fee = Fee("e1", 0.0, 0.0) // TODO include fees in tx and test
   private val BitcoinPriceUSD = 10200.24
   private val EthPriceUSD = 342.12
   private val referenceTicker = ReferenceTickerReadonly(
@@ -56,11 +65,14 @@ class ExchangeLiquidityManagerSpec
     ).map(e => e._1 -> ExtendedTicker("e1", e._1, e._2, 1.0, e._2, 1.0, e._2, 1.0, e._2)))
 
 
-  private val tickers: Map[TradePair, Ticker] = referenceTicker.values.map(e =>
-    (e._1, Ticker("e1", e._1, e._2.highestBidPrice, None, e._2.lowestAskPrice, None, Some(e._2.lastPrice)))
-  ).toMap
+  private val tickers: Map[String, Map[TradePair, Ticker]] =
+    Map("e1" ->
+      referenceTicker.values.map(e =>
+        (e._1, Ticker("e1", e._1, e._2.highestBidPrice, None, e._2.lowestAskPrice, None, Some(e._2.lastPrice)))
+      ).toMap
+    )
 
-  private val tpData = ExchangeTPDataReadonly(tickers, Map(), Map(), null)
+  private val tpData = ExchangeTPDataReadonly(tickers("e1"), Map(), Map(), null)
 
   val CheckSpread = 0.01
 
@@ -76,7 +88,7 @@ class ExchangeLiquidityManagerSpec
         Bitcoin -> Balance(Bitcoin, 1.0, 0.0),
         USDT -> Balance(USDT, 0.05, 0.0)
       ))
-      val m = system.actorOf(ExchangeLiquidityManager.props(Config, "e1", tradeRoom.ref, tpData, wallet, fee, referenceTicker))
+      val m = system.actorOf(ExchangeLiquidityManager.props(Config, exchangeConfig, tradeRoom.ref, tpData, wallet, referenceTicker))
 
       m ! WalletUpdateTrigger("e1") // trigger housekeeping
 
@@ -119,7 +131,7 @@ class ExchangeLiquidityManagerSpec
         Asset("ADA") -> Balance(Asset("ADA"), 100.0, 0.0),
         Asset("ALGO") -> Balance(Asset("ALGO"), 500.0, 0.0)
       ))
-      val m = system.actorOf(ExchangeLiquidityManager.props(Config, "e1", tradeRoom.ref, tpData, wallet, fee, referenceTicker))
+      val m = system.actorOf(ExchangeLiquidityManager.props(Config, exchangeConfig, tradeRoom.ref, tpData, wallet, referenceTicker))
 
       val requestedLiquidity = Seq(CryptoValue(Asset("ADA"), 100.0), CryptoValue(Asset("LINK"), 25.0))
       implicit val timeout: Timeout = 1.second
@@ -179,7 +191,7 @@ class ExchangeLiquidityManagerSpec
         Asset("ALGO") -> Balance(Asset("ALGO"), 1000.0, 0.0)
       ))
 
-      val m = system.actorOf(ExchangeLiquidityManager.props(Config, "e1", tradeRoom.ref, tpData, wallet, fee, referenceTicker))
+      val m = system.actorOf(ExchangeLiquidityManager.props(Config, exchangeConfig, tradeRoom.ref, tpData, wallet, referenceTicker))
       implicit val timeout: Timeout = 2.second
       val lock = Await.result(
         (m ? LiquidityRequest(
@@ -207,7 +219,7 @@ class ExchangeLiquidityManagerSpec
       message1.orderRequest.calcOutgoingLiquidity.amount shouldBe 200.0 +- CheckSpread
       message1.orderRequest.calcIncomingLiquidity.asset shouldBe USDT
       message1.orderRequest.calcIncomingLiquidity.amount shouldBe
-        (200.0 * tickers(TradePair(Asset("ALGO"), USDT)).priceEstimate * (1.0 - fee.average)) +- CheckSpread
+        (200.0 * tickers("e1")(TradePair(Asset("ALGO"), USDT)).priceEstimate * (1.0 - exchangeConfig.fee.average)) +- CheckSpread
 
       // now we clear the lock and watch the locked 400 ALOG's going back to USDT
 

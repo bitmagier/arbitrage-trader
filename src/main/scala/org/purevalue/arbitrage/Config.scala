@@ -15,6 +15,7 @@ case class SecretsConfig(apiKey: String,
 
 case class ExchangeConfig(exchangeName: String,
                           secrets: SecretsConfig,
+                          reserveAssets: List[Asset], // reserve assets in order of importance; first in list is the primary reserve asset
                           tradeAssets: Set[String],
                           makerFee: Double,
                           takerFee: Double,
@@ -26,6 +27,7 @@ object ExchangeConfig {
   def apply(name:String, c:com.typesafe.config.Config): ExchangeConfig = ExchangeConfig(
     name,
     secretsConfig(c.getConfig("secrets")),
+    c.getStringList("reserve-assets").asScala.map(e => Asset(e)).toList,
     c.getStringList("trade-assets").asScala.toSet,
     c.getDouble("fee.maker"),
     c.getDouble("fee.taker"),
@@ -71,8 +73,7 @@ object TradeRoomConfig {
 case class TradeRoomStatsConfig(reportInterval: Duration,
                                 aggregatedliquidityReportAsset: Asset)
 
-case class LiquidityManagerConfig(reserveAssets: List[Asset], // reserve assets in order of importance
-                                  liquidityLockMaxLifetime: Duration, // when a liquidity lock is not cleared, this is the maximum time, it can stay active
+case class LiquidityManagerConfig(liquidityLockMaxLifetime: Duration, // when a liquidity lock is not cleared, this is the maximum time, it can stay active
                                   liquidityDemandActiveTime: Duration, // when demanded liquidity is not requested within that time, the coins are transferred back to a reserve asset
                                   providingLiquidityExtra: Double, // we provide a little bit more than it was demanded, to potentially fulfill order requests with a slightly different amount
                                   maxAcceptableLocalTickerLossFromReferenceTicker: Double, // defines the maximum acceptable relative loss (local ticker versus reference ticker) for liquidity conversion transactions
@@ -81,7 +82,6 @@ case class LiquidityManagerConfig(reserveAssets: List[Asset], // reserve assets 
                                   rebalanceTxGranularityInUSDT: Double) // that's the granularity (and also minimum amount) we transfer for reserve asset re-balance orders)}
 object LiquidityManagerConfig {
   def apply(c: com.typesafe.config.Config): LiquidityManagerConfig = LiquidityManagerConfig(
-    c.getStringList("reserve-assets").asScala.map(e => Asset(e)).toList,
     c.getDuration("liquidity-lock-max-lifetime"),
     c.getDuration("liquidity-demand-active-time"),
     c.getDouble("providing-liquidity-extra"),
@@ -106,12 +106,9 @@ object Config {
   val activeExchanges: Seq[String] = exchangesConfig.getStringList("active").asScala
   val dataManagerInitTimeout: Duration = exchangesConfig.getDuration("data-manager-init-timeout")
 
-
   def exchange(name: String): ExchangeConfig = ExchangeConfig(name, exchangesConfig.getConfig(name))
 
   val liquidityManager: LiquidityManagerConfig = LiquidityManagerConfig(c.getConfig("liquidity-manager"))
 
   def trader(name: String): com.typesafe.config.Config = c.getConfig(s"trader.$name")
-
-  log.info(s"Reserve Assets: ${liquidityManager.reserveAssets}")
 }

@@ -24,21 +24,25 @@ import scala.util.{Failure, Success}
 
 object TradeRoom {
 
-  /**
-   * An always-uptodate view on the TradeRoom Pre-Trade Data.
-   * Modification of the content is NOT permitted by users of the TRadeContext (even if technically possible)!
-   */
-  case class TradeContext(tickers: scala.collection.Map[String, scala.collection.Map[TradePair, Ticker]],
-                          extendedTickers: scala.collection.Map[String, scala.collection.Map[TradePair, ExtendedTicker]],
-                          orderBooks: scala.collection.Map[String, scala.collection.Map[TradePair, OrderBook]],
-                          balances: scala.collection.Map[String, Wallet],
-                          fees: scala.collection.Map[String, Fee],
-                          referenceTicker: ReferenceTicker)
-
   case class ReferenceTicker(var values: scala.collection.concurrent.Map[TradePair, ExtendedTicker]) {
     def readonly: ReferenceTickerReadonly = ReferenceTickerReadonly(values)
   }
   case class ReferenceTickerReadonly(values: scala.collection.Map[TradePair, ExtendedTicker])
+
+  type TickersReadonly = scala.collection.Map[String, scala.collection.Map[TradePair, Ticker]]
+  type ExtendedTickersReadonly = scala.collection.Map[String, scala.collection.Map[TradePair, ExtendedTicker]]
+  type ActiveOrderBundlesReadonly = scala.collection.Map[UUID, OrderBundle]
+
+  /**
+   * An always-uptodate view on the TradeRoom Pre-Trade Data.
+   * Modification of the content is NOT permitted by users of the TRadeContext (even if technically possible)!
+   */
+  case class TradeContext(tickers: TickersReadonly,
+                          extendedTickers: ExtendedTickersReadonly,
+                          orderBooks: scala.collection.Map[String, scala.collection.Map[TradePair, OrderBook]],
+                          balances: scala.collection.Map[String, Wallet],
+                          fees: scala.collection.Map[String, Fee],
+                          referenceTicker: ReferenceTicker)
 
   case class OrderRef(exchange: String, tradePair: TradePair, externalOrderId: String)
 
@@ -96,15 +100,12 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   private var finishedOrderBundles: List[FinishedOrderBundle] = List()
   private var finishedLiquidityTx: List[FinishedLiquidityTx] = List()
 
-
-  private val fees: Map[String, Fee] = Map( // TODO query from exchange
-    "binance" -> Config.exchange("binance").fee,
-    "bitfinex" -> Config.exchange("bitfinex").fee
-  )
+  val ExchangesConfig: Map[String, ExchangeConfig] = Config.activeExchanges.map(e => (e, Config.exchange(e))).toMap
+  private val fees: Map[String, Fee] = ExchangesConfig.values.map(e => (e.exchangeName, e.fee)).toMap // TODO query from exchange
 
   private val tradeContext: TradeContext = TradeContext(tickers, extendedTickers, orderBooks, wallets, fees, referenceTicker)
 
-  private val orderBundleSafetyGuard = OrderBundleSafetyGuard(config.orderBundleSafetyGuard, tickers, dataAge, referenceTicker, openOrderBundles)
+  private val orderBundleSafetyGuard = OrderBundleSafetyGuard(config.orderBundleSafetyGuard, ExchangesConfig, tickers, dataAge, referenceTicker.readonly, openOrderBundles)
 
   val orderManagementSupervisorSchedule: Cancellable = actorSystem.scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, OrderManagementSupervisor())
   val logScheduleRate: FiniteDuration = FiniteDuration(config.stats.reportInterval.toNanos, TimeUnit.NANOSECONDS)
@@ -236,7 +237,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     }
     val assetsToRemove = eTradePairs
       .map(_._2.baseAsset) // set of candidate assets
-      .filterNot(Config.liquidityManager.reserveAssets.contains) // don't select reserve assets
+      .filterNot(e => ExchangesConfig.values.exists(_.reserveAssets.contains(e))) // don't select reserve assets
       .filterNot(a =>
         eTradePairs
           .filter(_._2.baseAsset == a) // all connected tradepairs X -> ...

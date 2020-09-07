@@ -3,7 +3,7 @@ package org.purevalue.arbitrage
 import java.time.{Duration, Instant}
 import java.util.UUID
 
-import org.purevalue.arbitrage.TradeRoom.{OrderBundle, ReferenceTicker}
+import org.purevalue.arbitrage.TradeRoom.{ActiveOrderBundlesReadonly, OrderBundle, ReferenceTicker, ReferenceTickerReadonly, TickersReadonly}
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.slf4j.LoggerFactory
 
@@ -17,10 +17,11 @@ case object SameTradePairOrderStillActive extends SafetyGuardDecision
 case object TotalTransactionUneconomic extends SafetyGuardDecision
 
 case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
-                                  tickers: scala.collection.Map[String, scala.collection.concurrent.Map[TradePair, Ticker]],
+                                  exchangesConfig: Map[String, ExchangeConfig],
+                                  tickers: TickersReadonly,
                                   dataAge: scala.collection.Map[String, TPDataTimestamps],
-                                  referenceTicker: ReferenceTicker,
-                                  activeOrderBundles: scala.collection.Map[UUID, OrderBundle]) {
+                                  referenceTicker: ReferenceTickerReadonly,
+                                  activeOrderBundles: ActiveOrderBundlesReadonly) {
   private val log = LoggerFactory.getLogger(classOf[OrderBundleSafetyGuard])
   private var stats: Map[SafetyGuardDecision, Int] = Map()
 
@@ -66,28 +67,51 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
    * It is possible to use different Liquidity reserve assets for different involved assets/trades
    */
   def balanceOfLiquidityTransformationCompensationTransactionsInUSDT(t: OrderRequestBundle): Option[Double] = {
-    val allReserveAssets: List[Asset] = Config.liquidityManager.reserveAssets
-    val involvedAssets: Set[Asset] = t.orderRequests.flatMap(e => Seq(e.tradePair.baseAsset, e.tradePair.quoteAsset)).toSet
-    val uninvolvedReserveAssets: List[Asset] = allReserveAssets.filterNot(involvedAssets.contains)
+    val involvedAssetsPerExchange: Map[String, Set[Asset]] =
+    t.orderRequests
+      .groupBy(_.exchange)
+      .map(e => (
+        e._1,
+        e._2
+          .flatMap(o =>
+            Seq(o.tradePair.baseAsset, o.tradePair.quoteAsset))
+          .toSet))
+    val uninvolvedReserveAssetsPerExchange: Map[String, Set[Asset]] =
+      t.orderRequests
+        .map(_.exchange)
+        .toSet[String] // set of involved exchanges
+        .map(e => (
+          e,
+          exchangesConfig(e).reserveAssets
+            .filterNot(involvedAssetsPerExchange(e))
+            .toSet
+        )).toMap
 
-    val toProvide: Iterable[LocalCryptoValue] = t.orderRequests.map(_.calcOutgoingLiquidity).filterNot(e => allReserveAssets.contains(e.asset))
-    val toConvertBack: Iterable[LocalCryptoValue] = t.orderRequests.map(_.calcIncomingLiquidity).filterNot(e => allReserveAssets.contains(e.asset))
 
-    def findUsableReserveAsset(exchange: String, coin: Asset, possibleReserveAssets: List[Asset]): Option[Asset] = {
+    val toProvide: Iterable[LocalCryptoValue] =
+      t.orderRequests
+      .map(_.calcOutgoingLiquidity)
+      .filterNot(e => exchangesConfig(e.exchange).reserveAssets.contains(e.asset))
+    val toConvertBack: Iterable[LocalCryptoValue] =
+      t.orderRequests
+        .map(_.calcIncomingLiquidity)
+        .filterNot(e => exchangesConfig(e.exchange).reserveAssets.contains(e.asset))
+
+    def findUsableReserveAsset(exchange: String, coin: Asset, possibleReserveAssets: Set[Asset]): Option[Asset] = {
       possibleReserveAssets.find(r => tickers(exchange).contains(TradePair.of(coin, r)))
     }
 
     val unableToProvideConversionForCoin: Option[LocalCryptoValue] = {
-      (toProvide ++ toConvertBack).find(v => findUsableReserveAsset(v.exchange, v.asset, uninvolvedReserveAssets).isEmpty)
+      (toProvide ++ toConvertBack).find(v => findUsableReserveAsset(v.exchange, v.asset, uninvolvedReserveAssetsPerExchange(v.exchange)).isEmpty)
     }
     if (unableToProvideConversionForCoin.isDefined) {
       log.warn(s"${Emoji.EyeRoll}  Sorry, no suitable reserve asset found to support reserve liquidity conversion from/to ${unableToProvideConversionForCoin.get.asset} on ${unableToProvideConversionForCoin.get.exchange}. Concerns $t")
       return None
     }
 
-    val transactions =
+    val transactions: Iterable[OrderRequest] =
       toProvide.map(e => {
-        val tradePair = TradePair.of(e.asset, findUsableReserveAsset(e.exchange, e.asset, uninvolvedReserveAssets).get)
+        val tradePair = TradePair.of(e.asset, findUsableReserveAsset(e.exchange, e.asset, uninvolvedReserveAssetsPerExchange(e.exchange)).get)
         OrderRequest(null, null,
           e.exchange,
           tradePair,
@@ -97,7 +121,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
           tickers(e.exchange)(tradePair).priceEstimate
         )
       }) ++ toConvertBack.map(e => {
-        val tradePair = TradePair.of(e.asset, findUsableReserveAsset(e.exchange, e.asset, uninvolvedReserveAssets).get)
+        val tradePair = TradePair.of(e.asset, findUsableReserveAsset(e.exchange, e.asset, uninvolvedReserveAssetsPerExchange(e.exchange)).get)
         OrderRequest(null, null,
           e.exchange,
           tradePair,
@@ -108,16 +132,16 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
         )
       })
 
-    val balanceSheet: Iterable[CryptoValue] = transactions.flatMap(OrderBill.calcBalanceSheet)
+    val balanceSheet: Iterable[LocalCryptoValue] = transactions.flatMap(OrderBill.calcBalanceSheet)
 
     // self check
-    val groupedAndCleanedUpBalanceSheet: Iterable[CryptoValue] =
+    val groupedAndCleanedUpBalanceSheet: Iterable[LocalCryptoValue] =
       balanceSheet
-        .groupBy(_.asset)
-        .map(e => CryptoValue(e._1, e._2.map(_.amount).sum)) // summed up values of same asset
+        .groupBy(e => (e.exchange, e.asset))
+        .map(e => LocalCryptoValue(e._1._1, e._1._2, e._2.map(_.amount).sum)) // summed up values of same exchange+asset
         .filterNot(_.amount == 0.0d) // ignore zeros
 
-    if (!groupedAndCleanedUpBalanceSheet.forall(v => allReserveAssets.contains(v.asset))) {
+    if (!groupedAndCleanedUpBalanceSheet.forall(v => exchangesConfig(v.exchange).reserveAssets.contains(v.asset))) {
       log.error(s"Cleaned up balance sheet should contain reserve asset values only! Instead it is found: $groupedAndCleanedUpBalanceSheet")
       None
     }
@@ -126,7 +150,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
       OrderBill.aggregateValues(
         groupedAndCleanedUpBalanceSheet,
         Asset.USDT,
-        referenceTicker))
+        tickers))
   }
 
 
