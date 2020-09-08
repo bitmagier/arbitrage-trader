@@ -1,6 +1,6 @@
 name := "arbitrage-trader"
 
-version := "0.5.4-SNAPSHOT"
+version := "0.6.1-SNAPSHOT"
 
 scalaVersion := "2.12.11"
 
