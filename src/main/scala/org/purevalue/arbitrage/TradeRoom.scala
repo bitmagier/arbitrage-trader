@@ -545,7 +545,6 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       initializedExchanges = initializedExchanges + exchange
       if (initialized) {
         log.info(s"${Emoji.Satisfied}  All exchanges initialized")
-        self ! LogStats()
         startTraders()
       }
 
