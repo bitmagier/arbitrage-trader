@@ -7,7 +7,7 @@ import akka.actor.{Actor, ActorRef, Props}
 import org.purevalue.arbitrage.Asset.USDT
 import org.purevalue.arbitrage.ExchangeLiquidityManager.{LiquidityDemand, LiquidityLock, LiquidityLockClearance, LiquidityRequest}
 import org.purevalue.arbitrage.Main.actorSystem
-import org.purevalue.arbitrage.TradeRoom.{LiquidityTransformationOrder, ReferenceTickerReadonly, WalletUpdateTrigger}
+import org.purevalue.arbitrage.TradeRoom.{LiquidityTransformationOrder, WalletUpdateTrigger}
 import org.slf4j.LoggerFactory
 
 import scala.collection.Map
@@ -69,7 +69,12 @@ object ExchangeLiquidityManager {
       LiquidityDemand(r.exchange, r.tradePattern, r.coins, r.dontUseTheseReserveAssets)
   }
 
-  def props(config: LiquidityManagerConfig, exchangeConfig: ExchangeConfig, tradeRoom: ActorRef, tpData: ExchangeTPDataReadonly, wallet: Wallet, referenceTicker: ReferenceTickerReadonly): Props =
+  def props(config: LiquidityManagerConfig,
+            exchangeConfig: ExchangeConfig,
+            tradeRoom: ActorRef,
+            tpData: ExchangeTPDataReadonly,
+            wallet: Wallet,
+            referenceTicker: () => scala.collection.Map[TradePair, Ticker]): Props =
     Props(new ExchangeLiquidityManager(config, exchangeConfig, tradeRoom, tpData, wallet, referenceTicker))
 }
 class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
@@ -77,7 +82,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
                                val tradeRoom: ActorRef,
                                val tpData: ExchangeTPDataReadonly,
                                val wallet: Wallet,
-                               val referenceTicker: ReferenceTickerReadonly) extends Actor {
+                               val referenceTicker: () => scala.collection.Map[TradePair, Ticker]) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[ExchangeLiquidityManager])
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
@@ -147,6 +152,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
   // Always refreshing demand for that coin.
   // Accept, if free (not locked) coins are available.
   def lockLiquidity(r: LiquidityRequest): Option[LiquidityLock] = {
+    if (exchangeConfig.doNotTouchTheseAssets.intersect(r.coins).nonEmpty) throw new IllegalArgumentException
     noticeDemand(LiquidityDemand(r)) // we always notice/refresh the demand, when 'someone' wants to lock liquidity
 
     val unlockedBalances: Map[Asset, Double] = determineUnlockedBalance
@@ -187,7 +193,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
     tradeSide match {
       case TradeSide.Sell =>
         val tickerPrice = tpData.ticker.get(tradePair).map(_.priceEstimate)
-        val referencePrice = referenceTicker.values.get(tradePair).map(_.currentPriceEstimate)
+        val referencePrice = referenceTicker.apply().get(tradePair).map(_.priceEstimate)
         if (tickerPrice.isDefined && referencePrice.isDefined)
           Some(tickerPrice.get / referencePrice.get - 1.0) // x/R - 1
         else
@@ -195,7 +201,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
 
       case TradeSide.Buy =>
         val tickerPrice = tpData.ticker.get(tradePair).map(_.priceEstimate)
-        val referencePrice = referenceTicker.values.get(tradePair).map(_.currentPriceEstimate)
+        val referencePrice = referenceTicker.apply().get(tradePair).map(_.priceEstimate)
         if (tickerPrice.isDefined && referencePrice.isDefined)
           Some(1.0 - tickerPrice.get / referencePrice.get) // 1 - x/R
         else
@@ -274,13 +280,16 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
   def reserveAssetsWhichNeedFillUp: Set[Asset] = {
     try {
       wallet.balance
-        .map(e => (e, CryptoValue(e._1, e._2.amountAvailable).convertTo(USDT, referenceTicker).get))
+        .filterNot(e => exchangeConfig.doNotTouchTheseAssets.contains(e._1))
+        .map(e => (e, CryptoValue(e._1, e._2.amountAvailable).convertTo(USDT, referenceTicker.apply()).get))
         .filter(e => e._2.amount < config.minimumKeepReserveLiquidityPerAssetInUSDT)
         .map(_._1._1)
         .toSet
     } catch {
       case e: NoSuchElementException =>
-        log.error(s"ReferenceTicker is not containing all required exchange rates. ${e.getMessage}")
+        val missing: Seq[Asset] = wallet.balance.keys.filter(e => CryptoValue(e, 1.0).convertTo(USDT, referenceTicker.apply()).isEmpty).toSeq
+        log.error(s"ReferenceTicker does not contain exchange rate for wallet assets $missing to USDT")
+        log.info(s"ReferenceTicker cointains: ${referenceTicker.apply().keys.toSeq.sorted}")
         Set()
     }
   }
@@ -390,14 +399,14 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
 
     // all reserve assets, that need more value : Map(Asset -> liquidity buckets missing)
     var liquiditySinkBuckets: Map[Asset, Int] = virtualReserveAssetsAggregated
-      .map(e => (e.asset, e.convertTo(USDT, referenceTicker).get.amount)) // amount in USDT
+      .map(e => (e.asset, e.convertTo(USDT, referenceTicker.apply()).get.amount)) // amount in USDT
       .filter(_._2 < config.minimumKeepReserveLiquidityPerAssetInUSDT) // below min keep amount?
       .map(e => (e._1, ((config.minimumKeepReserveLiquidityPerAssetInUSDT - e._2) / config.rebalanceTxGranularityInUSDT).ceil.toInt)) // buckets needed
       .toMap
     // all reserve assets, that have extra liquidity to distribute : Map(Asset -> liquidity buckets available for distribution)
     var liquiditySourcesBuckets: Map[Asset, Int] = currentReserveAssetsBalance // we can take coin only from currently really existing balance
-      .map(e => (e.asset, e.convertTo(USDT, referenceTicker).get.amount)) // amount in USDT
-      .filter(e => e._2 >= config.minimumKeepReserveLiquidityPerAssetInUSDT + config.rebalanceTxGranularityInUSDT) // having more than the minimum limit + tx-granularity
+      .map(e => (e.asset, e.convertTo(USDT, referenceTicker.apply()).get.amount)) // amount in USDT
+      .filter(_._2 >= config.minimumKeepReserveLiquidityPerAssetInUSDT + config.rebalanceTxGranularityInUSDT) // having more than the minimum limit + tx-granularity
       .map(e => (e._1, ((e._2 - config.minimumKeepReserveLiquidityPerAssetInUSDT) / config.rebalanceTxGranularityInUSDT).floor.toInt)) // buckets to provide
       .toMap
 
@@ -485,7 +494,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
       }
     }
 
-    log.debug(s"Re-balance (unsquashed) tx orders:\n${liquidityTransactions.mkString("\n")}\n Remaining sinks: $liquiditySinkBuckets")
+    log.trace(s"Re-balance (unsquashed) tx orders:\n${liquidityTransactions.mkString("\n")}\n Remaining sinks: $liquiditySinkBuckets")
     // merge possible splitted orders towards primary reserve asset
     liquidityTransactions =
       liquidityTransactions
@@ -504,10 +513,8 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
     clearObsoleteLocks()
     clearObsoleteDemands()
     val demanded: List[CryptoValue] = provideDemandedLiquidity()
-    val incomingReserveLiquidity: List[CryptoValue] = convertBackNotNeededNoneReserveAssetLiquidity()
-
-    val totalIncomingReserveLiquidity: List[CryptoValue] =
-      incomingReserveLiquidity ::: demanded.filter(e => exchangeConfig.reserveAssets.contains(e.asset))
+    val incomingReserveLiquidity = convertBackNotNeededNoneReserveAssetLiquidity()
+    val totalIncomingReserveLiquidity = incomingReserveLiquidity ::: demanded.filter(e => exchangeConfig.reserveAssets.contains(e.asset))
 
     rebalanceReserveAssetsAmountOrders(totalIncomingReserveLiquidity).foreach { o =>
       tradeRoom ! LiquidityTransformationOrder(o)
@@ -531,7 +538,6 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
   }
 }
 
-// TODO specific reserve-assets per exchange, to support low-fee BNB on binance!!!
 // TODO statistics: min/max/average time a liquidity providing order needs to be filled
 // TODO statistics: LiquidityRequest successful ones / unsuccessful ones
 // TODO statistics: min/max/average time a convert back to reserve-liquidity tx needs to be filled

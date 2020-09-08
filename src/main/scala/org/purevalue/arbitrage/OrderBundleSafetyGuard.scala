@@ -1,9 +1,8 @@
 package org.purevalue.arbitrage
 
 import java.time.{Duration, Instant}
-import java.util.UUID
 
-import org.purevalue.arbitrage.TradeRoom.{ActiveOrderBundlesReadonly, OrderBundle, ReferenceTicker, ReferenceTickerReadonly, TickersReadonly}
+import org.purevalue.arbitrage.TradeRoom.{ActiveOrderBundlesReadonly, TradeContext}
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.slf4j.LoggerFactory
 
@@ -16,19 +15,18 @@ case object OrderLimitFarAwayFromTicker extends SafetyGuardDecision
 case object SameTradePairOrderStillActive extends SafetyGuardDecision
 case object TotalTransactionUneconomic extends SafetyGuardDecision
 
-case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
-                                  exchangesConfig: Map[String, ExchangeConfig],
-                                  tickers: TickersReadonly,
-                                  dataAge: scala.collection.Map[String, TPDataTimestamps],
-                                  referenceTicker: ReferenceTickerReadonly,
-                                  activeOrderBundles: ActiveOrderBundlesReadonly) {
+class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
+                             val exchangesConfig: Map[String, ExchangeConfig],
+                             val tc: TradeContext,
+                             val dataAge: scala.collection.Map[String, TPDataTimestamps],
+                             val activeOrderBundles: ActiveOrderBundlesReadonly) {
   private val log = LoggerFactory.getLogger(classOf[OrderBundleSafetyGuard])
   private var stats: Map[SafetyGuardDecision, Int] = Map()
 
   def unsafeStats: Map[SafetyGuardDecision, Int] = stats
 
   private def orderLimitCloseToTicker(order: OrderRequest): Boolean = {
-    val ticker = tickers(order.exchange)(order.tradePair)
+    val ticker = tc.tickers(order.exchange)(order.tradePair)
     val bestOfferPrice: Double = if (order.tradeSide == TradeSide.Buy) ticker.lowestAskPrice else ticker.highestBidPrice
     val diff = ((order.limit - bestOfferPrice) / bestOfferPrice).abs
     val valid = diff < config.maxOrderLimitTickerVariance
@@ -68,14 +66,14 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
    */
   def balanceOfLiquidityTransformationCompensationTransactionsInUSDT(t: OrderRequestBundle): Option[Double] = {
     val involvedAssetsPerExchange: Map[String, Set[Asset]] =
-    t.orderRequests
-      .groupBy(_.exchange)
-      .map(e => (
-        e._1,
-        e._2
-          .flatMap(o =>
-            Seq(o.tradePair.baseAsset, o.tradePair.quoteAsset))
-          .toSet))
+      t.orderRequests
+        .groupBy(_.exchange)
+        .map(e => (
+          e._1,
+          e._2
+            .flatMap(o =>
+              Seq(o.tradePair.baseAsset, o.tradePair.quoteAsset))
+            .toSet))
     val uninvolvedReserveAssetsPerExchange: Map[String, Set[Asset]] =
       t.orderRequests
         .map(_.exchange)
@@ -90,15 +88,15 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
 
     val toProvide: Iterable[LocalCryptoValue] =
       t.orderRequests
-      .map(_.calcOutgoingLiquidity)
-      .filterNot(e => exchangesConfig(e.exchange).reserveAssets.contains(e.asset))
+        .map(_.calcOutgoingLiquidity)
+        .filterNot(e => exchangesConfig(e.exchange).reserveAssets.contains(e.asset))
     val toConvertBack: Iterable[LocalCryptoValue] =
       t.orderRequests
         .map(_.calcIncomingLiquidity)
         .filterNot(e => exchangesConfig(e.exchange).reserveAssets.contains(e.asset))
 
     def findUsableReserveAsset(exchange: String, coin: Asset, possibleReserveAssets: Set[Asset]): Option[Asset] = {
-      possibleReserveAssets.find(r => tickers(exchange).contains(TradePair(coin, r)))
+      possibleReserveAssets.find(r => tc.tickers(exchange).contains(TradePair(coin, r)))
     }
 
     val unableToProvideConversionForCoin: Option[LocalCryptoValue] = {
@@ -118,7 +116,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
           TradeSide.Buy,
           Config.exchange(e.exchange).fee, // TODO take real values
           e.amount,
-          tickers(e.exchange)(tradePair).priceEstimate
+          tc.tickers(e.exchange)(tradePair).priceEstimate
         )
       }) ++ toConvertBack.map(e => {
         val tradePair = TradePair(e.asset, findUsableReserveAsset(e.exchange, e.asset, uninvolvedReserveAssetsPerExchange(e.exchange)).get)
@@ -128,7 +126,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
           TradeSide.Sell,
           Config.exchange(e.exchange).fee, // TODO take real values
           e.amount,
-          tickers(e.exchange)(tradePair).priceEstimate
+          tc.tickers(e.exchange)(tradePair).priceEstimate
         )
       })
 
@@ -150,7 +148,7 @@ case class OrderBundleSafetyGuard(config: OrderBundleSafetyGuardConfig,
       OrderBill.aggregateValues(
         groupedAndCleanedUpBalanceSheet,
         Asset.USDT,
-        tickers))
+        tc.tickers))
   }
 
 

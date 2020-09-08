@@ -3,8 +3,8 @@ package org.purevalue.arbitrage.adapter.bitfinex
 import akka.actor.{Actor, ActorSystem, Props, Status}
 import org.purevalue.arbitrage.Exchange.{GetTradePairs, TradePairs}
 import org.purevalue.arbitrage.HttpUtils.httpGetJson
-import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.GetBitfinexTradePair
 import org.purevalue.arbitrage._
+import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.GetBitfinexTradePair
 import org.slf4j.LoggerFactory
 import spray.json._
 

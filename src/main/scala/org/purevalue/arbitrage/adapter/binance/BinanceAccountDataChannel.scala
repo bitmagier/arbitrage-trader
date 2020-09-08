@@ -12,7 +12,7 @@ import akka.stream.OverflowStrategy
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source, SourceQueueWithComplete}
 import akka.util.Timeout
 import akka.{Done, NotUsed}
-import org.purevalue.arbitrage.ExchangeAccountDataManager.{CancelOrder, CancelOrderResult, FetchOrder, NewLimitOrder, NewOrderAck}
+import org.purevalue.arbitrage.ExchangeAccountDataManager._
 import org.purevalue.arbitrage.HttpUtils.{httpRequestJsonBinanceAccount, httpRequestPureJsonBinanceAccount}
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.purevalue.arbitrage._
@@ -132,7 +132,7 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
   def createConnected: Future[Done.type] =
     ws._1.flatMap { upgrade =>
       if (upgrade.response.status == StatusCodes.SwitchingProtocols) {
-        log.debug("WebSocket connected")
+        if (log.isTraceEnabled) log.trace("WebSocket connected")
         Future.successful(Done)
       } else {
         throw new RuntimeException(s"Connection failed: ${upgrade.response.status}")
@@ -219,7 +219,7 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
     listenKey = Await.result(
       httpRequestJsonBinanceAccount[ListenKeyJson](HttpMethods.POST, s"$BinanceBaseRestEndpoint/api/v3/userDataStream", None, config.secrets, sign = false),
       Config.httpTimeout.plus(500.millis)).listenKey
-    log.debug(s"got listenKey: $listenKey")
+    log.trace(s"got listenKey: $listenKey")
   }
 
   def pullTradePairResolveFunction(): Unit = {
@@ -238,7 +238,7 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
 
   override def receive: Receive = {
     case StartStreamRequest(sink) =>
-      log.debug("starting WebSocket stream")
+      log.trace("starting WebSocket stream")
       ws = Http().singleWebSocketRequest(
         WebSocketRequest(WebSocketEndpoint),
         createFlowTo(sink))

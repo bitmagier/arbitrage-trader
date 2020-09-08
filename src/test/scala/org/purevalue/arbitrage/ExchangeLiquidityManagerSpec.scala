@@ -9,7 +9,7 @@ import akka.testkit.{ImplicitSender, TestKit, TestProbe}
 import akka.util.Timeout
 import org.purevalue.arbitrage.Asset.{Bitcoin, USDT}
 import org.purevalue.arbitrage.ExchangeLiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityRequest}
-import org.purevalue.arbitrage.TradeRoom.{LiquidityTransformationOrder, ReferenceTickerReadonly, WalletUpdateTrigger}
+import org.purevalue.arbitrage.TradeRoom.{LiquidityTransformationOrder, WalletUpdateTrigger}
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpecLike
@@ -44,32 +44,30 @@ class ExchangeLiquidityManagerSpec
       makerFee = 0.0, // TODO make everything working including fees
       takerFee = 0.0,
       orderBooksEnabled = false,
-      Set()
+      Seq(Asset("OMG"))
     )
 
   private val BitcoinPriceUSD = 10200.24
   private val EthPriceUSD = 342.12
-  private val referenceTicker = ReferenceTickerReadonly(
+  private val referenceTicker =
     Map[TradePair, Double](
       TradePair(Bitcoin, USDT) -> BitcoinPriceUSD,
       TradePair(Asset("ETH"), USDT) -> EthPriceUSD,
-      TradePair(Asset("ETH"), Bitcoin) -> 0.03348914,
+      TradePair(Asset("ETH"), Bitcoin) -> EthPriceUSD/BitcoinPriceUSD,
       TradePair(Asset("ALGO"), USDT) -> 0.35,
-      TradePair(Asset("ALGO"), Bitcoin) -> 0.089422,
+      TradePair(Asset("ALGO"), Bitcoin) -> 0.35/BitcoinPriceUSD,
       TradePair(Asset("ADA"), USDT) -> 0.0891,
-      TradePair(Asset("ADA"), Bitcoin) -> 0.00000875,
+      TradePair(Asset("ADA"), Bitcoin) -> 0.0891/BitcoinPriceUSD,
       TradePair(Asset("LINK"), USDT) -> 10.55,
-      TradePair(Asset("LINK"), Bitcoin) -> 0.001063,
+      TradePair(Asset("LINK"), Bitcoin) -> 10.55/BitcoinPriceUSD,
       TradePair(Asset("LINK"), Asset("ETH")) -> 0.0301,
-    ).map(e => e._1 -> ExtendedTicker("e1", e._1, e._2, e._2, e._2, 1.0, e._2)))
+      TradePair(Asset("OMG"), USDT) -> 3.50,
+      TradePair(Asset("OMG"), Bitcoin) -> 3.50/BitcoinPriceUSD
+    ).map(e => e._1 -> Ticker("e1", e._1, e._2, None, e._2, None, Some(e._2)))
 
 
   private val tickers: Map[String, Map[TradePair, Ticker]] =
-    Map("e1" ->
-      referenceTicker.values.map(e =>
-        (e._1, Ticker("e1", e._1, e._2.highestBidPrice, None, e._2.lowestAskPrice, None, Some(e._2.lastPrice)))
-      ).toMap
-    )
+    Map("e1" -> referenceTicker)
 
   private val tpData = ExchangeTPDataReadonly(tickers("e1"), Map(), Map(), null)
 
@@ -87,7 +85,7 @@ class ExchangeLiquidityManagerSpec
         Bitcoin -> Balance(Bitcoin, 1.0, 0.0),
         USDT -> Balance(USDT, 0.05, 0.0)
       ))
-      val m = system.actorOf(ExchangeLiquidityManager.props(Config, exchangeConfig, tradeRoom.ref, tpData, wallet, referenceTicker))
+      val m = system.actorOf(ExchangeLiquidityManager.props(Config, exchangeConfig, tradeRoom.ref, tpData, wallet, () => referenceTicker))
 
       m ! WalletUpdateTrigger("e1") // trigger housekeeping
 
@@ -128,9 +126,10 @@ class ExchangeLiquidityManagerSpec
         USDT -> Balance(USDT, 7.0, 0.0),
         Asset("ETH") -> Balance(Asset("ETH"), 20.0, 0.0),
         Asset("ADA") -> Balance(Asset("ADA"), 100.0, 0.0),
-        Asset("ALGO") -> Balance(Asset("ALGO"), 500.0, 0.0)
+        Asset("ALGO") -> Balance(Asset("ALGO"), 500.0, 0.0),
+        Asset("OMG") -> Balance(Asset("OMG"), 1000.0, 0.0) // staked (in do-not-touch list)
       ))
-      val m = system.actorOf(ExchangeLiquidityManager.props(Config, exchangeConfig, tradeRoom.ref, tpData, wallet, referenceTicker))
+      val m = system.actorOf(ExchangeLiquidityManager.props(Config, exchangeConfig, tradeRoom.ref, tpData, wallet, () => referenceTicker))
 
       val requestedLiquidity = Seq(CryptoValue(Asset("ADA"), 100.0), CryptoValue(Asset("LINK"), 25.0))
       implicit val timeout: Timeout = 1.second
@@ -190,7 +189,7 @@ class ExchangeLiquidityManagerSpec
         Asset("ALGO") -> Balance(Asset("ALGO"), 1000.0, 0.0)
       ))
 
-      val m = system.actorOf(ExchangeLiquidityManager.props(Config, exchangeConfig, tradeRoom.ref, tpData, wallet, referenceTicker))
+      val m = system.actorOf(ExchangeLiquidityManager.props(Config, exchangeConfig, tradeRoom.ref, tpData, wallet, () => referenceTicker))
       implicit val timeout: Timeout = 2.second
       val lock = Await.result(
         (m ? LiquidityRequest(

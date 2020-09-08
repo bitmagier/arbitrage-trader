@@ -1,7 +1,7 @@
 package org.purevalue.arbitrage
 
 import org.purevalue.arbitrage.Asset.Bitcoin
-import org.purevalue.arbitrage.TradeRoom.{ReferenceTicker, ReferenceTickerReadonly}
+import org.purevalue.arbitrage.TradeRoom.TickersReadonly
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.slf4j.LoggerFactory
 
@@ -33,12 +33,17 @@ object Asset {
 
 
 // a universal usable trade-pair
-abstract class TradePair {
+abstract class TradePair extends Ordered[TradePair] {
+
 
   def baseAsset: Asset
   def quoteAsset: Asset
 
+  def compare(that: TradePair): Int = this.toString compare that.toString
+
   def reverse: TradePair = TradePair(quoteAsset, baseAsset)
+
+  def involvedAssets: Seq[Asset] = Seq(baseAsset, quoteAsset)
 
   override def toString: String = s"${baseAsset.officialSymbol}:${quoteAsset.officialSymbol}"
 
@@ -81,22 +86,16 @@ case class CryptoValue(asset: Asset, amount: Double) {
             case None => // try conversion via BTC as last option
               if ((this.asset != Bitcoin && targetAsset != Bitcoin)
                 && findConversionRate(TradePair(this.asset, Bitcoin)).isDefined
-                && findConversionRate(TradePair(targetAsset, Bitcoin)).isDefined) {
+                && (findConversionRate(TradePair(targetAsset, Bitcoin)).isDefined || findConversionRate(TradePair(Bitcoin, targetAsset)).isDefined)) {
                 this.convertTo(Bitcoin, findConversionRate).get.convertTo(targetAsset, findConversionRate)
               } else {
-                log.debug(s"unable to convert $asset -> $targetAsset")
+                log.debug(s"No option available to convert $asset -> $targetAsset")
                 None
               }
           }
       }
     }
   }
-
-  def convertTo(targetAsset: Asset, referenceTicker: ReferenceTicker): Option[CryptoValue] =
-    convertTo(targetAsset, referenceTicker.readonly)
-
-  def convertTo(targetAsset: Asset, referenceTicker: ReferenceTickerReadonly): Option[CryptoValue] =
-    convertTo(targetAsset, tp => referenceTicker.values.get(tp).map(_.currentPriceEstimate))
 
   def convertTo(targetAsset: Asset, localTicker: scala.collection.Map[TradePair, Ticker]): Option[CryptoValue] =
     convertTo(targetAsset, tp => localTicker.get(tp).map(_.priceEstimate))
@@ -110,7 +109,7 @@ case class LocalCryptoValue(exchange: String, asset: Asset, amount: Double) {
       .convertTo(targetAsset, tradepair => findConversionRate(exchange, tradepair))
       .map(e => LocalCryptoValue(exchange, e.asset, e.amount))
 
-  def convertTo(targetAsset: Asset, tickers: Map[String, Map[TradePair, Ticker]]): Option[LocalCryptoValue] =
+  def convertTo(targetAsset: Asset, tickers: TickersReadonly): Option[LocalCryptoValue] =
     CryptoValue(asset, amount)
       .convertTo(targetAsset, tickers(exchange))
       .map(e => LocalCryptoValue(exchange, e.asset, e.amount))

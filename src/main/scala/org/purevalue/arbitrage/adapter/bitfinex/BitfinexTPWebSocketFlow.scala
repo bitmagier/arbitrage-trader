@@ -181,13 +181,13 @@ case class BitfinexTPWebSocketFlow(config: ExchangeConfig, tradePair: BitfinexTr
       channel match {
         case "ticker" =>
           tickerChannelId = channelId
-          log.debug(s"$tradePair: ticker channelId=$channelId")
+          if (log.isTraceEnabled) log.trace(s"$tradePair: ticker channelId=$channelId")
         case "book" =>
           orderBookChannelId = channelId
-          log.debug(s"$tradePair: book channelId=$channelId")
+          if (log.isTraceEnabled) log.trace(s"$tradePair: book channelId=$channelId")
       }
     case "error" => log.error(s"received error message: $j")
-    case "info" => log.debug(s"received info message: $j")
+    case "info" => log.trace(s"received info message: $j")
     case _ => log.warn(s"received unidentified message: $j")
   }
 
@@ -284,7 +284,7 @@ case class BitfinexTPWebSocketFlow(config: ExchangeConfig, tradePair: BitfinexTr
     ws._1.flatMap {
       upgrade =>
         if (upgrade.response.status == StatusCodes.SwitchingProtocols) {
-          log.debug("WebSocket connected")
+          if (log.isTraceEnabled) log.trace("WebSocket connected")
           Future.successful(Done)
         } else {
           throw new RuntimeException(s"Connection failed: ${
@@ -296,7 +296,7 @@ case class BitfinexTPWebSocketFlow(config: ExchangeConfig, tradePair: BitfinexTr
 
   override def receive: Receive = {
     case StartStreamRequest(sink) =>
-      log.debug("starting WebSocket stream")
+      if (log.isTraceEnabled) log.trace("starting WebSocket stream")
       ws = Http().singleWebSocketRequest(
         WebSocketRequest(WebSocketEndpoint),
         createFlowTo(sink))

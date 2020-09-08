@@ -8,6 +8,7 @@ import akka.actor.SupervisorStrategy.Restart
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, OneForOneStrategy, PoisonPill, Props, Status}
 import akka.pattern.ask
 import akka.util.Timeout
+import org.purevalue.arbitrage.Asset.USDT
 import org.purevalue.arbitrage.Exchange.{GetTradePairs, RemoveTradePair, StartStreaming}
 import org.purevalue.arbitrage.ExchangeAccountDataManager.{NewLimitOrder, NewOrderAck}
 import org.purevalue.arbitrage.ExchangeLiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityRequest}
@@ -25,11 +26,6 @@ import scala.util.{Failure, Success}
 
 object TradeRoom {
 
-  case class ReferenceTicker(var values: scala.collection.concurrent.Map[TradePair, ExtendedTicker]) {
-    def readonly: ReferenceTickerReadonly = ReferenceTickerReadonly(values)
-  }
-  case class ReferenceTickerReadonly(values: scala.collection.Map[TradePair, ExtendedTicker])
-
   type TickersReadonly = scala.collection.Map[String, scala.collection.Map[TradePair, Ticker]]
   type ExtendedTickersReadonly = scala.collection.Map[String, scala.collection.Map[TradePair, ExtendedTicker]]
   type ActiveOrderBundlesReadonly = scala.collection.Map[UUID, OrderBundle]
@@ -43,7 +39,9 @@ object TradeRoom {
                           orderBooks: scala.collection.Map[String, scala.collection.Map[TradePair, OrderBook]],
                           balances: scala.collection.Map[String, Wallet],
                           fees: scala.collection.Map[String, Fee],
-                          referenceTicker: ReferenceTicker)
+                          doNotTouch: Map[String, Seq[Asset]]) {
+    def referenceTicker: scala.collection.Map[TradePair, Ticker] = tickers(Config.tradeRoom.referenceTickerExchange)
+  }
 
   case class OrderRef(exchange: String, tradePair: TradePair, externalOrderId: String)
 
@@ -90,23 +88,26 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   private var wallets: Map[String, Wallet] = Map()
   private val dataAge: ConcurrentMap[String, TPDataTimestamps] = TrieMap()
 
-  private val referenceTicker = ReferenceTicker(null)
+  private def referenceTicker: scala.collection.Map[TradePair, Ticker] = tickers(config.referenceTickerExchange)
 
   // Map(exchange-name -> Map(order-ref -> order)) contains incoming order & order-update data from exchanges data stream
   private val activeOrders: ConcurrentMap[String, ConcurrentMap[OrderRef, Order]] = TrieMap()
 
   // housekeeping of our requests: OrderBundles + LiquidityTx
   private val openOrderBundles: ConcurrentMap[UUID, OrderBundle] = TrieMap() // Map(order-bundle-id -> OrderBundle) maintained by TradeRoom
-  private val openLiquidityTx: ConcurrentMap[OrderRef, LiquidityTx] = TrieMap() // Map(order-request-id -> OrderRequest) maintained by TradeRoom
+  private val openLiquidityTx: ConcurrentMap[OrderRef, LiquidityTx] = TrieMap() // maintained by TradeRoom
   private var finishedOrderBundles: List[FinishedOrderBundle] = List()
   private var finishedLiquidityTx: List[FinishedLiquidityTx] = List()
 
   val ExchangesConfig: Map[String, ExchangeConfig] = Config.activeExchanges.map(e => (e, Config.exchange(e))).toMap
   private val fees: Map[String, Fee] = ExchangesConfig.values.map(e => (e.exchangeName, e.fee)).toMap // TODO query from exchange
 
-  private val tradeContext: TradeContext = TradeContext(tickers, extendedTickers, orderBooks, wallets, fees, referenceTicker)
+  private val doNotTouchAssets: Map[String, Seq[Asset]] =
+    ExchangesConfig.values.map(e => (e.exchangeName, e.doNotTouchTheseAssets)).toMap
 
-  private val orderBundleSafetyGuard = OrderBundleSafetyGuard(config.orderBundleSafetyGuard, ExchangesConfig, tickers, dataAge, referenceTicker.readonly, openOrderBundles)
+  private val tradeContext: TradeContext = TradeContext(tickers, extendedTickers, orderBooks, wallets, fees, doNotTouchAssets)
+
+  private val orderBundleSafetyGuard = new OrderBundleSafetyGuard(config.orderBundleSafetyGuard, ExchangesConfig, tradeContext, dataAge, openOrderBundles)
 
   val orderManagementSupervisorSchedule: Cancellable = actorSystem.scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, OrderManagementSupervisor())
   val logScheduleRate: FiniteDuration = FiniteDuration(config.stats.reportInterval.toNanos, TimeUnit.NANOSECONDS)
@@ -156,7 +157,14 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       .map(_.map(_.toOrderRef))
   }
 
-  def placeLiquidityTransformationOrder(request: OrderRequest): Unit = {
+  def tryToPlaceLiquidityTransformationOrder(request: OrderRequest): Unit = {
+    if (doNotTouchAssets(request.exchange).intersect(request.tradePair.involvedAssets).nonEmpty) throw new IllegalArgumentException
+
+    if (openLiquidityTx.keys.exists(ref => ref.exchange == request.exchange && ref.tradePair == request.tradePair)) {
+      log.debug(s"Ignoring liquidity tx because a similar one (same trade pair on same exchange) is still in place: $request")
+      return
+    }
+
     if (!config.productionMode && (finishedLiquidityTx.nonEmpty || openLiquidityTx.nonEmpty)) {
       log.debug("Ignoring further liquidity tx, because we are NOT in production mode")
       return
@@ -178,6 +186,10 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   }
 
   def tryToPlaceOrderBundle(bundle: OrderRequestBundle): Unit = {
+    if (bundle.orderRequests.exists(e =>
+      doNotTouchAssets(e.exchange).intersect(e.tradePair.involvedAssets).nonEmpty)) {
+      log.debug(s"ignoring $bundle containing a DO-NOT-TOUCH asset")
+    }
     if (!config.productionMode && (finishedOrderBundles.nonEmpty || openOrderBundles.nonEmpty)) {
       log.debug("Ignoring further order request bundle, because we are NOT in production mode")
       return
@@ -219,19 +231,6 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     Await.result((exchanges(exchange) ? GetTradePairs()).mapTo[Set[TradePair]], timeout.duration.plus(500.millis))
   }
 
-  def dropDoNotTouchTradepairs(): Unit = {
-    for (exchange: String <- exchanges.keys) {
-      val doNotTouchAssets = ExchangesConfig(exchange).doNotTouchTheseAssets
-      if (doNotTouchAssets.nonEmpty) {
-        val tp: Set[TradePair] = queryTradePairs(exchange)
-        val tpToDrop = tp.filter(e => doNotTouchAssets.contains(e.baseAsset) || doNotTouchAssets.contains(e.quoteAsset))
-        for (tp: TradePair <- tpToDrop) {
-          dropTradePairSync(exchange, tp)
-        }
-      }
-    }
-  }
-
 
   /**
    * Select none-reserve assets, where not at least two connected compatible TradePairs can be found looking at all exchanges.
@@ -248,6 +247,9 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
    *
    * This method runs non-parallel and synchronously to finish together with all actions finished
    * Parallel optimization is possible but not necessary for this small task
+   *
+   * Note:
+   * For liquidity conversion and some calculations we need USDT pairs in ReferenceTicker, so for now we don't drop USDT, until ReferenceTicker is decoupled from exchange TradePairs
    */
   def dropUnusableTradepairsSync(): Unit = {
     var eTradePairs: Set[Tuple2[String, TradePair]] = Set()
@@ -255,7 +257,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       val tp: Set[TradePair] = queryTradePairs(exchange)
       eTradePairs = eTradePairs ++ tp.map(e => (exchange, e))
     }
-    val assetsToRemove = eTradePairs
+    val assetsToRemove: Set[Asset] = eTradePairs
       .map(_._2.baseAsset) // set of candidate assets
       .filterNot(e => ExchangesConfig.values.exists(_.reserveAssets.contains(e))) // don't select reserve assets
       .filterNot(a =>
@@ -267,7 +269,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
 
     for (asset <- assetsToRemove) {
       val tradePairsToDrop: Set[Tuple2[String, TradePair]] =
-        eTradePairs.filter(_._2.baseAsset == asset)
+        eTradePairs.filter(e => e._2.baseAsset == asset && e._2.quoteAsset != USDT) // keep :USDT TradePairs because we want them in the ReferenceTicker
 
       log.info(s"${Emoji.Robot}  Dropping all TradePairs involving $asset, because there are not enough (> 1) compatible TradePairs on any exchange:  $tradePairsToDrop")
       tradePairsToDrop.foreach(e => dropTradePairSync(e._1, e._2))
@@ -285,10 +287,6 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     wallets += exchangeName -> Wallet(Map())
     activeOrders += exchangeName -> TrieMap()
 
-    if (exchangeName == config.referenceTickerExchange) {
-      referenceTicker.values = extendedTickers(exchangeName)
-    }
-
     exchanges = exchanges + (exchangeName -> context.actorOf(
       Exchange.props(
         exchangeName,
@@ -305,7 +303,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
           wallets(exchangeName),
           activeOrders(exchangeName)
         ),
-        referenceTicker
+        () => referenceTicker
       ), camelName))
   }
 
@@ -322,7 +320,6 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   }
 
   def cleanupTradePairs(): Unit = {
-    dropDoNotTouchTradepairs()
     dropUnusableTradepairsSync()
     log.info(s"${Emoji.Robot}  Finished cleanup of unusable trade pairs")
   }
@@ -379,20 +376,22 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       .toSet
     if (inconvertibleAssets.nonEmpty) {
       log.warn(s"Currently we cannot calculate the correct balance, because no reference ticker available for converting them to $liquiditySumCurrency: $inconvertibleAssets")
+      log.info(s"ReferenceTicker trade pairs: ${referenceTicker.keys.toSeq.sorted}")
     }
     val liquidityPerExchange: String =
-      wallets.map { case (exchange, b) => (
-        exchange,
-        CryptoValue(
+      wallets.map { case (exchange, b) =>
+        LocalCryptoValue(
+          exchange,
           liquiditySumCurrency,
           b.balance
             .filterNot(e => inconvertibleAssets.contains(e._1))
-            .map(e => CryptoValue(e._2.asset, e._2.amountAvailable).convertTo(liquiditySumCurrency, referenceTicker).get)
+            .filterNot(e => doNotTouchAssets(exchange).contains(e._1))
+            .map(e => LocalCryptoValue(exchange, e._2.asset, e._2.amountAvailable).convertTo(liquiditySumCurrency, tradeContext.tickers).get)
             .map(_.amount)
             .sum
-        ))
-      }.map(e => s"${e._1}: ${e._2}").mkString(", ")
-    log.info(s"${Emoji.Robot}  Available liquidity sums: $liquidityPerExchange")
+        )
+      }.map(e => s"${e.exchange}: ${formatDecimal(e.amount,2)} ${e.asset.officialSymbol}").mkString(", ")
+    log.info(s"${Emoji.Robot}  Liquidity sums available for trades: $liquidityPerExchange")
 
     val freshestTicker = dataAge.maxBy(_._2.tickerTS.toEpochMilli)
     val oldestTicker = dataAge.minBy(_._2.tickerTS.toEpochMilli)
@@ -550,7 +549,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     case bundle: OrderRequestBundle => tryToPlaceOrderBundle(bundle)
 
     // messages from ExchangeLiquidityManager
-    case LiquidityTransformationOrder(orderRequest) => placeLiquidityTransformationOrder(orderRequest)
+    case LiquidityTransformationOrder(orderRequest) => tryToPlaceLiquidityTransformationOrder(orderRequest)
 
     // messages from outself
     case OrderManagementSupervisor() =>

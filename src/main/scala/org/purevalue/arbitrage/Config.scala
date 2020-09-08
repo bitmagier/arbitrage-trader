@@ -19,13 +19,13 @@ case class ExchangeConfig(exchangeName: String,
                           makerFee: Double,
                           takerFee: Double,
                           orderBooksEnabled: Boolean,
-                          doNotTouchTheseAssets: Set[Asset]) {
+                          doNotTouchTheseAssets: Seq[Asset]) {
   def fee: Fee = Fee(exchangeName, makerFee, takerFee)
 }
 
 object ExchangeConfig {
   def apply(name:String, c:com.typesafe.config.Config): ExchangeConfig = {
-    val doNotTouchTheseAssets = c.getStringList("do-not-touch-these-assets").asScala.map(e => Asset(e)).toSet
+    val doNotTouchTheseAssets = c.getStringList("do-not-touch-these-assets").asScala.map(e => Asset(e))
     val reserveAssets = c.getStringList("reserve-assets").asScala.map(e => Asset(e)).toList
     if (reserveAssets.exists(doNotTouchTheseAssets.contains))
       throw new IllegalArgumentException(s"$name: reserve-assets & do-not-touch-these-assets overlap!")

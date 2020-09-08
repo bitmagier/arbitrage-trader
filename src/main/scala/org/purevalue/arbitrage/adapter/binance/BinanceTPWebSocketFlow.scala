@@ -12,7 +12,7 @@ import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.{toAsk, toBid}
 import org.purevalue.arbitrage.adapter.binance.BinanceTPWebSocketFlow.StartStreamRequest
 import org.slf4j.LoggerFactory
-import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
+import spray.json.{DefaultJsonProtocol, JsObject, JsonParser, RootJsonFormat, enrichAny}
 
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, Future, Promise}
@@ -121,7 +121,7 @@ case class BinanceTPWebSocketFlow(config: ExchangeConfig, tradePair: BinanceTrad
   def createConnected: Future[Done.type] =
     ws._1.flatMap { upgrade =>
       if (upgrade.response.status == StatusCodes.SwitchingProtocols) {
-        log.debug("WebSocket connected")
+        if (log.isTraceEnabled) log.trace("WebSocket connected")
         Future.successful(Done)
       } else {
         throw new RuntimeException(s"Connection failed: ${upgrade.response.status}")
@@ -153,7 +153,7 @@ case class BinanceTPWebSocketFlow(config: ExchangeConfig, tradePair: BinanceTrad
   override def receive: Receive = {
 
     case StartStreamRequest(sink) =>
-      log.debug("starting WebSocket stream")
+      log.trace("starting WebSocket stream")
       ws = Http().singleWebSocketRequest(
         WebSocketRequest(WebSocketEndpoint),
         createFlowTo(sink))

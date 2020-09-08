@@ -7,7 +7,7 @@ import akka.util.Timeout
 import org.purevalue.arbitrage.Exchange.{GetTradePairs, RemoveTradePair, StartStreaming, TradePairs}
 import org.purevalue.arbitrage.ExchangeAccountDataManager.{CancelOrder, FetchOrder, NewLimitOrder}
 import org.purevalue.arbitrage.ExchangeLiquidityManager.{LiquidityLockClearance, LiquidityRequest}
-import org.purevalue.arbitrage.TradeRoom.{ReferenceTicker, WalletUpdateTrigger}
+import org.purevalue.arbitrage.TradeRoom.WalletUpdateTrigger
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration.DurationInt
@@ -28,7 +28,7 @@ object Exchange {
             initStuff: ExchangeInitStuff,
             tpData: ExchangeTPData,
             accountData: IncomingExchangeAccountData,
-            referenceTicker: ReferenceTicker): Props =
+            referenceTicker: () => scala.collection.Map[TradePair, Ticker]): Props =
     Props(new Exchange(exchangeName, config, tradeRoom, initStuff, tpData, accountData, referenceTicker))
 }
 
@@ -38,12 +38,13 @@ case class Exchange(exchangeName: String,
                     initStuff: ExchangeInitStuff,
                     tpData: ExchangeTPData,
                     accountData: IncomingExchangeAccountData,
-                    referenceTicker: ReferenceTicker) extends Actor {
+                    referenceTicker: () => scala.collection.Map[TradePair, Ticker]) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[Exchange])
   implicit val system: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = system.dispatcher
 
   val tradeSimulation: Boolean = Config.tradeRoom.tradeSimulation
+
 
   var publicDataInquirer: ActorRef = _
   var liquidityManager: ActorRef = _
@@ -55,7 +56,8 @@ case class Exchange(exchangeName: String,
   var tpDataInitPending: Set[TradePair] = _
   var accountDataManager: ActorRef = _
 
-  def initialized: Boolean = tpDataInitPending != null && tpDataInitPending.isEmpty
+  var initialized: Boolean = false
+
 
   def initTradePairBasedDataManagers(): Unit = {
     tpDataInitPending = tradePairs
@@ -117,7 +119,6 @@ case class Exchange(exchangeName: String,
       s"${if (tradeSimulation) " in TRADE-SIMULATION mode"}" +
       s"${if (config.doNotTouchTheseAssets.nonEmpty) s" NOT touching ${config.doNotTouchTheseAssets}"}")
     publicDataInquirer = context.actorOf(initStuff.publicDataInquirerProps(config), s"$exchangeName-PublicDataInquirer")
-    liquidityManager = context.actorOf(ExchangeLiquidityManager.props(Config.liquidityManager, config, tradeRoom, tpData.readonly, accountData.wallet, referenceTicker.readonly))
 
     implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
     tradePairs = Await.result((publicDataInquirer ? GetTradePairs()).mapTo[TradePairs], timeout.duration.plus(500.millis)).value
@@ -148,7 +149,7 @@ case class Exchange(exchangeName: String,
     case l: LiquidityRequest => liquidityManager.forward(l)
     case c: LiquidityLockClearance => liquidityManager.forward(c)
 
-    case t: WalletUpdateTrigger => liquidityManager.forward(t)
+    case t: WalletUpdateTrigger => if (initialized) liquidityManager.forward(t)
 
     // removes tradepair before streaming has started
     case RemoveTradePair(tp) =>
@@ -159,8 +160,7 @@ case class Exchange(exchangeName: String,
       initTradePairBasedDataManagers()
       if (config.secrets.apiKey.isEmpty || config.secrets.apiSecretKey.isEmpty)
         log.warn(s"Will NOT start AccountDataManager for exchange ${config.exchangeName} because API-Key is not set")
-      else
-        initAccountDataManager()
+      else initAccountDataManager()
 
     // tested, but currently unused - maybe we need that later
     //    case RemoveRunningTradePair(tp) =>
@@ -171,9 +171,11 @@ case class Exchange(exchangeName: String,
 
     case ExchangePublicTPDataManager.Initialized(t) =>
       tpDataInitPending -= t
-      log.debug(s"[$exchangeName]: [$t] initialized. Still pending: $tpDataInitPending")
+      if (log.isTraceEnabled) log.trace(s"[$exchangeName]: [$t] initialized. Still pending: $tpDataInitPending")
       if (tpDataInitPending.isEmpty) {
         log.info(s"${Emoji.Robot}  [$exchangeName]: All TradePair data streams initialized and running")
+        liquidityManager = context.actorOf(ExchangeLiquidityManager.props(Config.liquidityManager, config, tradeRoom, tpData.readonly, accountData.wallet, referenceTicker))
+        initialized = true
         tradeRoom ! Exchange.Initialized(exchangeName)
       }
 

@@ -49,10 +49,12 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
   case class NoUSDTConversion(asses: Asset) extends NoResultReason
   case class MinGainTooLow() extends NoResultReason
 
+  def canTrade(t:Ticker): Boolean = !tc.doNotTouch(t.exchange).contains(t.tradePair.involvedAssets)
+
   def findBestShotBasedOnTicker(tradePair: TradePair): (Option[OrderRequestBundle], Option[NoResultReason]) = {
     // ignore wallet for now
-    val ticker4Buy: Iterable[Ticker] = tc.tickers.map(_._2(tradePair))
-    val ticker4Sell: Iterable[Ticker] = tc.tickers.map(_._2(tradePair))
+    val ticker4Buy: Iterable[Ticker] = tc.tickers.map(_._2(tradePair)).filter(canTrade)
+    val ticker4Sell: Iterable[Ticker] = tc.tickers.map(_._2(tradePair)).filter(canTrade)
 
     // safety check
     if (!ticker4Buy.forall(_.tradePair == tradePair)
@@ -270,31 +272,21 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
   log.info("FooTrader running")
 
   override def receive: Receive = {
+
     // from Scheduler
 
     case Trigger() =>
       if (pendingOrderBundles.size < maxOpenOrderBundles) {
-        log.debug(s"Using TradeContext: with Tickers for Tradepairs[${tc.tickers.keys}]")
+        log.trace(s"Using TradeContext: with Tickers for Tradepairs[${tc.tickers.keys.mkString(",")}]")
         lifeSign()
         numSearchesDiff += 1
         numSearchesTotal += 1
         findBestShots(maxOpenOrderBundles - pendingOrderBundles.size).foreach { b =>
           shotsDelivered += 1
-          // TODO pendingOrderBundles += (orderBundle.id -> orderBundle)
           tradeRoom ! b
         }
       }
 
-//    case OrderBundlePlaced(orderBundleId) =>
-//      val ob = pendingOrderBundles(orderBundleId)
-//      pendingOrderBundles = pendingOrderBundles - orderBundleId
-//      activeOrderBundles += (orderBundleId -> ob)
-//      log.info(s"FooTrader: $ob")
-//
-//    case OrderBundleCompleted(ob) =>
-//      activeOrderBundles -= ob.orderBundle.id
-//      log.info(s"FooTrader: $ob")
-//
     case Status.Failure(cause) => log.error("received failure", cause)
   }
 }

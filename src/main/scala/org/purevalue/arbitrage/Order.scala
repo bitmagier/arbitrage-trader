@@ -4,11 +4,9 @@ import java.time.{Instant, LocalDateTime}
 import java.util.UUID
 
 import akka.actor.ActorRef
-import org.purevalue.arbitrage.TradeRoom.{OrderRef, ReferenceTicker, TickersReadonly}
+import org.purevalue.arbitrage.TradeRoom.{OrderRef, TickersReadonly}
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.slf4j.LoggerFactory
-
-import scala.collection.mutable.ArrayBuffer
 
 
 /**
@@ -174,7 +172,7 @@ object OrderBill {
       v.convertTo(targetAsset, findConversionRate) match {
         case Some(v) => v.amount
         case None =>
-          throw new RuntimeException(s"Unable to convert ${v.asset} to $targetAsset")
+          throw new RuntimeException(s"Unable to convert ${v.asset} to $targetAsset on ${v.exchange}")
       }
     }.sum
   }
