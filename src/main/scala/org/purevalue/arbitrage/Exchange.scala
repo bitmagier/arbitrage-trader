@@ -7,7 +7,7 @@ import akka.util.Timeout
 import org.purevalue.arbitrage.Exchange.{GetTradePairs, RemoveTradePair, StartStreaming, TradePairs}
 import org.purevalue.arbitrage.ExchangeAccountDataManager.{CancelOrder, FetchOrder, NewLimitOrder}
 import org.purevalue.arbitrage.ExchangeLiquidityManager.{LiquidityLockClearance, LiquidityRequest}
-import org.purevalue.arbitrage.TradeRoom.WalletUpdateTrigger
+import org.purevalue.arbitrage.TradeRoom.{LiquidityTx, OrderRef, WalletUpdateTrigger}
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration.DurationInt
@@ -28,8 +28,9 @@ object Exchange {
             initStuff: ExchangeInitStuff,
             tpData: ExchangeTPData,
             accountData: IncomingExchangeAccountData,
-            referenceTicker: () => scala.collection.Map[TradePair, Ticker]): Props =
-    Props(new Exchange(exchangeName, config, tradeRoom, initStuff, tpData, accountData, referenceTicker))
+            referenceTicker: () => scala.collection.Map[TradePair, Ticker],
+            openLiquidityTx: () => Iterable[LiquidityTx]): Props =
+    Props(new Exchange(exchangeName, config, tradeRoom, initStuff, tpData, accountData, referenceTicker, openLiquidityTx))
 }
 
 case class Exchange(exchangeName: String,
@@ -38,13 +39,13 @@ case class Exchange(exchangeName: String,
                     initStuff: ExchangeInitStuff,
                     tpData: ExchangeTPData,
                     accountData: IncomingExchangeAccountData,
-                    referenceTicker: () => scala.collection.Map[TradePair, Ticker]) extends Actor {
+                    referenceTicker: () => scala.collection.Map[TradePair, Ticker],
+                    openLiquidityTx: () => Iterable[LiquidityTx]) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[Exchange])
   implicit val system: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = system.dispatcher
 
   val tradeSimulation: Boolean = Config.tradeRoom.tradeSimulation
-
 
   var publicDataInquirer: ActorRef = _
   var liquidityManager: ActorRef = _
@@ -131,6 +132,12 @@ case class Exchange(exchangeName: String,
       throw new IllegalArgumentException("Order with DO-NOT-TOUCH asset")
   }
 
+  def initLiquidityManager(): Unit = {
+    liquidityManager = context.actorOf(
+      ExchangeLiquidityManager.props(
+        Config.liquidityManager, config, tradeRoom, tpData.readonly, accountData.wallet, referenceTicker, openLiquidityTx))
+  }
+
   override def receive: Receive = {
 
     // Messages from TradeRoom side
@@ -174,7 +181,7 @@ case class Exchange(exchangeName: String,
       if (log.isTraceEnabled) log.trace(s"[$exchangeName]: [$t] initialized. Still pending: $tpDataInitPending")
       if (tpDataInitPending.isEmpty) {
         log.info(s"${Emoji.Robot}  [$exchangeName]: All TradePair data streams initialized and running")
-        liquidityManager = context.actorOf(ExchangeLiquidityManager.props(Config.liquidityManager, config, tradeRoom, tpData.readonly, accountData.wallet, referenceTicker))
+        initLiquidityManager()
         initialized = true
         tradeRoom ! Exchange.Initialized(exchangeName)
       }

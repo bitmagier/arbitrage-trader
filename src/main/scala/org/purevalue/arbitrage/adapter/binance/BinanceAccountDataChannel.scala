@@ -48,7 +48,12 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
   implicit val executionContext: ExecutionContextExecutor = system.dispatcher
 
   val pingSchedule: Cancellable = system.scheduler.scheduleAtFixedRate(30.minutes, 30.minutes, self, SendPing())
-  val externalAccountUpdateSchedule: Cancellable = system.scheduler.scheduleAtFixedRate(1.minute, 1.minute, self, QueryAccountInformation())
+
+  // in trade-simulation-mode these external updates are contra-productive
+  var externalAccountUpdateSchedule: Option[Cancellable] = None
+  if (!Config.tradeRoom.tradeSimulation) {
+    externalAccountUpdateSchedule = Some(system.scheduler.scheduleAtFixedRate(1.minute, 1.minute, self, QueryAccountInformation()))
+  }
 
   var listenKey: String = _
   var binanceTradePairs: Set[BinanceTradePair] = _
@@ -246,7 +251,6 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
 
       restSource._1.offer(queryAccountInformation())
       queryOpenOrders().foreach(e => restSource._1.offer(e))
-
 
     case QueryAccountInformation() => // do the REST call to get a fresh snapshot. balance changes done via the web interface do not seem to be tracked by the streams
       restSource._1.offer(queryAccountInformation())

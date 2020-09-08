@@ -46,6 +46,7 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
   }
 
   private def applyData(dataset: ExchangeAccountStreamData): Unit = {
+    log.trace(s"applying incoming $dataset")
     dataset match {
       case w: Wallet =>
         accountData.wallet.balance = w.balance
@@ -60,7 +61,7 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
           // TODO validate if an update of amountAvailable is the right thing, that is meant by this message (I'm 95% sure so far)
           case (a: Asset, b: Balance) if a == w.asset =>
             (a, Balance(b.asset, b.amountAvailable + w.amountDelta, b.amountLocked))
-          case x => x
+          case (a: Asset, b: Balance) => (a,b)
         }
         tradeRoom ! WalletUpdateTrigger(config.exchangeName)
 
@@ -94,7 +95,7 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
 
     case SimulatedData(dataset) =>
       if (!Config.tradeRoom.tradeSimulation) throw new RuntimeException
-      log.debug(s"Applying simulation data: $dataset")
+      log.trace(s"Applying simulation data ...")
       applyData(dataset)
   }
 }

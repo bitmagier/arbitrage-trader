@@ -85,7 +85,7 @@ class ExchangeLiquidityManagerSpec
         Bitcoin -> Balance(Bitcoin, 1.0, 0.0),
         USDT -> Balance(USDT, 0.05, 0.0)
       ))
-      val m = system.actorOf(ExchangeLiquidityManager.props(Config, exchangeConfig, tradeRoom.ref, tpData, wallet, () => referenceTicker))
+      val m = system.actorOf(ExchangeLiquidityManager.props(Config, exchangeConfig, tradeRoom.ref, tpData, wallet, () => referenceTicker, () => Seq()))
 
       m ! WalletUpdateTrigger("e1") // trigger housekeeping
 
@@ -129,7 +129,7 @@ class ExchangeLiquidityManagerSpec
         Asset("ALGO") -> Balance(Asset("ALGO"), 500.0, 0.0),
         Asset("OMG") -> Balance(Asset("OMG"), 1000.0, 0.0) // staked (in do-not-touch list)
       ))
-      val m = system.actorOf(ExchangeLiquidityManager.props(Config, exchangeConfig, tradeRoom.ref, tpData, wallet, () => referenceTicker))
+      val m = system.actorOf(ExchangeLiquidityManager.props(Config, exchangeConfig, tradeRoom.ref, tpData, wallet, () => referenceTicker, () => Seq()))
 
       val requestedLiquidity = Seq(CryptoValue(Asset("ADA"), 100.0), CryptoValue(Asset("LINK"), 25.0))
       implicit val timeout: Timeout = 1.second
@@ -189,7 +189,7 @@ class ExchangeLiquidityManagerSpec
         Asset("ALGO") -> Balance(Asset("ALGO"), 1000.0, 0.0)
       ))
 
-      val m = system.actorOf(ExchangeLiquidityManager.props(Config, exchangeConfig, tradeRoom.ref, tpData, wallet, () => referenceTicker))
+      val m = system.actorOf(ExchangeLiquidityManager.props(Config, exchangeConfig, tradeRoom.ref, tpData, wallet, () => referenceTicker, () => Seq()))
       implicit val timeout: Timeout = 2.second
       val lock = Await.result(
         (m ? LiquidityRequest(

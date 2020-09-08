@@ -157,11 +157,12 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       .map(_.map(_.toOrderRef))
   }
 
-  def tryToPlaceLiquidityTransformationOrder(request: OrderRequest): Unit = {
+  def placeLiquidityTransformationOrder(request: OrderRequest): Unit = {
     if (doNotTouchAssets(request.exchange).intersect(request.tradePair.involvedAssets).nonEmpty) throw new IllegalArgumentException
 
+    // this should not occur - but here is a last guard
     if (openLiquidityTx.keys.exists(ref => ref.exchange == request.exchange && ref.tradePair == request.tradePair)) {
-      log.debug(s"Ignoring liquidity tx because a similar one (same trade pair on same exchange) is still in place: $request")
+      log.warn(s"Ignoring liquidity tx because a similar one (same trade pair on same exchange) is still in place: $request")
       return
     }
 
@@ -303,7 +304,8 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
           wallets(exchangeName),
           activeOrders(exchangeName)
         ),
-        () => referenceTicker
+        () => referenceTicker,
+        () => openLiquidityTx.filter(_._1.exchange == exchangeName).values
       ), camelName))
   }
 
@@ -392,6 +394,8 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
         )
       }.map(e => s"${e.exchange}: ${formatDecimal(e.amount,2)} ${e.asset.officialSymbol}").mkString(", ")
     log.info(s"${Emoji.Robot}  Liquidity sums available for trades: $liquidityPerExchange")
+
+    log.debug(s"${Emoji.Robot}  Balance per exchange: $wallets")
 
     val freshestTicker = dataAge.maxBy(_._2.tickerTS.toEpochMilli)
     val oldestTicker = dataAge.minBy(_._2.tickerTS.toEpochMilli)
@@ -549,7 +553,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     case bundle: OrderRequestBundle => tryToPlaceOrderBundle(bundle)
 
     // messages from ExchangeLiquidityManager
-    case LiquidityTransformationOrder(orderRequest) => tryToPlaceLiquidityTransformationOrder(orderRequest)
+    case LiquidityTransformationOrder(orderRequest) => placeLiquidityTransformationOrder(orderRequest)
 
     // messages from outself
     case OrderManagementSupervisor() =>
