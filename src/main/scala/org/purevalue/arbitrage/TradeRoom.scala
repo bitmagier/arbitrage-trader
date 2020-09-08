@@ -579,4 +579,6 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   }
 }
 
+// TODO single finished OrderBundle proof-of-concept check: If real win is a loss, we stop our application directly!
+// TODO finished orderbundle statistics: Last hour: number of trades, Estimated Win, real win at tx times, real win now
 // TODO decouple reference-ticker delivery from ExchangeTPDataManager (=active trade pairs), because Tradepair cleanup works against a rich reference ticker

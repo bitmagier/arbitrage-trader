@@ -2,6 +2,7 @@ package org.purevalue.arbitrage
 
 import java.time.{Duration, Instant}
 
+import org.purevalue.arbitrage.Asset.USDT
 import org.purevalue.arbitrage.TradeRoom.{ActiveOrderBundlesReadonly, TradeContext}
 import org.purevalue.arbitrage.Utils.formatDecimal
 import org.slf4j.LoggerFactory
@@ -131,23 +132,25 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
       })
 
     val balanceSheet: Iterable[LocalCryptoValue] = transactions.flatMap(OrderBill.calcBalanceSheet)
-
-    // self check
-    val groupedAndCleanedUpBalanceSheet: Iterable[LocalCryptoValue] =
+    val balanceSheetNoneReserveAssetsPart: Iterable[LocalCryptoValue] =
       balanceSheet
-        .groupBy(e => (e.exchange, e.asset))
-        .map(e => LocalCryptoValue(e._1._1, e._1._2, e._2.map(_.amount).sum)) // summed up values of same exchange+asset
-        .filterNot(_.amount == 0.0d) // ignore zeros
+        .filterNot(e => exchangesConfig(e.exchange).reserveAssets.contains(e.asset))
 
-    if (!groupedAndCleanedUpBalanceSheet.forall(v => exchangesConfig(v.exchange).reserveAssets.contains(v.asset))) {
-      log.error(s"Cleaned up balance sheet should contain reserve asset values only! Instead it is found: $groupedAndCleanedUpBalanceSheet")
-      None
+    // self check - none reserve assets should sum up to zero
+    val aggregatedNoneReserveAssetBalanceSheet: Iterable[CryptoValue] =
+      balanceSheetNoneReserveAssetsPart
+        .groupBy(_.asset)
+        .map(e => CryptoValue(e._1, e._2.map(_.amount).sum))
+        .filterNot(_.amount == 0.0) // ignore expected calculative zero amounts (in reality we will have a difference in the real transaction because we never know how much fee we actually pay)
+    if (aggregatedNoneReserveAssetBalanceSheet.nonEmpty) {
+      log.error(s"Summed up none reserve balances should result in zero, but they don't: $aggregatedNoneReserveAssetBalanceSheet")
+      return None
     }
 
     Some(
       OrderBill.aggregateValues(
-        groupedAndCleanedUpBalanceSheet,
-        Asset.USDT,
+        balanceSheet,
+        USDT,
         tc.tickers))
   }
 

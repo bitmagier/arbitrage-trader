@@ -144,7 +144,6 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
       }
     }
 
-
   def queryAccountInformation(): AccountInformationJson = {
     import BinanceAccountDataJsonProtocoll._
     Await.result(
@@ -240,7 +239,6 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
     pullTradePairResolveFunction()
   }
 
-
   override def receive: Receive = {
     case StartStreamRequest(sink) =>
       log.trace("starting WebSocket stream")
@@ -261,12 +259,12 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
     case CancelOrder(tradePair, externalOrderId) =>
       cancelOrder(tradePair, externalOrderId.toLong).pipeTo(sender())
 
+    case NewLimitOrder(o) =>
+      newLimitOrder(o).pipeTo(sender())
+
     // TODO currently unused: query unfinished persisted orders from TradeRoom after application restart
     case FetchOrder(tradePair, externalOrderId) => ???
     //      restSource._1.offer(queryOrder(resolveSymbol(tradePair), externalOrderId.toLong))
-
-    case NewLimitOrder(o) =>
-      newLimitOrder(o).pipeTo(sender())
   }
 }
 

@@ -106,7 +106,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
         tradePair,
         TradeSide.Buy,
         tc.fees(buyExchange),
-        amountBaseAsset,
+        amountBaseAsset / (1.0 - tc.fees(buyExchange).average), // usually we have to buy X + fee, because fee gets substracted; an exeption is on binance when paying with BNB
         lowestAsk._2.price * (1.0d + orderLimitAdditionRate))
 
     val ourSellBaseAssetOrder =

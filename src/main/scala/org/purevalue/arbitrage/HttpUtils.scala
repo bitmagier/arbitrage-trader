@@ -12,6 +12,8 @@ import spray.json.{DeserializationException, JsValue, JsonParser, JsonReader}
 import scala.concurrent.{ExecutionContext, Future}
 
 object HttpUtils {
+
+
   def query(uri: String)
            (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[HttpEntity.Strict] = {
     Http().singleRequest(
@@ -23,13 +25,23 @@ object HttpUtils {
 
   //[linux]$ echo -n "symbol=LTCBTC&side=BUY&type=LIMIT&timeInForce=GTC&quantity=1&price=0.1&recvWindow=5000&timestamp=1499827319559" | openssl dgst -sha256 -hmac "NhqPtmdSJYdKjVHjA7PZj4Mge3R5YNiP1e3UZjInClVN65XAbvqqM6A7H5fATj0j"
   //(stdin)= c8db56825ae71d6d79447849e617115f4a920fa2acdcab2b053c4b2838bd6b71
-  def sha256Signature(entity: String, apiSecretKey: String): String = {
+  def hmacSha256Signature(authPayload: String, apiSecretKey: String): String = {
     import javax.crypto.Mac
     import javax.crypto.spec.SecretKeySpec
 
     val hasher = Mac.getInstance("HmacSHA256")
     hasher.init(new SecretKeySpec(apiSecretKey.getBytes, "HmacSHA256"))
-    val hash: Array[Byte] = hasher.doFinal(entity.getBytes)
+    val hash: Array[Byte] = hasher.doFinal(authPayload.getBytes)
+    convertBytesToLowerCaseHex(hash)
+  }
+
+  def hmacSha384Signature(authPayload: String, apiSecretKey: String): String = {
+    import javax.crypto.Mac
+    import javax.crypto.spec.SecretKeySpec
+
+    val hasher = Mac.getInstance("HmacSHA384")
+    hasher.init(new SecretKeySpec(apiSecretKey.getBytes, "HmacSHA384"))
+    val hash: Array[Byte] = hasher.doFinal(authPayload.getBytes)
     convertBytesToLowerCaseHex(hash)
   }
 
@@ -42,7 +54,7 @@ object HttpUtils {
           case Some(x) => x + "&"
         }) + s"timestamp=${Instant.now.toEpochMilli}"
         val signingContent = totalParamsBeforeSigning + requestBody.getOrElse("")
-        Some(totalParamsBeforeSigning + "&" + s"signature=${sha256Signature(signingContent, apiKeys.apiSecretKey)}")
+        Some(totalParamsBeforeSigning + "&" + s"signature=${hmacSha256Signature(signingContent, apiKeys.apiSecretKey)}")
       } else {
         Uri(uri).rawQueryString
       }
