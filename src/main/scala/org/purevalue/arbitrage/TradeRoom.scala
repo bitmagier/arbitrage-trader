@@ -272,7 +272,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       val tradePairsToDrop: Set[Tuple2[String, TradePair]] =
         eTradePairs.filter(e => e._2.baseAsset == asset && e._2.quoteAsset != USDT) // keep :USDT TradePairs because we want them in the ReferenceTicker
 
-      log.info(s"${Emoji.Robot}  Dropping all TradePairs involving $asset, because there are not enough (> 1) compatible TradePairs on any exchange:  $tradePairsToDrop")
+      log.debug(s"${Emoji.Robot}  Dropping all TradePairs involving $asset, because there are not enough (> 1) compatible TradePairs on any exchange:  $tradePairsToDrop")
       tradePairsToDrop.foreach(e => dropTradePairSync(e._1, e._2))
     }
   }
@@ -372,13 +372,14 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     }
 
     val liquiditySumCurrency: Asset = Config.tradeRoom.stats.aggregatedliquidityReportAsset
-    val inconvertibleAssets = wallets
-      .flatMap(_._2.balance.keys)
-      .filter(e => CryptoValue(e, 1.0).convertTo(liquiditySumCurrency, referenceTicker).isEmpty)
+    val inconvertibleAssets: Set[LocalCryptoValue] = wallets
+      .flatMap(e => e._2.balance.map(a => LocalCryptoValue(e._1, a._2.asset, a._2.amountAvailable)))
+      .filterNot(e => doNotTouchAssets(e.exchange).contains(e.asset))
+      .filter(e => e.convertTo(liquiditySumCurrency, tradeContext.tickers).isEmpty)
       .toSet
     if (inconvertibleAssets.nonEmpty) {
       log.warn(s"Currently we cannot calculate the correct balance, because no reference ticker available for converting them to $liquiditySumCurrency: $inconvertibleAssets")
-      log.info(s"ReferenceTicker trade pairs: ${referenceTicker.keys.toSeq.sorted}")
+      log.debug(s"ReferenceTicker trade pairs: ${referenceTicker.keys.toSeq.sorted}")
     }
     val liquidityPerExchange: String =
       wallets.map { case (exchange, b) =>
@@ -386,8 +387,8 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
           exchange,
           liquiditySumCurrency,
           b.balance
-            .filterNot(e => inconvertibleAssets.contains(e._1))
             .filterNot(e => doNotTouchAssets(exchange).contains(e._1))
+            .filterNot(e => inconvertibleAssets.exists(i => i.exchange == exchange && i.asset == e._1))
             .map(e => LocalCryptoValue(exchange, e._2.asset, e._2.amountAvailable).convertTo(liquiditySumCurrency, tradeContext.tickers).get)
             .map(_.amount)
             .sum
@@ -425,7 +426,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       log.info(s"${Emoji.Robot}  TradeRoom stats: [smallest 3 OrderBooks] : $orderBookBottom3")
     }
 
-    log.info(s"${Emoji.Robot}  OrderBundleSafetyGuard decision stats: ${orderBundleSafetyGuard.unsafeStats}")
+    log.info(s"${Emoji.Robot}  OrderBundleSafetyGuard decision stats: [${orderBundleSafetyGuard.unsafeStats.mkString("|")}]")
   }
 
 
