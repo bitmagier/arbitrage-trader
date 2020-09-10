@@ -1,12 +1,13 @@
-package org.purevalue.arbitrage
+package org.purevalue.arbitrage.traderoom
 
 import java.time.Instant
 import java.util.UUID
 
 import akka.actor.{Actor, ActorRef, Props}
 import akka.pattern.pipe
-import org.purevalue.arbitrage.ExchangeAccountDataManager._
+import org.purevalue.arbitrage.ExchangeConfig
 import org.purevalue.arbitrage.Main.actorSystem
+import org.purevalue.arbitrage.traderoom.ExchangeAccountDataManager._
 
 import scala.concurrent.{ExecutionContextExecutor, Future}
 
@@ -27,10 +28,10 @@ class TradeSimulator(config: ExchangeConfig, accountDataManager: ActorRef) exten
     Order(externalOrderId, o.exchange, o.tradePair, o.tradeSide, OrderType.LIMIT, o.limit, None, o.amountBaseAsset, None, creationTime, OrderStatus.NEW, 0.0, o.limit, creationTime)
 
   def orderPartiallyFilled(externalOrderId: String, creationTime: Instant, o: OrderRequest): OrderUpdate =
-    OrderUpdate(externalOrderId, o.tradePair, o.tradeSide, OrderType.LIMIT, o.limit, None, o.amountBaseAsset, creationTime, OrderStatus.PARTIALLY_FILLED, o.amountBaseAsset / 2.0, o.limit, Instant.now)
+    OrderUpdate(externalOrderId, o.tradePair, o.tradeSide, OrderType.LIMIT, o.limit, None, Some(o.amountBaseAsset), Some(creationTime), OrderStatus.PARTIALLY_FILLED, o.amountBaseAsset / 2.0, o.limit, Instant.now)
 
   def orderFilled(externalOrderId: String, creationTime: Instant, o: OrderRequest): OrderUpdate =
-    OrderUpdate(externalOrderId, o.tradePair, o.tradeSide, OrderType.LIMIT, o.limit, None, o.amountBaseAsset, creationTime, OrderStatus.FILLED, o.amountBaseAsset, o.limit, Instant.now)
+    OrderUpdate(externalOrderId, o.tradePair, o.tradeSide, OrderType.LIMIT, o.limit, None, Some(o.amountBaseAsset), Some(creationTime), OrderStatus.FILLED, o.amountBaseAsset, o.limit, Instant.now)
 
   def walletBalanceUpdate(delta: LocalCryptoValue): WalletBalanceUpdate = WalletBalanceUpdate(delta.asset, delta.amount)
 

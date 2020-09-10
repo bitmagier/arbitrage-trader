@@ -1,9 +1,9 @@
-package org.purevalue.arbitrage
+package org.purevalue.arbitrage.util
 
 import java.text.{DecimalFormat, DecimalFormatSymbols}
 import java.util.Locale
 
-object Utils {
+object Util {
   def formatDecimal(d: Double): String = formatDecimal(d, 8)
   def formatDecimal(d: Double, visibleFractionDigits:Int): String = {
     val format = new DecimalFormat()

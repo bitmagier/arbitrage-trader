@@ -1,4 +1,4 @@
-package org.purevalue.arbitrage
+package org.purevalue.arbitrage.traderoom
 
 import java.time.{Duration, Instant}
 import java.util.concurrent.atomic.AtomicBoolean
@@ -6,8 +6,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 import akka.Done
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, PoisonPill, Props, Status}
 import akka.stream.scaladsl.Sink
-import org.purevalue.arbitrage.ExchangePublicTPDataManager._
-import org.purevalue.arbitrage.Utils.formatDecimal
+import org.purevalue.arbitrage.traderoom.ExchangePublicTPDataManager._
+import org.purevalue.arbitrage.util.Util.formatDecimal
+import org.purevalue.arbitrage.{Config, ExchangeConfig, Main}
 import org.slf4j.LoggerFactory
 
 import scala.collection._

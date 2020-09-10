@@ -1,13 +1,15 @@
-package org.purevalue.arbitrage
+package org.purevalue.arbitrage.traderoom
 
 import akka.actor.SupervisorStrategy.Restart
 import akka.actor.{Actor, ActorRef, ActorSystem, OneForOneStrategy, Props, Status}
 import akka.pattern.ask
 import akka.util.Timeout
-import org.purevalue.arbitrage.Exchange.{GetTradePairs, RemoveTradePair, StartStreaming, TradePairs}
-import org.purevalue.arbitrage.ExchangeAccountDataManager.{CancelOrder, FetchOrder, NewLimitOrder}
-import org.purevalue.arbitrage.ExchangeLiquidityManager.{LiquidityLockClearance, LiquidityRequest}
-import org.purevalue.arbitrage.TradeRoom.{LiquidityTx, OrderRef, WalletUpdateTrigger}
+import org.purevalue.arbitrage._
+import org.purevalue.arbitrage.traderoom.Exchange.{GetTradePairs, RemoveTradePair, StartStreaming, TradePairs}
+import org.purevalue.arbitrage.traderoom.ExchangeAccountDataManager.{CancelOrder, FetchOrder, NewLimitOrder}
+import org.purevalue.arbitrage.traderoom.ExchangeLiquidityManager.{LiquidityLockClearance, LiquidityRequest}
+import org.purevalue.arbitrage.traderoom.TradeRoom.{LiquidityTx, WalletUpdateTrigger}
+import org.purevalue.arbitrage.util.Emoji
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration.DurationInt
@@ -142,7 +144,7 @@ case class Exchange(exchangeName: String,
 
     // Messages from TradeRoom side
     case GetTradePairs() => sender() ! tradePairs
-    case f: FetchOrder => accountDataManager.forward(f)
+    case f: FetchOrder => accountDataManager.forward(f) // TODO not yet connected
 
     case c: CancelOrder =>
       if (tradeSimulation) tradeSimulator.get.forward(c)

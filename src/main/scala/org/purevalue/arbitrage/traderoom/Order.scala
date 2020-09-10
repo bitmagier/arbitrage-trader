@@ -1,11 +1,11 @@
-package org.purevalue.arbitrage
+package org.purevalue.arbitrage.traderoom
 
 import java.time.{Instant, LocalDateTime}
 import java.util.UUID
 
 import akka.actor.ActorRef
-import org.purevalue.arbitrage.TradeRoom.{OrderRef, TickersReadonly}
-import org.purevalue.arbitrage.Utils.formatDecimal
+import org.purevalue.arbitrage.traderoom.TradeRoom.{OrderRef, TickersReadonly}
+import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.slf4j.LoggerFactory
 
 
@@ -83,8 +83,8 @@ case class OrderUpdate(externalOrderId: String,
                        orderType: OrderType,
                        orderPrice: Double,
                        stopPrice: Option[Double],
-                       originalQuantity: Double,
-                       orderCreationTime: Instant,
+                       originalQuantity: Option[Double],
+                       orderCreationTime: Option[Instant],
                        orderStatus: OrderStatus,
                        cumulativeFilledQuantity: Double,
                        priceAverage: Double,
@@ -97,9 +97,9 @@ case class OrderUpdate(externalOrderId: String,
     orderType,
     orderPrice,
     stopPrice,
-    originalQuantity,
+    originalQuantity.getOrElse(0.0), // TODO
     None,
-    orderCreationTime,
+    orderCreationTime.getOrElse(Instant.now),
     orderStatus,
     cumulativeFilledQuantity,
     priceAverage,

@@ -1,21 +1,24 @@
 package org.purevalue.arbitrage.adapter.bitfinex
 
 import akka.actor.{Actor, ActorSystem, Props, Status}
-import org.purevalue.arbitrage.Exchange.{GetTradePairs, TradePairs}
-import org.purevalue.arbitrage.HttpUtils.httpGetJson
 import org.purevalue.arbitrage._
-import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.GetBitfinexTradePair
+import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.{GetBitfinexAssets, GetBitfinexTradePair, GetBitfinexTradePairs}
+import org.purevalue.arbitrage.traderoom.Exchange.{GetTradePairs, TradePairs}
+import org.purevalue.arbitrage.traderoom.{Asset, TradePair}
+import org.purevalue.arbitrage.util.HttpUtil.httpGetJson
 import org.slf4j.LoggerFactory
 import spray.json._
 
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor}
 
-case class BitfinexSymbol(currencySymbol: Asset, apiSymbol: String)
+case class BitfinexSymbol(asset: Asset, apiSymbol: String)
 case class BitfinexTradePair(baseAsset: Asset, quoteAsset: Asset, apiSymbol: String) extends TradePair
 
 object BitfinexPublicDataInquirer {
   case class GetBitfinexTradePair(tp: TradePair)
+  case class GetBitfinexTradePairs()
+  case class GetBitfinexAssets()
 
   def props(config: ExchangeConfig): Props = Props(new BitfinexPublicDataInquirer(config))
 }
@@ -28,8 +31,7 @@ class BitfinexPublicDataInquirer(config: ExchangeConfig) extends Actor {
   implicit val system: ActorSystem = Main.actorSystem
   implicit val executor: ExecutionContextExecutor = system.dispatcher
 
-
-  val baseRestEndpointPublic = "https://api-pub.bitfinex.com"
+  val BaseRestEndpointPublic = "https://api-pub.bitfinex.com"
 
   var bitfinexAssets: Set[BitfinexSymbol] = _
   var bitfinexTradePairs: Set[BitfinexTradePair] = _
@@ -41,7 +43,7 @@ class BitfinexPublicDataInquirer(config: ExchangeConfig) extends Actor {
 
     val apiSymbolToOfficialCurrencySymbolMapping: Map[String, String] =
       Await.result(
-        httpGetJson[List[List[Tuple2[String, String]]]](s"$baseRestEndpointPublic/v2/conf/pub:map:currency:sym"),
+        httpGetJson[List[List[Tuple2[String, String]]]](s"$BaseRestEndpointPublic/v2/conf/pub:map:currency:sym"),
         Config.httpTimeout.plus(500.millis))
         .head
         .map(e => (e._1, e._2.toUpperCase))
@@ -51,7 +53,7 @@ class BitfinexPublicDataInquirer(config: ExchangeConfig) extends Actor {
     // currency->name
     val currencies: Map[String, String] =
       Await.result(
-        httpGetJson[List[List[Tuple2[String, String]]]](s"$baseRestEndpointPublic/v2/conf/pub:map:currency:label"),
+        httpGetJson[List[List[Tuple2[String, String]]]](s"$BaseRestEndpointPublic/v2/conf/pub:map:currency:label"),
         Config.httpTimeout.plus(500.millis))
         .head
         .map(e => (e._1, e._2))
@@ -67,7 +69,7 @@ class BitfinexPublicDataInquirer(config: ExchangeConfig) extends Actor {
     if (log.isTraceEnabled) log.trace(s"bitfinexAssets: $bitfinexAssets")
 
     val tradePairs: List[String] =
-      Await.result(httpGetJson[List[List[String]]](s"$baseRestEndpointPublic/v2/conf/pub:list:pair:exchange"), Config.httpTimeout)
+      Await.result(httpGetJson[List[List[String]]](s"$BaseRestEndpointPublic/v2/conf/pub:list:pair:exchange"), Config.httpTimeout)
         .head
     if (log.isTraceEnabled) log.trace(s"tradepairs: $tradePairs")
 
@@ -81,8 +83,8 @@ class BitfinexPublicDataInquirer(config: ExchangeConfig) extends Actor {
         StaticConfig.AllAssets.keySet.contains(e._1)
           && StaticConfig.AllAssets.keySet.contains(e._2)) // crosscheck with global assets
       .filter(e =>
-        bitfinexAssets.exists(_.currencySymbol.officialSymbol == e._1)
-          && bitfinexAssets.exists(_.currencySymbol.officialSymbol == e._2)) // crosscheck with bitfinex (configured) assets
+        bitfinexAssets.exists(_.asset.officialSymbol == e._1)
+          && bitfinexAssets.exists(_.asset.officialSymbol == e._2)) // crosscheck with bitfinex (configured) assets
       .map(e => BitfinexTradePair(Asset(e._1), Asset(e._2), e._3))
       .toSet
     if (log.isTraceEnabled) log.trace(s"bitfinexTradePairs: $bitfinexTradePairs")
@@ -100,6 +102,12 @@ class BitfinexPublicDataInquirer(config: ExchangeConfig) extends Actor {
     // Messages from BitfinexTPDataChannel
     case GetBitfinexTradePair(tp) =>
       sender() ! bitfinexTradePairs.find(e => e.baseAsset == tp.baseAsset && e.quoteAsset == tp.quoteAsset).get
+
+    case GetBitfinexTradePairs() =>
+      sender() ! bitfinexTradePairs
+
+    case GetBitfinexAssets() =>
+      sender() ! bitfinexAssets
 
     case Status.Failure(cause) =>
       log.error("received failure", cause)

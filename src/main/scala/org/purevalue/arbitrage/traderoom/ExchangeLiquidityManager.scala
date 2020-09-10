@@ -1,13 +1,14 @@
-package org.purevalue.arbitrage
+package org.purevalue.arbitrage.traderoom
 
 import java.time.Instant
 import java.util.UUID
 
 import akka.actor.{Actor, ActorRef, Cancellable, Props}
-import org.purevalue.arbitrage.Asset.USDT
-import org.purevalue.arbitrage.ExchangeLiquidityManager.{HouseKeeping, LiquidityDemand, LiquidityLock, LiquidityLockClearance, LiquidityRequest}
 import org.purevalue.arbitrage.Main.actorSystem
-import org.purevalue.arbitrage.TradeRoom.{LiquidityTransformationOrder, LiquidityTx, OrderRef, WalletUpdateTrigger}
+import org.purevalue.arbitrage.traderoom.Asset.USDT
+import org.purevalue.arbitrage.traderoom.ExchangeLiquidityManager._
+import org.purevalue.arbitrage.traderoom.TradeRoom.{LiquidityTransformationOrder, LiquidityTx, WalletUpdateTrigger}
+import org.purevalue.arbitrage.{ExchangeConfig, LiquidityManagerConfig}
 import org.slf4j.LoggerFactory
 
 import scala.collection.Map

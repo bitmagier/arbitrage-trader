@@ -12,9 +12,9 @@
 
   <logger name="org.purevalue.arbitrage" level="INFO"/>
   <logger name="org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel" level="TRACE"/>
-  <logger name="org.purevalue.arbitrage.ExchangeLiquidityManager" level="DEBUG"/>
+  <logger name="org.purevalue.arbitrage.traderoom.ExchangeLiquidityManager" level="DEBUG"/>
   <logger name="org,purevalue.arbitrage.ExchangeAccountDataManager" level="TRACE"/>
-  <logger name="org.purevalue.arbitrage.TradeRoom" level="DEBUG"/>
+  <logger name="org.purevalue.arbitrage.traderoom.TradeRoom" level="DEBUG"/>
 
   <root level="INFO">
     <appender-ref ref="STDOUT" />

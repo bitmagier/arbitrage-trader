@@ -6,8 +6,10 @@ import akka.http.scaladsl.model._
 import akka.http.scaladsl.model.ws.{TextMessage, _}
 import akka.stream.scaladsl._
 import akka.{Done, NotUsed}
-import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexTPWebSocketFlow.StartStreamRequest
+import org.purevalue.arbitrage.traderoom._
+import org.purevalue.arbitrage.util.Emoji
+import org.purevalue.arbitrage.{traderoom, _}
 import org.slf4j.LoggerFactory
 import spray.json._
 
@@ -37,7 +39,7 @@ case class RawOrderBookSnapshotJson(channelId: Int, values: List[RawOrderBookEnt
       .filter(_.count > 0)
       .filter(_.amount < 0)
       .map(e => Ask(e.price, -e.amount))
-    OrderBookSnapshot(
+    traderoom.OrderBookSnapshot(
       bids, asks
     )
   }
@@ -48,6 +50,7 @@ object RawOrderBookSnapshotJson {
 
 case class RawOrderBookUpdateJson(channelId: Int, value: RawOrderBookEntryJson) extends DecodedBitfinexMessage { // [channelId, [price, count, amount]]
   private val log = LoggerFactory.getLogger(classOf[RawOrderBookUpdateJson])
+
   /*
     Algorithm to create and keep a book instance updated
 
@@ -120,31 +123,31 @@ object WebSocketJsonProtocoll extends DefaultJsonProtocol {
   implicit object rawOrderBookEntryFormat extends RootJsonFormat[RawOrderBookEntryJson] {
     def read(value: JsValue): RawOrderBookEntryJson = RawOrderBookEntryJson(value.convertTo[Tuple3[Double, Int, Double]])
 
-    def write(v: RawOrderBookEntryJson): JsValue = ???
+    def write(v: RawOrderBookEntryJson): JsValue = throw new NotImplementedError
   }
 
   implicit object rawOrderBookSnapshotFormat extends RootJsonFormat[RawOrderBookSnapshotJson] {
     def read(value: JsValue): RawOrderBookSnapshotJson = RawOrderBookSnapshotJson(value.convertTo[Tuple2[Int, List[RawOrderBookEntryJson]]])
 
-    def write(v: RawOrderBookSnapshotJson): JsValue = ???
+    def write(v: RawOrderBookSnapshotJson): JsValue = throw new NotImplementedError
   }
 
   implicit object rawOrderBookUpdateFormat extends RootJsonFormat[RawOrderBookUpdateJson] {
     def read(value: JsValue): RawOrderBookUpdateJson = RawOrderBookUpdateJson(value.convertTo[Tuple2[Int, RawOrderBookEntryJson]])
 
-    def write(v: RawOrderBookUpdateJson): JsValue = ???
+    def write(v: RawOrderBookUpdateJson): JsValue = throw new NotImplementedError
   }
 
   implicit object rawTickerFormat extends RootJsonFormat[RawTickerEntryJson] {
     def read(value: JsValue): RawTickerEntryJson = RawTickerEntryJson(value.convertTo[Array[Double]])
 
-    def write(v: RawTickerEntryJson): JsValue = ???
+    def write(v: RawTickerEntryJson): JsValue = throw new NotImplementedError
   }
 
   implicit object rawTickerMessageFormat extends RootJsonFormat[RawTickerJson] {
     def read(value: JsValue): RawTickerJson = RawTickerJson(value.convertTo[Tuple2[Int, RawTickerEntryJson]])
 
-    def write(v: RawTickerJson): JsValue = ???
+    def write(v: RawTickerJson): JsValue = throw new NotImplementedError
   }
 }
 
@@ -191,7 +194,7 @@ case class BitfinexTPWebSocketFlow(config: ExchangeConfig, tradePair: BitfinexTr
     case _ => log.warn(s"received unidentified message: $j")
   }
 
-  def decodeJson(s: String): DecodedBitfinexMessage = JsonMessage(JsonParser(s).asJsObject)
+  def decodeJsonObject(s: String): DecodedBitfinexMessage = JsonMessage(JsonParser(s).asJsObject)
 
   def decodeDataArray(s: String): DecodedBitfinexMessage = {
     val heatBeatPattern = """^\[\s*\d+,\s*"hb"\s*]""".r
@@ -226,8 +229,9 @@ case class BitfinexTPWebSocketFlow(config: ExchangeConfig, tradePair: BitfinexTr
         msg.toStrict(Config.httpTimeout)
           .map(_.getStrictText)
           .map {
-            case s: String if s.startsWith("{") => decodeJson(s)
+            case s: String if s.startsWith("{") => decodeJsonObject(s)
             case s: String if s.startsWith("[") => decodeDataArray(s)
+            case x@_ => throw new RuntimeException(s"unidentified response: $x")
           } map {
           case j: JsonMessage if j.j.fields.contains("event") =>
             handleEvent(j.j.fields("event").convertTo[String], j.j)
@@ -287,9 +291,7 @@ case class BitfinexTPWebSocketFlow(config: ExchangeConfig, tradePair: BitfinexTr
           if (log.isTraceEnabled) log.trace("WebSocket connected")
           Future.successful(Done)
         } else {
-          throw new RuntimeException(s"Connection failed: ${
-            upgrade.response.status
-          }")
+          throw new RuntimeException(s"Connection failed: ${upgrade.response.status}")
         }
     }
 

@@ -3,6 +3,7 @@ package org.purevalue.arbitrage
 import akka.actor.{ActorRef, Props}
 import org.purevalue.arbitrage.adapter.binance.{BinanceAccountDataChannel, BinancePublicDataInquirer, BinancePublicTPDataChannel}
 import org.purevalue.arbitrage.adapter.bitfinex.{BitfinexPublicDataInquirer, BitfinexPublicTPDataChannel}
+import org.purevalue.arbitrage.traderoom.{Asset, TradePair}
 import org.slf4j.LoggerFactory
 
 

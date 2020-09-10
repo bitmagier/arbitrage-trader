@@ -6,10 +6,11 @@ import java.util.concurrent.TimeUnit
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props, Status}
 import com.typesafe.config.Config
-import org.purevalue.arbitrage.Asset.USDT
-import org.purevalue.arbitrage.TradeRoom._
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.trader.FooTrader.Trigger
+import org.purevalue.arbitrage.traderoom.Asset.USDT
+import org.purevalue.arbitrage.traderoom.TradeRoom.TradeContext
+import org.purevalue.arbitrage.traderoom._
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.ExecutionContextExecutor

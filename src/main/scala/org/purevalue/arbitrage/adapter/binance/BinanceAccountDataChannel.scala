@@ -12,13 +12,14 @@ import akka.stream.OverflowStrategy
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source, SourceQueueWithComplete}
 import akka.util.Timeout
 import akka.{Done, NotUsed}
-import org.purevalue.arbitrage.ExchangeAccountDataManager._
-import org.purevalue.arbitrage.HttpUtils.{httpRequestJsonBinanceAccount, httpRequestPureJsonBinanceAccount}
-import org.purevalue.arbitrage.Utils.formatDecimal
-import org.purevalue.arbitrage._
-import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.{QueryAccountInformation, SendPing, StartStreamRequest}
+import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.{QueryAccountInformation, SendPing}
 import org.purevalue.arbitrage.adapter.binance.BinanceOrder.{toOrderStatus, toOrderType, toTradeSide}
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.{BinanceBaseRestEndpoint, GetBinanceTradePairs}
+import org.purevalue.arbitrage.traderoom.ExchangeAccountDataManager._
+import org.purevalue.arbitrage.traderoom._
+import org.purevalue.arbitrage.util.HttpUtil.{httpRequestJsonBinanceAccount, httpRequestPureJsonBinanceAccount}
+import org.purevalue.arbitrage.util.Util.formatDecimal
+import org.purevalue.arbitrage.{traderoom, _}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
@@ -27,7 +28,6 @@ import scala.concurrent.{Await, ExecutionContextExecutor, Future, Promise}
 
 
 object BinanceAccountDataChannel {
-  case class StartStreamRequest(sink: Sink[ExchangeAccountStreamData, Future[Done]])
   case class SendPing()
   case class QueryAccountInformation()
 
@@ -58,35 +58,35 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
   var listenKey: String = _
   var binanceTradePairs: Set[BinanceTradePair] = _
 
-  val restSource: (SourceQueueWithComplete[IncomingBinanceAccountJson], Source[IncomingBinanceAccountJson, NotUsed]) =
-    Source.queue[IncomingBinanceAccountJson](10, OverflowStrategy.backpressure).preMaterialize()
+  val restSource: (SourceQueueWithComplete[Seq[IncomingBinanceAccountJson]], Source[Seq[IncomingBinanceAccountJson], NotUsed]) =
+    Source.queue[Seq[IncomingBinanceAccountJson]](10, OverflowStrategy.backpressure).preMaterialize()
 
   import BinanceAccountDataJsonProtocoll._
 
-  val wsFlow: Flow[Message, Option[IncomingBinanceAccountJson], NotUsed] = Flow.fromFunction {
+  val wsFlow: Flow[Message, Seq[IncomingBinanceAccountJson], NotUsed] = Flow.fromFunction {
 
     case msg: TextMessage =>
-      val f: Future[Option[IncomingBinanceAccountJson]] = {
+      val f: Future[Seq[IncomingBinanceAccountJson]] = {
         msg.toStrict(Config.httpTimeout)
           .map(_.getStrictText)
           .map(s => JsonParser(s).asJsObject())
           .map {
             case j: JsObject if j.fields.contains("result") =>
               if (log.isTraceEnabled) log.trace(s"received $j")
-              None // ignoring stream subscribe responses
+              Nil // ignoring stream subscribe responses
             case j: JsObject if j.fields.contains("e") =>
               if (log.isTraceEnabled) log.trace(s"received $j")
               j.fields("e").convertTo[String] match {
-                case OutboundAccountPositionStreamName => Some(j.convertTo[OutboundAccountPositionJson])
-                case BalanceUpdateStreamName => Some(j.convertTo[BalanceUpdateJson])
-                case OrderExecutionReportStreamName => Some(j.convertTo[OrderExecutionReportJson])
+                case OutboundAccountPositionStreamName => List(j.convertTo[OutboundAccountPositionJson])
+                case BalanceUpdateStreamName => List(j.convertTo[BalanceUpdateJson])
+                case OrderExecutionReportStreamName => List(j.convertTo[OrderExecutionReportJson])
                 case name: String =>
                   log.error(s"Unknown data stream '$name' received: $j")
-                  None
+                  Nil
               }
             case j: JsObject =>
               log.warn(s"Unknown json object received: $j")
-              None
+              Nil
           }
       }
       try {
@@ -97,18 +97,21 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
 
     case _ =>
       log.warn(s"Received non TextMessage")
-      None
+      Nil
   }
 
-  val downStreamFlow: Flow[IncomingBinanceAccountJson, ExchangeAccountStreamData, NotUsed] = Flow.fromFunction {
-    // @formatter:off
-    case a: AccountInformationJson      => a.toWallet
-    case a: OutboundAccountPositionJson => a.toWalletUpdate
-    case b: BalanceUpdateJson           => b.toWalletBalanceUpdate
-    case o: OrderExecutionReportJson    => o.toOrderOrOrderUpdate(config.exchangeName, symbol => binanceTradePairs.find(_.symbol == symbol).get) // expecting, that we have all relevant trade pairs
-    case o: OpenOrderJson               => o.toOrder(config.exchangeName, symbol => binanceTradePairs.find(_.symbol == symbol).get)
-    case x@_                            => log.debug(s"$x"); throw new NotImplementedError
-    // @formatter:on
+  val downStreamFlow: Flow[Seq[IncomingBinanceAccountJson], Seq[ExchangeAccountStreamData], NotUsed] = Flow.fromFunction {
+    data: Seq[IncomingBinanceAccountJson] =>
+      data.map {
+        // @formatter:off
+        case a: AccountInformationJson      => a.toWallet
+        case a: OutboundAccountPositionJson => a.toWalletAssetUpdate
+        case b: BalanceUpdateJson           => b.toWalletBalanceUpdate
+        case o: OrderExecutionReportJson    => o.toOrderOrOrderUpdate(config.exchangeName, symbol => binanceTradePairs.find(_.symbol == symbol).get) // expecting, that we have all relevant trade pairs
+        case o: OpenOrderJson               => o.toOrder(config.exchangeName, symbol => binanceTradePairs.find(_.symbol == symbol).get)
+        case x@_                            => log.debug(s"$x"); throw new NotImplementedError
+        // @formatter:on
+      }
   }
 
   val SubscribeMessages: List[AccountStreamSubscribeRequestJson] = List(
@@ -117,11 +120,9 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
     AccountStreamSubscribeRequestJson(params = Seq(OrderExecutionReportStreamName), id = IdOrderExecutionResportStream)
   )
 
-  def createFlowTo(sink: Sink[ExchangeAccountStreamData, Future[Done]]): Flow[Message, Message, Promise[Option[Message]]] = {
+  def createFlowTo(sink: Sink[Seq[ExchangeAccountStreamData], Future[Done]]): Flow[Message, Message, Promise[Option[Message]]] = {
     Flow.fromSinkAndSourceCoupledMat(
       wsFlow
-        .filter(_.isDefined)
-        .map(_.get)
         .mergePreferred(restSource._2, priority = true, eagerComplete = false)
         .via(downStreamFlow)
         .toMat(sink)(Keep.right),
@@ -226,7 +227,7 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
     log.trace(s"got listenKey: $listenKey")
   }
 
-  def pullTradePairResolveFunction(): Unit = {
+  def pullBinanceTradePairs(): Unit = {
     implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
     binanceTradePairs = Await.result(
       (exchangePublicDataInquirer ? GetBinanceTradePairs()).mapTo[Set[BinanceTradePair]],
@@ -236,7 +237,7 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
 
   override def preStart(): Unit = {
     createListenKey()
-    pullTradePairResolveFunction()
+    pullBinanceTradePairs()
   }
 
   override def receive: Receive = {
@@ -247,11 +248,11 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
         createFlowTo(sink))
       connected = createConnected
 
-      restSource._1.offer(queryAccountInformation())
-      queryOpenOrders().foreach(e => restSource._1.offer(e))
+      restSource._1.offer(List(queryAccountInformation()))
+      restSource._1.offer(queryOpenOrders())
 
     case QueryAccountInformation() => // do the REST call to get a fresh snapshot. balance changes done via the web interface do not seem to be tracked by the streams
-      restSource._1.offer(queryAccountInformation())
+      restSource._1.offer(List(queryAccountInformation()))
 
     case SendPing() => pingUserStream()
 
@@ -261,10 +262,6 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
 
     case NewLimitOrder(o) =>
       newLimitOrder(o).pipeTo(sender())
-
-    // TODO currently unused: query unfinished persisted orders from TradeRoom after application restart
-    case FetchOrder(tradePair, externalOrderId) => ???
-    //      restSource._1.offer(queryOrder(resolveSymbol(tradePair), externalOrderId.toLong))
   }
 }
 
@@ -330,7 +327,7 @@ case class OutboundAccountPositionJson(e: String, // event type
                                        u: Long, // time of last account update
                                        B: List[OutboundAccountInfoBalanceJson] // balances
                                       ) extends IncomingBinanceAccountJson {
-  def toWalletUpdate: WalletAssetUpdate = WalletAssetUpdate(
+  def toWalletAssetUpdate: WalletAssetUpdate = WalletAssetUpdate(
     B.flatMap(_.toBalance)
       .map(e => (e.asset, e))
       .toMap)
@@ -367,7 +364,7 @@ case class OpenOrderJson(symbol: String,
                          isWorking: Boolean
                          // origQuoteOrderQty: String
                         ) extends IncomingBinanceAccountJson {
-  def toOrder(exchange: String, resolveTradePair: String => TradePair): Order = Order(
+  def toOrder(exchange: String, resolveTradePair: String => TradePair): Order = traderoom.Order(
     orderId.toString,
     exchange,
     resolveTradePair(symbol),
@@ -438,14 +435,14 @@ case class OrderExecutionReportJson(e: String, // Event type
       case 0.0 => None
       case x => Some(x)
     },
-    q.toDouble,
-    Instant.ofEpochMilli(O),
+    Some(q.toDouble),
+    None,
     toOrderStatus(X),
     z.toDouble,
     Z.toDouble / z.toDouble,
     Instant.ofEpochMilli(E))
 
-  def toOrder(exchange: String, resolveTradePair: String => TradePair): Order = Order(
+  def toOrder(exchange: String, resolveTradePair: String => TradePair): Order = traderoom.Order(
     i.toString,
     exchange,
     resolveTradePair(s),

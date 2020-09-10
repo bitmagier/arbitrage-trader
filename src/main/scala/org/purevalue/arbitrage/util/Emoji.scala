@@ -1,4 +1,4 @@
-package org.purevalue.arbitrage
+package org.purevalue.arbitrage.util
 
 // from github.com/dysfunc/ascii-emoji
 object Emoji {

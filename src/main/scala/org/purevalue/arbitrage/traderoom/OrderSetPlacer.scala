@@ -1,8 +1,8 @@
-package org.purevalue.arbitrage
+package org.purevalue.arbitrage.traderoom
 
 import akka.actor.{Actor, ActorRef, PoisonPill, Props, Status}
-import org.purevalue.arbitrage.ExchangeAccountDataManager.{CancelOrder, CancelOrderResult, NewLimitOrder, NewOrderAck}
-import org.purevalue.arbitrage.OrderSetPlacer.NewOrderSet
+import org.purevalue.arbitrage.traderoom.ExchangeAccountDataManager.{CancelOrder, CancelOrderResult, NewLimitOrder, NewOrderAck}
+import org.purevalue.arbitrage.traderoom.OrderSetPlacer.NewOrderSet
 import org.slf4j.LoggerFactory
 
 /**

@@ -5,9 +5,10 @@ import akka.pattern.ask
 import akka.stream.scaladsl.{Flow, Keep, Sink}
 import akka.util.Timeout
 import akka.{Done, NotUsed}
-import org.purevalue.arbitrage.ExchangePublicTPDataManager.StartStreamRequest
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.GetBitfinexTradePair
+import org.purevalue.arbitrage.traderoom.ExchangePublicTPDataManager.StartStreamRequest
+import org.purevalue.arbitrage.traderoom.{ExchangeTPStreamData, TradePair}
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration.DurationInt

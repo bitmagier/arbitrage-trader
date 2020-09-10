@@ -1,4 +1,4 @@
-package org.purevalue.arbitrage
+package org.purevalue.arbitrage.traderoom
 
 import java.time.{Duration, Instant}
 import java.util.UUID
@@ -7,9 +7,10 @@ import akka.actor.ActorSystem
 import akka.pattern.ask
 import akka.testkit.{ImplicitSender, TestKit, TestProbe}
 import akka.util.Timeout
-import org.purevalue.arbitrage.Asset.{Bitcoin, USDT}
-import org.purevalue.arbitrage.ExchangeLiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityRequest}
-import org.purevalue.arbitrage.TradeRoom.{LiquidityTransformationOrder, WalletUpdateTrigger}
+import org.purevalue.arbitrage.traderoom.Asset.{Bitcoin, USDT}
+import org.purevalue.arbitrage.traderoom.ExchangeLiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityRequest}
+import org.purevalue.arbitrage.traderoom.TradeRoom.{LiquidityTransformationOrder, WalletUpdateTrigger}
+import org.purevalue.arbitrage.{ExchangeConfig, LiquidityManagerConfig}
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpecLike
@@ -44,7 +45,8 @@ class ExchangeLiquidityManagerSpec
       makerFee = 0.0, // TODO make everything working including fees
       takerFee = 0.0,
       orderBooksEnabled = false,
-      Seq(Asset("OMG"))
+      Seq(Asset("OMG")),
+      None
     )
 
   private val BitcoinPriceUSD = 10200.24

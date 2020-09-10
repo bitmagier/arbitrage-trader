@@ -1,8 +1,9 @@
-package org.purevalue.arbitrage
+package org.purevalue.arbitrage.traderoom
 
-import org.purevalue.arbitrage.Asset.Bitcoin
-import org.purevalue.arbitrage.TradeRoom.TickersReadonly
-import org.purevalue.arbitrage.Utils.formatDecimal
+import org.purevalue.arbitrage.StaticConfig
+import org.purevalue.arbitrage.traderoom.Asset.Bitcoin
+import org.purevalue.arbitrage.traderoom.TradeRoom.TickersReadonly
+import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.slf4j.LoggerFactory
 
 

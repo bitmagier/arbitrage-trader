@@ -1,14 +1,14 @@
-package org.purevalue.arbitrage
+package org.purevalue.arbitrage.traderoom
 
 import java.util.UUID
 
 import akka.Done
 import akka.actor.{Actor, ActorRef, Props}
 import akka.stream.scaladsl.Sink
-import org.purevalue.arbitrage.ExchangeAccountDataManager.{CancelOrder, FetchOrder, NewLimitOrder, SimulatedData}
-import org.purevalue.arbitrage.TradeRoom.{OrderRef, OrderUpdateTrigger, WalletUpdateTrigger}
-import org.purevalue.arbitrage.Utils.formatDecimal
-import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.StartStreamRequest
+import org.purevalue.arbitrage.traderoom.ExchangeAccountDataManager._
+import org.purevalue.arbitrage.traderoom.TradeRoom.{OrderRef, OrderUpdateTrigger, WalletUpdateTrigger}
+import org.purevalue.arbitrage.util.Util.formatDecimal
+import org.purevalue.arbitrage.{Config, ExchangeConfig}
 import org.slf4j.LoggerFactory
 
 import scala.collection._
@@ -16,6 +16,7 @@ import scala.concurrent.Future
 
 
 object ExchangeAccountDataManager {
+  case class StartStreamRequest(sink: Sink[Seq[ExchangeAccountStreamData], Future[Done]])
   case class FetchOrder(tradePair: TradePair, externalOrderId: String) // order shall be queried from exchange and feed into the data stream (e.g. for refreshing persisted open orders after restart)
   case class CancelOrder(tradePair: TradePair, externalOrderId: String)
   case class CancelOrderResult(tradePair: TradePair, externalOrderId: String, success: Boolean)
@@ -40,9 +41,9 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
   private val log = LoggerFactory.getLogger(classOf[ExchangeAccountDataManager])
   var accountDataChannel: ActorRef = _
 
-  val sink: Sink[ExchangeAccountStreamData, Future[Done]] = Sink.foreach[ExchangeAccountStreamData] { x =>
-    if (log.isTraceEnabled()) log.trace(s"${config.exchangeName}: received $x")
-    applyData(x)
+  val sink: Sink[Seq[ExchangeAccountStreamData], Future[Done]] = Sink.foreach[Seq[ExchangeAccountStreamData]] { data =>
+    if (log.isTraceEnabled()) log.trace(s"${config.exchangeName}: received $data")
+    data.foreach(applyData)
   }
 
   private def applyData(dataset: ExchangeAccountStreamData): Unit = {

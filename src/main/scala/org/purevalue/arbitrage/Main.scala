@@ -2,6 +2,7 @@ package org.purevalue.arbitrage
 
 import akka.actor.SupervisorStrategy.Restart
 import akka.actor.{Actor, ActorSystem, OneForOneStrategy, Props, Status}
+import org.purevalue.arbitrage.traderoom.TradeRoom
 import org.slf4j.{Logger, LoggerFactory}
 
 import scala.concurrent.duration.DurationInt

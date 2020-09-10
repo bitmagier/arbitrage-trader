@@ -1,4 +1,4 @@
-package org.purevalue.arbitrage
+package org.purevalue.arbitrage.traderoom
 
 import java.time.{Duration, Instant}
 import java.util.UUID
@@ -8,14 +8,16 @@ import akka.actor.SupervisorStrategy.Restart
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, OneForOneStrategy, PoisonPill, Props, Status}
 import akka.pattern.ask
 import akka.util.Timeout
-import org.purevalue.arbitrage.Asset.USDT
-import org.purevalue.arbitrage.Exchange.{GetTradePairs, RemoveTradePair, StartStreaming}
-import org.purevalue.arbitrage.ExchangeAccountDataManager.{NewLimitOrder, NewOrderAck}
-import org.purevalue.arbitrage.ExchangeLiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityRequest}
-import org.purevalue.arbitrage.OrderSetPlacer.NewOrderSet
-import org.purevalue.arbitrage.TradeRoom._
-import org.purevalue.arbitrage.Utils.formatDecimal
+import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.trader.FooTrader
+import org.purevalue.arbitrage.traderoom.Asset.USDT
+import org.purevalue.arbitrage.traderoom.Exchange.{GetTradePairs, RemoveTradePair, StartStreaming}
+import org.purevalue.arbitrage.traderoom.ExchangeAccountDataManager.{NewLimitOrder, NewOrderAck}
+import org.purevalue.arbitrage.traderoom.ExchangeLiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityRequest}
+import org.purevalue.arbitrage.traderoom.OrderSetPlacer.NewOrderSet
+import org.purevalue.arbitrage.traderoom.TradeRoom._
+import org.purevalue.arbitrage.util.Emoji
+import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.slf4j.LoggerFactory
 
 import scala.collection.concurrent.TrieMap
@@ -166,7 +168,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       return
     }
 
-    if (!config.productionMode && (finishedLiquidityTx.nonEmpty || openLiquidityTx.nonEmpty)) {
+    if (config.oneTradeOnlyTestMode && (finishedLiquidityTx.nonEmpty || openLiquidityTx.nonEmpty)) {
       log.debug("Ignoring further liquidity tx, because we are NOT in production mode")
       return
     }
@@ -191,7 +193,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       doNotTouchAssets(e.exchange).intersect(e.tradePair.involvedAssets).nonEmpty)) {
       log.debug(s"ignoring $bundle containing a DO-NOT-TOUCH asset")
     }
-    if (!config.productionMode && (finishedOrderBundles.nonEmpty || openOrderBundles.nonEmpty)) {
+    if (config.oneTradeOnlyTestMode && (finishedOrderBundles.nonEmpty || openOrderBundles.nonEmpty)) {
       log.debug("Ignoring further order request bundle, because we are NOT in production mode")
       return
     }
@@ -350,7 +352,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   }
 
   def shutdownAfterFirstOrderInNonProductionMode(): Unit = {
-    if (!config.productionMode && finishedOrderBundles.nonEmpty) {
+    if (config.oneTradeOnlyTestMode && finishedOrderBundles.nonEmpty) {
       log.info(
         s"""${Emoji.Robot}  Shutting down TradeRoom after first finished order bundle, as configured  (trade-room.production-mode)
            |activeOrders: $activeOrders
@@ -436,7 +438,12 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     }
 
   override def preStart(): Unit = {
-    log.info(s"Starting with productionMode=${config.productionMode} and tradeSimulation=${config.tradeSimulation}")
+    if (config.oneTradeOnlyTestMode || config.tradeSimulation) {
+      log.info(s"Starting with oneTradeOnlyTestMode=${config.oneTradeOnlyTestMode} and tradeSimulation=${config.tradeSimulation}")
+    } else {
+      log.info(s"${Emoji.DoYouEvenLiftBro}  Starting in production mode")
+    }
+
     startExchanges()
     // REMARK: doing the tradepair cleanup here causes loss of some options for the reference ticker which leads to lesser balance conversion calculation options
     cleanupTradePairs()

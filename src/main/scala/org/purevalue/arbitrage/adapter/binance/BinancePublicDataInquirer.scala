@@ -1,10 +1,11 @@
 package org.purevalue.arbitrage.adapter.binance
 
 import akka.actor.{Actor, ActorSystem, Props, Status}
-import org.purevalue.arbitrage.Exchange.{GetTradePairs, TradePairs}
-import org.purevalue.arbitrage.HttpUtils.httpGetJson
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer._
+import org.purevalue.arbitrage.traderoom.Exchange.{GetTradePairs, TradePairs}
+import org.purevalue.arbitrage.traderoom.{Ask, Asset, Bid, TradePair}
+import org.purevalue.arbitrage.util.HttpUtil.httpGetJson
 import org.slf4j.LoggerFactory
 import spray.json._
 

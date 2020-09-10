@@ -1,8 +1,8 @@
-package org.purevalue.arbitrage
+package org.purevalue.arbitrage.traderoom
 
 import java.util.UUID
 
-import org.purevalue.arbitrage.Asset.Bitcoin
+import org.purevalue.arbitrage.traderoom.Asset.Bitcoin
 import org.scalatest.TestSuite
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpecLike

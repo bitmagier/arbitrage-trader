@@ -5,6 +5,7 @@ import java.util.concurrent.TimeUnit
 
 import akka.util.Timeout
 import com.typesafe.config.ConfigFactory
+import org.purevalue.arbitrage.traderoom.{Asset, Fee}
 
 import scala.collection.JavaConverters._
 import scala.concurrent.duration.FiniteDuration
@@ -19,7 +20,8 @@ case class ExchangeConfig(exchangeName: String,
                           makerFee: Double,
                           takerFee: Double,
                           orderBooksEnabled: Boolean,
-                          doNotTouchTheseAssets: Seq[Asset]) {
+                          doNotTouchTheseAssets: Seq[Asset],
+                          refCode: Option[String]) {
   def fee: Fee = Fee(exchangeName, makerFee, takerFee)
 }
 
@@ -37,7 +39,8 @@ object ExchangeConfig {
       c.getDouble("fee.maker"),
       c.getDouble("fee.taker"),
       c.getBoolean("order-books-enabled"),
-      doNotTouchTheseAssets
+      doNotTouchTheseAssets,
+      if (c.hasPath("ref-code")) Some(c.getString("ref-code")) else None
     )
   }
 
@@ -51,7 +54,7 @@ case class OrderBundleSafetyGuardConfig(maximumReasonableWinPerOrderBundleUSDT: 
                                         maxOrderLimitTickerVariance: Double,
                                         maxTickerAge: Duration,
                                         minTotalGainInUSDT: Double)
-case class TradeRoomConfig(productionMode: Boolean,
+case class TradeRoomConfig(oneTradeOnlyTestMode: Boolean,
                            tradeSimulation: Boolean,
                            referenceTickerExchange: String,
                            orderBooksEnabled: Boolean,
@@ -60,7 +63,7 @@ case class TradeRoomConfig(productionMode: Boolean,
                            orderBundleSafetyGuard: OrderBundleSafetyGuardConfig)
 object TradeRoomConfig {
   def apply(c: com.typesafe.config.Config): TradeRoomConfig = TradeRoomConfig(
-    c.getBoolean("production-mode"),
+    c.getBoolean("one-trade-only-test-mode"),
     c.getBoolean("trade-simulation"),
     c.getString("reference-ticker-exchange"),
     c.getBoolean("order-books-enabled"),
