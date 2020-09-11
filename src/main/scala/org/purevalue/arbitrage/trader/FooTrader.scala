@@ -92,12 +92,14 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
     val buyExchange: String = lowestAsk._1
     val sellExchange: String = highestBid._1
 
-    val amountBaseAsset: Double = CryptoValue(USDT, tradeQuantityUSDT).convertTo(tradePair.baseAsset, tc.referenceTicker) match {
-      case Some(v) => v.amount
-      case None =>
-        log.warn(s"Unable to convert ${tradePair.baseAsset} to USDT")
-        return (None, Some(NoUSDTConversion(tradePair.baseAsset))) // only want to have assets convertible to USDT here
+    // only want to have assets convertible to USDT here, to ignore the (3%) complicated special cases for now
+    if (!CryptoValue(USDT, tradeQuantityUSDT).canConvertTo(tradePair.baseAsset, tc.tickers(buyExchange)) ||
+      !CryptoValue(USDT, tradeQuantityUSDT).canConvertTo(tradePair.baseAsset, tc.tickers(sellExchange))) {
+      log.warn(s"Unable to convert ${tradePair.baseAsset} to USDT")
+      return (None, Some(NoUSDTConversion(tradePair.baseAsset)))
     }
+
+    val amountBaseAsset: Double = CryptoValue(USDT, tradeQuantityUSDT).convertTo(tradePair.baseAsset, tc.referenceTicker).amount
 
     val ourBuyBaseAssetOrder =
       OrderRequest(

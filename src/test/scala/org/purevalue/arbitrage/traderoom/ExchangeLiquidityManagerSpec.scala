@@ -107,7 +107,7 @@ class ExchangeLiquidityManagerSpec
 
       val orderEthBtc = messages.find(_.orderRequest.tradePair == tpEthBtc).get.orderRequest
       orderEthBtc.tradeSide shouldBe TradeSide.Buy
-      val ethInflowUSDT = orderEthBtc.calcIncomingLiquidity.convertTo(USDT, tickers).map(_.amount).get
+      val ethInflowUSDT = orderEthBtc.calcIncomingLiquidity.convertTo(USDT, tickers).amount
       val expectedEthInflowInUsdt = (Config.minimumKeepReserveLiquidityPerAssetInUSDT / Config.rebalanceTxGranularityInUSDT).ceil * Config.rebalanceTxGranularityInUSDT
       ethInflowUSDT shouldEqual expectedEthInflowInUsdt +- CheckSpread
 

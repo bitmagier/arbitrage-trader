@@ -4,6 +4,7 @@ import java.time.{Instant, LocalDateTime}
 import java.util.UUID
 
 import akka.actor.ActorRef
+import org.purevalue.arbitrage.traderoom.Asset.USDT
 import org.purevalue.arbitrage.traderoom.TradeRoom.{OrderRef, TickersReadonly}
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.slf4j.LoggerFactory
@@ -26,8 +27,32 @@ case class Order(externalId: String,
                  var cumulativeFilledQuantity: Double,
                  var priceAverage: Double,
                  var lastUpdateTime: Instant) extends ExchangeAccountStreamData {
-  def ref: TradeRoom.OrderRef = OrderRef(exchange, tradePair, externalId)
+  def shortDesc: String = {
+    val direction: String = side match {
+      case TradeSide.Buy => "<-"
+      case TradeSide.Sell => "->"
+    }
+    s"[$side $cumulativeFilledQuantity ${tradePair.baseAsset.officialSymbol} $direction ${tradePair.quoteAsset.officialSymbol}]"
+  }
 
+
+  // from cointracking.freshdesk.com/en/support/solutions/articles/29000021505-bnb-balance-wrong-due-to-fees-not-being-deducted-
+  // In case of a sell, the fee needs to be entered as additional amount on the sell side.
+  // In case of a buy, the fee needs to be subtracted from the buy side.
+
+  // absolute (positive) amount minus fees
+  def calcOutgoingLiquidity(fee: Fee): LocalCryptoValue = side match {
+    case TradeSide.Buy => LocalCryptoValue(exchange, tradePair.quoteAsset, priceAverage * cumulativeFilledQuantity)
+    case TradeSide.Sell => LocalCryptoValue(exchange, tradePair.baseAsset, cumulativeFilledQuantity * (1.0 + fee.average))
+  }
+
+  // absolute (positive) amount minus fees
+  def calcIncomingLiquidity(fee: Fee): LocalCryptoValue = side match {
+    case TradeSide.Buy => LocalCryptoValue(exchange, tradePair.baseAsset, cumulativeFilledQuantity * (1.0 - fee.average))
+    case TradeSide.Sell => LocalCryptoValue(exchange, tradePair.quoteAsset, priceAverage * cumulativeFilledQuantity)
+  }
+
+  def ref: TradeRoom.OrderRef = OrderRef(exchange, tradePair, externalId)
 
   private val log = LoggerFactory.getLogger(classOf[Order])
 
@@ -89,7 +114,7 @@ case class OrderUpdate(externalOrderId: String,
                        cumulativeFilledQuantity: Double,
                        priceAverage: Double,
                        updateTime: Instant) extends ExchangeAccountStreamData {
-  def toOrder(exchange:String): Order = Order(
+  def toOrder(exchange: String): Order = Order(
     externalOrderId,
     exchange,
     tradePair,
@@ -124,23 +149,16 @@ case class OrderRequest(id: UUID,
   override def toString: String = s"OrderRequest($id, orderBundleId:$orderBundleId, $exchange, $tradePair, $tradeSide, $fee, " +
     s"amountBaseAsset:${formatDecimal(amountBaseAsset)}, limit:${formatDecimal(limit)})"
 
-
-  // from cointracking.freshdesk.com/en/support/solutions/articles/29000021505-bnb-balance-wrong-due-to-fees-not-being-deducted-
-  // In case of a sell, the fee needs to be entered as additional amount on the sell side.
-  // In case of a buy, the fee needs to be subtracted from the buy side.
-
   // absolute (positive) amount minus fees
   def calcOutgoingLiquidity: LocalCryptoValue = tradeSide match {
     case TradeSide.Buy => LocalCryptoValue(exchange, tradePair.quoteAsset, limit * amountBaseAsset)
     case TradeSide.Sell => LocalCryptoValue(exchange, tradePair.baseAsset, amountBaseAsset * (1.0 + fee.average))
-    case _ => throw new IllegalArgumentException
   }
 
   // absolute (positive) amount minus fees
   def calcIncomingLiquidity: LocalCryptoValue = tradeSide match {
     case TradeSide.Buy => LocalCryptoValue(exchange, tradePair.baseAsset, amountBaseAsset * (1.0 - fee.average))
     case TradeSide.Sell => LocalCryptoValue(exchange, tradePair.quoteAsset, limit * amountBaseAsset)
-    case _ => throw new IllegalArgumentException
   }
 }
 
@@ -149,7 +167,7 @@ case class OrderRequest(id: UUID,
  * (direct costs only, not including liquidity TXs)
  */
 case class OrderBill(balanceSheet: Seq[LocalCryptoValue], sumUSDT: Double) {
-  override def toString: String = s"OrderRequestBill(balanceSheet:$balanceSheet, sumUSDT:${formatDecimal(sumUSDT, 2)})"
+  override def toString: String = s"""OrderBill(balanceSheet:[${balanceSheet.mkString(", ")}], sumUSDT:${formatDecimal(sumUSDT, 2)})"""
 }
 object OrderBill {
   /**
@@ -157,24 +175,23 @@ object OrderBill {
    * incoming value have positive amount; outgoing value have negative amount
    */
   def calcBalanceSheet(order: OrderRequest): Seq[LocalCryptoValue] = {
-    val out = order.calcOutgoingLiquidity
-    Seq(order.calcIncomingLiquidity, LocalCryptoValue(out.exchange, out.asset, -out.amount))
+    Seq(order.calcIncomingLiquidity, order.calcOutgoingLiquidity.negate)
+  }
+
+  def calcBalanceSheet(order: Order, fee: Fee): Seq[LocalCryptoValue] = {
+    Seq(order.calcIncomingLiquidity(fee), order.calcOutgoingLiquidity(fee).negate)
   }
 
   def aggregateValues(balanceSheet: Iterable[LocalCryptoValue],
                       targetAsset: Asset,
-                      findConversionRate: (String,TradePair) => Option[Double]): Double = {
+                      findConversionRate: (String, TradePair) => Option[Double]): Double = {
     val sumByLocalAsset: Iterable[LocalCryptoValue] = balanceSheet
-      .groupBy(e => (e.exchange,e.asset))
+      .groupBy(e => (e.exchange, e.asset))
       .map(e => LocalCryptoValue(e._1._1, e._1._2, e._2.map(_.amount).sum))
 
-    sumByLocalAsset.map { v =>
-      v.convertTo(targetAsset, findConversionRate) match {
-        case Some(v) => v.amount
-        case None =>
-          throw new RuntimeException(s"Unable to convert ${v.asset} to $targetAsset on ${v.exchange}")
-      }
-    }.sum
+    sumByLocalAsset
+      .map(_.convertTo(targetAsset, findConversionRate).amount)
+      .sum
   }
 
   def aggregateValues(balanceSheet: Iterable[LocalCryptoValue],
@@ -185,7 +202,15 @@ object OrderBill {
   def calc(orders: Seq[OrderRequest],
            tickers: TickersReadonly): OrderBill = {
     val balanceSheet: Seq[LocalCryptoValue] = orders.flatMap(calcBalanceSheet)
-    val sumUSDT: Double = aggregateValues(balanceSheet, Asset("USDT"), tickers)
+    val sumUSDT: Double = aggregateValues(balanceSheet, USDT, tickers)
+    OrderBill(balanceSheet, sumUSDT)
+  }
+
+  def calc(orders: Seq[Order],
+           tickers: TickersReadonly,
+           fees: Map[String, Fee]): OrderBill = {
+    val balanceSheet: Seq[LocalCryptoValue] = orders.flatMap(o => calcBalanceSheet(o, fees(o.exchange)))
+    val sumUSDT: Double = aggregateValues(balanceSheet, USDT, tickers)
     OrderBill(balanceSheet, sumUSDT)
   }
 }

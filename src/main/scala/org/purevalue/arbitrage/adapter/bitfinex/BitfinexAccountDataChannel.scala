@@ -276,6 +276,7 @@ class BitfinexAccountDataChannel(config: ExchangeConfig, exchangePublicDataInqui
   private val log = LoggerFactory.getLogger(classOf[BitfinexAccountDataChannel])
 
   val BaseRestEndpoint = "https://api.bitfinex.com"
+  val WebSocketEndpoint: Uri = Uri("wss://api.bitfinex.com/ws/2")
 
   implicit val system: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = system.dispatcher
@@ -386,7 +387,6 @@ class BitfinexAccountDataChannel(config: ExchangeConfig, exchangePublicDataInqui
       } catch {
         case e: Exception => throw new RuntimeException(s"While decoding WebSocket stream event: $msg", e)
       }
-
     case _ =>
       log.warn(s"Received non TextMessage")
       Nil
@@ -404,22 +404,23 @@ class BitfinexAccountDataChannel(config: ExchangeConfig, exchangePublicDataInqui
     )
   }
 
-  val restSourceTowardsDownstream: (SourceQueueWithComplete[Seq[IncomingBitfinexAccountJson]], Source[Seq[IncomingBitfinexAccountJson], NotUsed]) =
-    Source.queue[Seq[IncomingBitfinexAccountJson]](10, OverflowStrategy.backpressure).preMaterialize()
+//  val restSourceTowardsDownstream: (SourceQueueWithComplete[Seq[IncomingBitfinexAccountJson]], Source[Seq[IncomingBitfinexAccountJson], NotUsed]) =
+//    Source.queue[Seq[IncomingBitfinexAccountJson]](10, OverflowStrategy.backpressure).preMaterialize()
 
-  val wsSourceUpstream: (SourceQueueWithComplete[Message], Source[Message, NotUsed]) =
-    Source.queue[Message](1, OverflowStrategy.backpressure).preMaterialize()
+//  val wsSourceUpstream: (SourceQueueWithComplete[Message], Source[Message, NotUsed]) =
+//    Source.queue[Message](1, OverflowStrategy.backpressure).preMaterialize()
 
   def createFlowTo(sink: Sink[Seq[ExchangeAccountStreamData], Future[Done]]): Flow[Message, Message, Promise[Option[Message]]] = {
     Flow.fromSinkAndSourceCoupledMat(
       wsFlow
-        .mergePreferred(restSourceTowardsDownstream._2, priority = true, eagerComplete = false)
+//        .mergePreferred(restSourceTowardsDownstream._2, priority = true, eagerComplete = false)
         .via(downStreamFlow)
         .toMat(sink)(Keep.right),
-      wsSourceUpstream._2.concatMat(Source.maybe[Message])(Keep.right))(Keep.right)
+      Source(List(
+        TextMessage(authMessage.toJson.compactPrint)
+      )).concatMat(Source.maybe[Message])(Keep.right))(Keep.right)
   }
 
-  val WebSocketEndpoint: Uri = Uri(s"wss://api.bitfinex.com/ws/2")
   var ws: (Future[WebSocketUpgradeResponse], Promise[Option[Message]]) = _
   var connected: Future[Done.type] = _
 
@@ -461,7 +462,6 @@ class BitfinexAccountDataChannel(config: ExchangeConfig, exchangePublicDataInqui
       WebSocketRequest(WebSocketEndpoint),
       createFlowTo(sink))
     connected = createConnected
-    wsSourceUpstream._1.offer(TextMessage(authMessage.toJson.compactPrint))
   }
 
   def toSubmitLimitOrderJson(o: OrderRequest, resolveSymbol: TradePair => String, affiliateCode: Option[String]): SubmitLimitOrderJson =
@@ -510,9 +510,7 @@ class BitfinexAccountDataChannel(config: ExchangeConfig, exchangePublicDataInqui
     case StartStreamRequest(sink) => connect(sink)
 
     // Messages from ExchangeAccountDataManager (forwarded from TradeRoom-LiquidityManager or TradeRoom-OrderExecutionManager)
-    case CancelOrder(tradePair, externalOrderId) =>
-      cancelOrder(tradePair, externalOrderId.toLong).pipeTo(sender())
-
+    case CancelOrder(tradePair, externalOrderId) => cancelOrder(tradePair, externalOrderId.toLong).pipeTo(sender())
     case NewLimitOrder(o) => newLimitOrder(o).pipeTo(sender())
   }
 }

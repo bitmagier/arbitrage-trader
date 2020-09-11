@@ -10,7 +10,7 @@ import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.trader.FooTrader
-import org.purevalue.arbitrage.traderoom.Asset.USDT
+import org.purevalue.arbitrage.traderoom.Asset.{Bitcoin, USDT}
 import org.purevalue.arbitrage.traderoom.Exchange.{GetTradePairs, RemoveTradePair, StartStreaming}
 import org.purevalue.arbitrage.traderoom.ExchangeAccountDataManager.{NewLimitOrder, NewOrderAck}
 import org.purevalue.arbitrage.traderoom.ExchangeLiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityRequest}
@@ -48,9 +48,20 @@ object TradeRoom {
   case class OrderBundle(orderRequestBundle: OrderRequestBundle,
                          lockedLiquidity: Seq[LiquidityLock],
                          ordersRefs: Seq[OrderRef])
-  case class FinishedOrderBundle(bundle: OrderBundle, finishedOrders: Seq[Order], finishTime: Instant)
-  case class LiquidityTx(orderRequest: OrderRequest, orderRef: OrderRef, creationTime: Instant)
-  case class FinishedLiquidityTx(liquidityTx: LiquidityTx, finishedOrder: Order, finishTime: Instant)
+  case class FinishedOrderBundle(bundle: OrderBundle,
+                                 finishedOrders: Seq[Order],
+                                 finishTime: Instant,
+                                 bill: OrderBill) {
+    def shortDesc: String = s"FinishedOrderBundle(${finishedOrders.map(o => o.shortDesc).mkString(" & ")})"
+
+  } // with sumUSDT at finish time time
+  case class LiquidityTx(orderRequest: OrderRequest,
+                         orderRef: OrderRef,
+                         creationTime: Instant)
+  case class FinishedLiquidityTx(liquidityTx: LiquidityTx,
+                                 finishedOrder: Order,
+                                 finishTime: Instant,
+                                 bill: OrderBill)
 
   // communication with ourself
   case class OrderManagementSupervisor()
@@ -99,7 +110,7 @@ class TradeRoom(config: TradeRoomConfig,
   private val openOrderBundles: ConcurrentMap[UUID, OrderBundle] = TrieMap() // Map(order-bundle-id -> OrderBundle) maintained by TradeRoom
   private val openLiquidityTx: ConcurrentMap[OrderRef, LiquidityTx] = TrieMap() // maintained by TradeRoom
   private var finishedOrderBundles: List[FinishedOrderBundle] = List()
-  private var finishedLiquidityTx: List[FinishedLiquidityTx] = List()
+  private var finishedLiquidityTxs: List[FinishedLiquidityTx] = List()
 
   private val fees: Map[String, Fee] =
     exchangesConfig.values.map(e => (e.exchangeName, e.fee)).toMap // TODO query from exchange
@@ -168,7 +179,7 @@ class TradeRoom(config: TradeRoomConfig,
       return
     }
 
-    if (config.oneTradeOnlyTestMode && (finishedLiquidityTx.nonEmpty || openLiquidityTx.nonEmpty)) {
+    if (config.oneTradeOnlyTestMode && (finishedLiquidityTxs.nonEmpty || openLiquidityTx.nonEmpty)) {
       log.debug("Ignoring further liquidity tx, because we are NOT in production mode")
       return
     }
@@ -229,7 +240,7 @@ class TradeRoom(config: TradeRoomConfig,
   }
 
 
-  def queryTradePairs(exchange:String): Set[TradePair] = {
+  def queryTradePairs(exchange: String): Set[TradePair] = {
     implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
     Await.result((exchanges(exchange) ? GetTradePairs()).mapTo[Set[TradePair]], timeout.duration.plus(500.millis))
   }
@@ -252,7 +263,8 @@ class TradeRoom(config: TradeRoomConfig,
    * Parallel optimization is possible but not necessary for this small task
    *
    * Note:
-   * For liquidity conversion and some calculations we need USDT pairs in ReferenceTicker, so for now we don't drop USDT, until ReferenceTicker is decoupled from exchange TradePairs
+   * For liquidity conversion and some calculations we need USDT pairs in ReferenceTicker, so for now we don't drop x:USDT pairs (until ReferenceTicker is decoupled from exchange TradePairs)
+   * Also - if no x:USDT pair is available, we don't drop the x:BTC pair (like for IOTA on Bitfinex we only have IOTA:BTC & IOTA:ETH)
    */
   def dropUnusableTradepairsSync(): Unit = {
     var eTradePairs: Set[Tuple2[String, TradePair]] = Set()
@@ -272,10 +284,15 @@ class TradeRoom(config: TradeRoomConfig,
 
     for (asset <- assetsToRemove) {
       val tradePairsToDrop: Set[Tuple2[String, TradePair]] =
-        eTradePairs.filter(e => e._2.baseAsset == asset && e._2.quoteAsset != USDT) // keep :USDT TradePairs because we want them in the ReferenceTicker
+        eTradePairs
+          .filter(e => e._2.baseAsset == asset && e._2.quoteAsset != USDT) // keep :USDT TradePairs because we want them in the ReferenceTicker
+          .filterNot(e => !eTradePairs.exists(x => x._1 == e._1 && x._2 == TradePair(e._2.baseAsset, USDT)) && // when no :USDT tradepair exists
+            e._2 == TradePair(e._2.baseAsset, Bitcoin)) // keep :BTC tradepair (for currency conversion via x -> BTC -> USDT)
 
-      log.debug(s"${Emoji.Robot}  Dropping all TradePairs involving $asset, because there are not enough (> 1) compatible TradePairs on any exchange:  $tradePairsToDrop")
-      tradePairsToDrop.foreach(e => dropTradePairSync(e._1, e._2))
+      if (tradePairsToDrop.nonEmpty) {
+        log.debug(s"${Emoji.Robot}  Dropping some TradePairs involving $asset, because we don't have a use for it:  $tradePairsToDrop")
+        tradePairsToDrop.foreach(e => dropTradePairSync(e._1, e._2))
+      }
     }
   }
 
@@ -360,7 +377,7 @@ class TradeRoom(config: TradeRoomConfig,
            |openOrderBundles: $openOrderBundles
            |openLiquidityTx: $openLiquidityTx
            |finishedOrderBundles: $finishedOrderBundles
-           |finishedLiquidityTx: $finishedLiquidityTx""".mkString("\n"))
+           |finishedLiquidityTx: $finishedLiquidityTxs""".mkString("\n"))
       self ! PoisonPill
     }
   }
@@ -374,23 +391,16 @@ class TradeRoom(config: TradeRoomConfig,
         .mkString(", ")
     }
 
-    val liquiditySumCurrency: Asset = Config.tradeRoom.stats.aggregatedliquidityReportAsset
-    val inconvertibleAssets: Set[LocalCryptoValue] = wallets
-      .flatMap(e => e._2.balance.map(a => LocalCryptoValue(e._1, a._2.asset, a._2.amountAvailable)))
-      .filterNot(e => doNotTouchAssets(e.exchange).contains(e.asset))
-      .filter(e => e.convertTo(liquiditySumCurrency, tradeContext.tickers).isEmpty)
-      .toSet
-    if (inconvertibleAssets.nonEmpty) {
-      log.warn(s"Currently we cannot calculate the correct balance, because no reference ticker available for converting them to $liquiditySumCurrency: $inconvertibleAssets")
-      log.debug(s"ReferenceTicker trade pairs: ${referenceTicker.keys.toSeq.sorted}")
-    }
-
+    val aggregateAsset: Asset = config.stats.aggregatedliquidityReportAsset
     for (w <- wallets.values) {
+      val liquidity = w.liquidCryptoValueSum(aggregateAsset, tickers(w.exchange))
+      val unconvertable = w.unconvertableCryptoValues(aggregateAsset, tickers(w.exchange))
       log.info(
-        s"""${Emoji.Robot}  Wallet [${w.exchange}]:
-           |Crypto liquidity total: ${w.liquidCryptoValueSum(USDT, tickers(w.exchange))},
-           |Fiat Money: ${w.fiatMoney.mkString(",")},
-           |Not-touching: ${w.notTouchAssets.mkString(",")}""".stripMargin)
+        s"${Emoji.Robot}  Wallet [${w.exchange}]: Liquid Crypto total: $liquidity" +
+          (if (unconvertable.nonEmpty) s""", Unconvertable to ${aggregateAsset.officialSymbol}: ${unconvertable.mkString(", ")}""") +
+          s""", Fiat Money: ${w.fiatMoney.mkString(", ")}""" +
+          (if (w.notTouchValues.nonEmpty) s""", Not-touching: ${w.notTouchValues.mkString(", ")}""")
+      )
     }
 
     val freshestTicker = dataAge.maxBy(_._2.tickerTS.toEpochMilli)
@@ -421,6 +431,33 @@ class TradeRoom(config: TradeRoomConfig,
     }
 
     log.info(s"${Emoji.Robot}  OrderBundleSafetyGuard decision stats: [${orderBundleSafetyGuard.unsafeStats.mkString("|")}]")
+
+    val now = Instant.now
+
+    val lastHourArbitrageSumUSDT: Double = finishedOrderBundles
+      .filter(b => Duration.between(b.finishTime, now).toHours < 1)
+      .map(_.bill.sumUSDT)
+      .foldLeft(0.0)((sum, x) => sum + x)
+    val lastHourLiquidityTxSumUSDT: Double = finishedLiquidityTxs
+      .filter(b => Duration.between(b.finishTime, now).toHours < 1)
+      .map(_.bill.sumUSDT)
+      .foldLeft(0.0)((sum, x) => sum + x)
+    val lastHourSumUSDT: Double = lastHourArbitrageSumUSDT + lastHourLiquidityTxSumUSDT
+    log.info(s"${Emoji.Robot}  Last 1h: cumulated gain: ${formatDecimal(lastHourSumUSDT,2)} USDT " +
+      s"(arbitrage orders: ${formatDecimal(lastHourArbitrageSumUSDT,2)} USDT, " +
+      s"liquidity tx: ${formatDecimal(lastHourLiquidityTxSumUSDT)} USDT) ")
+
+    val totalArbitrageSumUSDT: Double = finishedOrderBundles
+      .map(_.bill.sumUSDT)
+      .foldLeft(0.0)((sum, x) => sum + x)
+    val totalLiquidityTxSumUSDT: Double = finishedLiquidityTxs
+      .map(_.bill.sumUSDT)
+      .foldLeft(0.0)((sum, x) => sum + x)
+    val totalSumUSDT: Double = totalArbitrageSumUSDT + totalLiquidityTxSumUSDT
+    log.info(s"${Emoji.Robot}  Total cumulated gain: ${formatDecimal(totalSumUSDT, 2)} USDT " +
+      s"(arbitrage orders: ${formatDecimal(totalArbitrageSumUSDT,2)} USDT, liquidity tx: " +
+      s"${formatDecimal(totalLiquidityTxSumUSDT,2)} USDT) ")
+
   }
 
 
@@ -462,8 +499,11 @@ class TradeRoom(config: TradeRoomConfig,
     val bundle: OrderBundle = openOrderBundles(orderBundleId)
     val orders: Seq[Order] = bundle.ordersRefs.flatMap(activeOrder)
     val finishTime = orders.map(_.lastUpdateTime).max
+
+    val bill: OrderBill = OrderBill.calc(orders, tickers, exchangesConfig.map(e => (e._1, e._2.fee)))
+    val finishedOrderBundle = FinishedOrderBundle(bundle, orders, finishTime, bill)
     this.synchronized {
-      finishedOrderBundles = FinishedOrderBundle(bundle, orders, finishTime) :: finishedOrderBundles
+      finishedOrderBundles = finishedOrderBundle :: finishedOrderBundles
     }
     openOrderBundles.remove(orderBundleId)
     bundle.ordersRefs.foreach {
@@ -471,13 +511,22 @@ class TradeRoom(config: TradeRoomConfig,
     }
 
     clearLockedLiquidity(bundle.lockedLiquidity)
+
+    if (bill.sumUSDT >= 0) {
+      val emoji = if (bill.sumUSDT >= 1.0) Emoji.Opera else Emoji.Winning
+      log.info(s"$emoji  ${finishedOrderBundle.shortDesc} completed with a win of ${bill.sumUSDT}")
+    } else {
+      log.warn(s"${Emoji.SadFace}  ${finishedOrderBundle.shortDesc} completed with a loss of ${bill.sumUSDT} ${Emoji.LookingDown}: $finishedOrderBundle")
+    }
   }
 
 
   def cleanupLiquidityTxOrder(tx: LiquidityTx): Unit = {
-    val order = activeOrder(tx.orderRef).get // must exist
+    val order: Order = activeOrder(tx.orderRef).get // must exist
+    val bill: OrderBill = OrderBill.calc(Seq(order), tickers, exchangesConfig.map(e => (e._1, e._2.fee)))
+    val finishedLiquidityTx = FinishedLiquidityTx(tx, order, order.lastUpdateTime, bill)
     this.synchronized {
-      finishedLiquidityTx = FinishedLiquidityTx(tx, order, order.lastUpdateTime) :: finishedLiquidityTx
+      finishedLiquidityTxs = finishedLiquidityTx :: finishedLiquidityTxs
     }
     openLiquidityTx.remove(tx.orderRef)
     activeOrders(tx.orderRef.exchange).remove(tx.orderRef)

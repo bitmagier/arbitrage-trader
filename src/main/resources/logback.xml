@@ -11,11 +11,11 @@
   </appender>
 
   <logger name="org.purevalue.arbitrage" level="INFO"/>
-  <logger name="org.purevalue.arbitrage.traderoom.ExchangeLiquidityManager" level="TRACE"/>
-  <logger name="org,purevalue.arbitrage.traderoom.ExchangeAccountDataManager" level="TRACE"/>
+  <logger name="org.purevalue.arbitrage.traderoom.ExchangeLiquidityManager" level="DEBUG"/>
+  <logger name="org.purevalue.arbitrage.traderoom.ExchangeAccountDataManager" level="TRACE"/>
   <logger name="org.purevalue.arbitrage.traderoom.TradeRoom" level="DEBUG"/>
   <logger name="org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel" level="TRACE"/>
-  <logger name="org.purevalue.arbitrage.adapter.bitfinex.BitfinexAccountDataChannel" level="TRACE"/>
+<!--  <logger name="org.purevalue.arbitrage.adapter.bitfinex.BitfinexAccountDataChannel" level="TRACE"/>-->
   <logger name="org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer" level="DEBUG"/>
 
   <root level="INFO">

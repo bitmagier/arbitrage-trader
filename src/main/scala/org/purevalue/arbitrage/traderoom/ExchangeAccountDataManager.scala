@@ -42,12 +42,13 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
   var accountDataChannel: ActorRef = _
 
   val sink: Sink[Seq[ExchangeAccountStreamData], Future[Done]] = Sink.foreach[Seq[ExchangeAccountStreamData]] { data =>
-    if (log.isTraceEnabled()) log.trace(s"${config.exchangeName}: received $data")
     data.foreach(applyData)
   }
 
   private def applyData(dataset: ExchangeAccountStreamData): Unit = {
-    log.trace(s"applying incoming $dataset")
+
+    if (log.isTraceEnabled) log.trace(s"applying incoming $dataset")
+
     dataset match {
 
       case w: WalletAssetUpdate =>
@@ -108,7 +109,16 @@ case class Balance(asset: Asset, amountAvailable: Double, amountLocked: Double) 
 }
 // we use a [var immutable map] instead of mutable one here, to be able to update the whole map at once without a race condition
 case class Wallet(exchange: String, var balance: Map[Asset, Balance], exchangeConfig: ExchangeConfig) {
-  def notTouchAssets: Seq[CryptoValue] =
+  override def toString: String = s"""Wallet($exchange, ${balance.mkString(",")})"""
+  def unconvertableCryptoValues(aggregateAsset: Asset, ticker: scala.collection.Map[TradePair, Ticker]): Seq[CryptoValue] =
+    balance
+      .filterNot(_._1.isFiat)
+      .map(e => CryptoValue(e._1, e._2.amountAvailable))
+      .filter(e => !e.canConvertTo(aggregateAsset, ticker))
+      .toSeq
+      .sortBy(_.asset.officialSymbol)
+
+  def notTouchValues: Seq[CryptoValue] =
     balance
       .filter(e => exchangeConfig.doNotTouchTheseAssets.contains(e._1))
       .map(e => CryptoValue(e._1, e._2.amountAvailable))
@@ -122,15 +132,18 @@ case class Wallet(exchange: String, var balance: Map[Asset, Balance], exchangeCo
       .toSeq
       .sortBy(_.asset.officialSymbol)
 
-  def liquidCryptoValues: Iterable[CryptoValue] =
+  private def liquidCryptoValues(aggregateAsset:Asset, ticker: scala.collection.Map[TradePair, Ticker]): Iterable[CryptoValue] =
     balance
-    .filter(b => !b._1.isFiat && exchangeConfig.doNotTouchTheseAssets.contains(b._1))
+    .filter(b => !b._1.isFiat)
+    .filterNot(b => exchangeConfig.doNotTouchTheseAssets.contains(b._1))
     .map(b => CryptoValue(b._1, b._2.amountAvailable))
+    .filter(_.canConvertTo(aggregateAsset, ticker))
 
-  def liquidCryptoValueSum(aggregateAsset: Asset, ticker: scala.collection.Map[TradePair, Ticker]): CryptoValue =
-    liquidCryptoValues
-      .map(_.convertTo(aggregateAsset, ticker).get)
+  def liquidCryptoValueSum(aggregateAsset:Asset, ticker: scala.collection.Map[TradePair, Ticker]): CryptoValue = {
+    liquidCryptoValues(aggregateAsset, ticker)
+      .map(_.convertTo(aggregateAsset, ticker))
       .foldLeft(CryptoValue(aggregateAsset, 0.0))((a,x) => CryptoValue(a.asset, a.amount + x.amount))
+  }
 }
 
 case class WalletAssetUpdate(balance: Map[Asset, Balance]) extends ExchangeAccountStreamData
