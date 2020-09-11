@@ -104,7 +104,7 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
     data: Seq[IncomingBinanceAccountJson] =>
       data.map {
         // @formatter:off
-        case a: AccountInformationJson      => a.toWallet
+        case a: AccountInformationJson      => a.toWalletAssetUpdate
         case a: OutboundAccountPositionJson => a.toWalletAssetUpdate
         case b: BalanceUpdateJson           => b.toWalletBalanceUpdate
         case o: OrderExecutionReportJson    => o.toOrderOrOrderUpdate(config.exchangeName, symbol => binanceTradePairs.find(_.symbol == symbol).get) // expecting, that we have all relevant trade pairs
@@ -297,11 +297,12 @@ case class AccountInformationJson(makerCommission: Int,
                                   accountType: String,
                                   balances: List[BalanceJson],
                                   permissions: List[String]) extends IncomingBinanceAccountJson {
-  def toWallet: Wallet = Wallet(
+  def toWalletAssetUpdate: WalletAssetUpdate = WalletAssetUpdate(
     balances
       .flatMap(_.toBalance)
       .map(e => (e.asset, e))
-      .toMap)
+      .toMap
+  )
 }
 
 case class OutboundAccountInfoBalanceJson(a: String, f: String, l: String) {

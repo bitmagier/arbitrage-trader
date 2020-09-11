@@ -4,12 +4,12 @@ import akka.actor.SupervisorStrategy.Restart
 import akka.actor.{Actor, ActorRef, ActorSystem, OneForOneStrategy, Props, Status}
 import akka.pattern.ask
 import akka.util.Timeout
-import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.traderoom.Exchange.{GetTradePairs, RemoveTradePair, StartStreaming, TradePairs}
 import org.purevalue.arbitrage.traderoom.ExchangeAccountDataManager.{CancelOrder, FetchOrder, NewLimitOrder}
 import org.purevalue.arbitrage.traderoom.ExchangeLiquidityManager.{LiquidityLockClearance, LiquidityRequest}
 import org.purevalue.arbitrage.traderoom.TradeRoom.{LiquidityTx, WalletUpdateTrigger}
 import org.purevalue.arbitrage.util.Emoji
+import org.purevalue.arbitrage._
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration.DurationInt
@@ -26,17 +26,19 @@ object Exchange {
 
   def props(exchangeName: String,
             config: ExchangeConfig,
+            liquidityManagerConfig: LiquidityManagerConfig,
             tradeRoom: ActorRef,
             initStuff: ExchangeInitStuff,
             tpData: ExchangeTPData,
             accountData: IncomingExchangeAccountData,
             referenceTicker: () => scala.collection.Map[TradePair, Ticker],
             openLiquidityTx: () => Iterable[LiquidityTx]): Props =
-    Props(new Exchange(exchangeName, config, tradeRoom, initStuff, tpData, accountData, referenceTicker, openLiquidityTx))
+    Props(new Exchange(exchangeName, config, liquidityManagerConfig, tradeRoom, initStuff, tpData, accountData, referenceTicker, openLiquidityTx))
 }
 
 case class Exchange(exchangeName: String,
                     config: ExchangeConfig,
+                    liquidityManagerConfig: LiquidityManagerConfig,
                     tradeRoom: ActorRef,
                     initStuff: ExchangeInitStuff,
                     tpData: ExchangeTPData,
@@ -120,7 +122,7 @@ case class Exchange(exchangeName: String,
   override def preStart(): Unit = {
     log.info(s"Initializing Exchange $exchangeName " +
       s"${if (tradeSimulation) " in TRADE-SIMULATION mode"}" +
-      s"${if (config.doNotTouchTheseAssets.nonEmpty) s" NOT touching ${config.doNotTouchTheseAssets}"}")
+      s"${if (config.doNotTouchTheseAssets.nonEmpty) s" NOT touching ${config.doNotTouchTheseAssets.mkString(",")}"}")
     publicDataInquirer = context.actorOf(initStuff.publicDataInquirerProps(config), s"$exchangeName-PublicDataInquirer")
 
     implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
@@ -137,7 +139,7 @@ case class Exchange(exchangeName: String,
   def initLiquidityManager(): Unit = {
     liquidityManager = context.actorOf(
       ExchangeLiquidityManager.props(
-        Config.liquidityManager, config, tradeRoom, tpData.readonly, accountData.wallet, referenceTicker, openLiquidityTx))
+        liquidityManagerConfig, config, tradeRoom, tpData.readonly, accountData.wallet, referenceTicker, openLiquidityTx))
   }
 
   override def receive: Receive = {

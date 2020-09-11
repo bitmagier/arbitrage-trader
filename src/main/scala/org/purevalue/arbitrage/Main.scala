@@ -20,7 +20,7 @@ class RootGuardian extends Actor {
     }
   }
 
-  private val tradeRoom = context.actorOf (TradeRoom.props (Config.tradeRoom), "TradeRoom")
+  private val tradeRoom = context.actorOf (TradeRoom.props (Config.tradeRoom, Config.exchanges, Config.liquidityManager), "TradeRoom")
 
   override def receive: Receive = {
     case Status.Failure(cause) =>

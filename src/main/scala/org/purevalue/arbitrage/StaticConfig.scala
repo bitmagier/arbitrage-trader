@@ -2,7 +2,7 @@ package org.purevalue.arbitrage
 
 import akka.actor.{ActorRef, Props}
 import org.purevalue.arbitrage.adapter.binance.{BinanceAccountDataChannel, BinancePublicDataInquirer, BinancePublicTPDataChannel}
-import org.purevalue.arbitrage.adapter.bitfinex.{BitfinexPublicDataInquirer, BitfinexPublicTPDataChannel}
+import org.purevalue.arbitrage.adapter.bitfinex.{BitfinexAccountDataChannel, BitfinexPublicDataInquirer, BitfinexPublicTPDataChannel}
 import org.purevalue.arbitrage.traderoom.{Asset, TradePair}
 import org.slf4j.LoggerFactory
 
@@ -24,12 +24,14 @@ object StaticConfig {
     "bitfinex" -> ExchangeInitStuff(
       BitfinexPublicDataInquirer.props,
       BitfinexPublicTPDataChannel.props,
-      null // TODO
+      BitfinexAccountDataChannel.props
     )
   )
 
   // this is the reference to know exactly about which asset (or coin) we are talking (no matter at which exchange)
   val AllAssets: Map[String, Asset] = Seq(
+    Asset("EUR", "Euro", 2, isFiat = true),
+    Asset("USD", "U.S. dollar", 2, isFiat = true),
     Asset("BTC", "Bitcoin", 8),
     Asset("ETH", "Ethereum", 6),
     Asset("XRP", "Ripple"),
@@ -51,7 +53,7 @@ object StaticConfig {
     Asset("VET", "VeChain"),
     Asset("NEO", "Neo"),
     Asset("ETC", "Ethereum Classic"),
-    Asset("MIOTA", "IOTA"),
+    Asset("IOTA", "IOTA"),
     Asset("DASH", "Dash"),
     Asset("ZEC", "Zcash"),
     Asset("ATOM", "Cosmos"),

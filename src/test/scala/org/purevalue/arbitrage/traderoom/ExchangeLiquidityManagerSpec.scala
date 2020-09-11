@@ -7,7 +7,7 @@ import akka.actor.ActorSystem
 import akka.pattern.ask
 import akka.testkit.{ImplicitSender, TestKit, TestProbe}
 import akka.util.Timeout
-import org.purevalue.arbitrage.traderoom.Asset.{Bitcoin, USDT}
+import org.purevalue.arbitrage.traderoom.Asset.{Bitcoin, Euro, USDollar, USDT}
 import org.purevalue.arbitrage.traderoom.ExchangeLiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityRequest}
 import org.purevalue.arbitrage.traderoom.TradeRoom.{LiquidityTransformationOrder, WalletUpdateTrigger}
 import org.purevalue.arbitrage.{ExchangeConfig, LiquidityManagerConfig}
@@ -26,15 +26,15 @@ class ExchangeLiquidityManagerSpec
     with BeforeAndAfterAll
 //    with MockFactory
 {
-  private val Config =
-    LiquidityManagerConfig(
+  private val Config = LiquidityManagerConfig(
       Duration.ofSeconds(5),
       Duration.ofSeconds(5),
       providingLiquidityExtra = 0.02,
       maxAcceptableLocalTickerLossFromReferenceTicker = 0.01,
       minimumKeepReserveLiquidityPerAssetInUSDT = 50.0,
       txLimitBelowOrAboveBestBidOrAsk = 0.00005,
-      rebalanceTxGranularityInUSDT = 20.0)
+      rebalanceTxGranularityInUSDT = 20.0,
+      dustLevelInUsdt = 0.05)
 
   private val exchangeConfig: ExchangeConfig =
     ExchangeConfig(
@@ -83,10 +83,12 @@ class ExchangeLiquidityManagerSpec
 
     "rebalance reserve assets" in {
       val tradeRoom = TestProbe()
-      val wallet: Wallet = Wallet(Map(
+      val wallet: Wallet = Wallet("e1", Map(
         Bitcoin -> Balance(Bitcoin, 1.0, 0.0),
-        USDT -> Balance(USDT, 0.05, 0.0)
-      ))
+        USDT -> Balance(USDT, 0.05, 0.0),
+        Euro -> Balance(Euro, 999.0, 0.0),
+        USDollar -> Balance(USDollar, 999, 0.0)
+      ), exchangeConfig)
       val m = system.actorOf(ExchangeLiquidityManager.props(Config, exchangeConfig, tradeRoom.ref, tpData, wallet, () => referenceTicker, () => Seq()))
 
       m ! WalletUpdateTrigger("e1") // trigger housekeeping
@@ -123,14 +125,14 @@ class ExchangeLiquidityManagerSpec
 
     "provide demanded coins and transfer back not demanded liquidity" in {
       val tradeRoom = TestProbe()
-      val wallet: Wallet = Wallet(Map(
+      val wallet: Wallet = Wallet("e1", Map(
         Bitcoin -> Balance(Bitcoin, 1.0, 0.0),
         USDT -> Balance(USDT, 7.0, 0.0),
         Asset("ETH") -> Balance(Asset("ETH"), 20.0, 0.0),
         Asset("ADA") -> Balance(Asset("ADA"), 100.0, 0.0),
         Asset("ALGO") -> Balance(Asset("ALGO"), 500.0, 0.0),
         Asset("OMG") -> Balance(Asset("OMG"), 1000.0, 0.0) // staked (in do-not-touch list)
-      ))
+      ), exchangeConfig)
       val m = system.actorOf(ExchangeLiquidityManager.props(Config, exchangeConfig, tradeRoom.ref, tpData, wallet, () => referenceTicker, () => Seq()))
 
       val requestedLiquidity = Seq(CryptoValue(Asset("ADA"), 100.0), CryptoValue(Asset("LINK"), 25.0))
@@ -187,9 +189,10 @@ class ExchangeLiquidityManagerSpec
 
     "liquidity lock works and remains respected until cleared" in {
       val tradeRoom = TestProbe()
-      val wallet = Wallet(Map(
-        Asset("ALGO") -> Balance(Asset("ALGO"), 1000.0, 0.0)
-      ))
+      val wallet = Wallet("e1", Map(
+        Asset("ALGO") -> Balance(Asset("ALGO"), 1000.0, 0.0),
+        Euro -> Balance(Euro, 1000.0, 0.0)
+      ), exchangeConfig)
 
       val m = system.actorOf(ExchangeLiquidityManager.props(Config, exchangeConfig, tradeRoom.ref, tpData, wallet, () => referenceTicker, () => Seq()))
       implicit val timeout: Timeout = 2.second

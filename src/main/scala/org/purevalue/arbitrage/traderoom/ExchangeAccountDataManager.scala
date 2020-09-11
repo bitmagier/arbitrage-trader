@@ -49,9 +49,6 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
   private def applyData(dataset: ExchangeAccountStreamData): Unit = {
     log.trace(s"applying incoming $dataset")
     dataset match {
-      case w: Wallet =>
-        accountData.wallet.balance = w.balance
-        tradeRoom ! WalletUpdateTrigger(config.exchangeName)
 
       case w: WalletAssetUpdate =>
         accountData.wallet.balance = accountData.wallet.balance -- w.balance.keys ++ w.balance
@@ -105,14 +102,37 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
 trait ExchangeAccountStreamData
 
 case class Balance(asset: Asset, amountAvailable: Double, amountLocked: Double) {
-  def toCryptoValue: CryptoValue = CryptoValue(asset, amountAvailable)
-
   override def toString: String = s"Balance(${asset.officialSymbol}: " +
     s"available:${formatDecimal(amountAvailable, asset.visibleAmountFractionDigits)}, " +
     s"locked: ${formatDecimal(amountLocked, asset.visibleAmountFractionDigits)})"
 }
 // we use a [var immutable map] instead of mutable one here, to be able to update the whole map at once without a race condition
-case class Wallet(var balance: Map[Asset, Balance]) extends ExchangeAccountStreamData
+case class Wallet(exchange: String, var balance: Map[Asset, Balance], exchangeConfig: ExchangeConfig) {
+  def notTouchAssets: Seq[CryptoValue] =
+    balance
+      .filter(e => exchangeConfig.doNotTouchTheseAssets.contains(e._1))
+      .map(e => CryptoValue(e._1, e._2.amountAvailable))
+      .toSeq
+      .sortBy(_.asset.officialSymbol)
+
+  def fiatMoney: Seq[FiatMoney] =
+    balance
+      .filter(_._1.isFiat)
+      .map(e => FiatMoney(e._1, e._2.amountAvailable))
+      .toSeq
+      .sortBy(_.asset.officialSymbol)
+
+  def liquidCryptoValues: Iterable[CryptoValue] =
+    balance
+    .filter(b => !b._1.isFiat && exchangeConfig.doNotTouchTheseAssets.contains(b._1))
+    .map(b => CryptoValue(b._1, b._2.amountAvailable))
+
+  def liquidCryptoValueSum(aggregateAsset: Asset, ticker: scala.collection.Map[TradePair, Ticker]): CryptoValue =
+    liquidCryptoValues
+      .map(_.convertTo(aggregateAsset, ticker).get)
+      .foldLeft(CryptoValue(aggregateAsset, 0.0))((a,x) => CryptoValue(a.asset, a.amount + x.amount))
+}
+
 case class WalletAssetUpdate(balance: Map[Asset, Balance]) extends ExchangeAccountStreamData
 case class WalletBalanceUpdate(asset: Asset, amountDelta: Double) extends ExchangeAccountStreamData
 

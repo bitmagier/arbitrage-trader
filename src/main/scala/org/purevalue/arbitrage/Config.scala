@@ -26,11 +26,13 @@ case class ExchangeConfig(exchangeName: String,
 }
 
 object ExchangeConfig {
-  def apply(name:String, c:com.typesafe.config.Config): ExchangeConfig = {
+  def apply(name: String, c: com.typesafe.config.Config): ExchangeConfig = {
     val doNotTouchTheseAssets = c.getStringList("do-not-touch-these-assets").asScala.map(e => Asset(e))
+    if (doNotTouchTheseAssets.exists(_.isFiat)) throw new IllegalArgumentException(s"$name: Don't worry bro, I'll never touch Fiat Money")
     val reserveAssets = c.getStringList("reserve-assets").asScala.map(e => Asset(e)).toList
-    if (reserveAssets.exists(doNotTouchTheseAssets.contains))
-      throw new IllegalArgumentException(s"$name: reserve-assets & do-not-touch-these-assets overlap!")
+    if (reserveAssets.exists(doNotTouchTheseAssets.contains)) throw new IllegalArgumentException(s"$name: reserve-assets & do-not-touch-these-assets overlap!")
+    if (reserveAssets.exists(_.isFiat)) throw new IllegalArgumentException(s"$name: Cannot us a Fiat currency as reserve-asset")
+
     ExchangeConfig(
       name,
       secretsConfig(c.getConfig("secrets")),
@@ -91,7 +93,8 @@ case class LiquidityManagerConfig(liquidityLockMaxLifetime: Duration, // when a 
                                   maxAcceptableLocalTickerLossFromReferenceTicker: Double, // defines the maximum acceptable relative loss (local ticker versus reference ticker) for liquidity conversion transactions
                                   minimumKeepReserveLiquidityPerAssetInUSDT: Double, // when we convert to a reserve liquidity or re-balance our reserve liquidity, each of them should reach at least that value (measured in USDT)
                                   txLimitBelowOrAboveBestBidOrAsk: Double, // defines the rate we set our limit above the highest ask or below the lowest bid (use 0.0 for using exactly the bid or ask price).
-                                  rebalanceTxGranularityInUSDT: Double) // that's the granularity (and also minimum amount) we transfer for reserve asset re-balance orders)}
+                                  rebalanceTxGranularityInUSDT: Double, // that's the granularity (and also minimum amount) we transfer for reserve asset re-balance orders)}
+                                  dustLevelInUsdt: Double) // we don't try to convert back assets with a value below that one back to a reserve asset
 object LiquidityManagerConfig {
   def apply(c: com.typesafe.config.Config): LiquidityManagerConfig = LiquidityManagerConfig(
     c.getDuration("liquidity-lock-max-lifetime"),
@@ -100,7 +103,9 @@ object LiquidityManagerConfig {
     c.getDouble("max-acceptable-local-ticker-loss-from-reference-ticker"),
     c.getDouble("minimum-keep-reserve-liquidity-per-asset-in-usdt"),
     c.getDouble("tx-limit-below-or-above-best-bid-or-ask"),
-    c.getDouble("rebalance-tx-granularity-in-usdt"))
+    c.getDouble("rebalance-tx-granularity-in-usdt"),
+    c.getDouble("dust-level-in-usdt")
+  )
 }
 
 object Config {
@@ -117,8 +122,9 @@ object Config {
   val activeExchanges: Seq[String] = exchangesConfig.getStringList("active").asScala
   val dataManagerInitTimeout: Duration = exchangesConfig.getDuration("data-manager-init-timeout")
 
-  def exchange(name: String): ExchangeConfig = ExchangeConfig(name, exchangesConfig.getConfig(name))
+  private def _exchange(name: String): ExchangeConfig = ExchangeConfig(name, exchangesConfig.getConfig(name))
 
+  val exchanges: Map[String, ExchangeConfig] = activeExchanges.map(e => (e, _exchange(e))).toMap
   val liquidityManager: LiquidityManagerConfig = LiquidityManagerConfig(c.getConfig("liquidity-manager"))
 
   def trader(name: String): com.typesafe.config.Config = c.getConfig(s"trader.$name")

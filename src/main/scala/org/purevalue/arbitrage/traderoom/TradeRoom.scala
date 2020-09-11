@@ -64,7 +64,8 @@ object TradeRoom {
   // from liquidity managers
   case class LiquidityTransformationOrder(orderRequest: OrderRequest)
 
-  def props(config: TradeRoomConfig): Props = Props(new TradeRoom(config))
+  def props(config: TradeRoomConfig, exchangesConfig: Map[String, ExchangeConfig], liquidityManagerConfig: LiquidityManagerConfig): Props =
+    Props(new TradeRoom(config, exchangesConfig, liquidityManagerConfig))
 }
 
 /**
@@ -73,7 +74,9 @@ object TradeRoom {
  *  - provides higher level (aggregated per order bundle) interface to traders
  *  - manages trade history
  */
-class TradeRoom(config: TradeRoomConfig) extends Actor {
+class TradeRoom(config: TradeRoomConfig,
+                exchangesConfig: Map[String, ExchangeConfig],
+                liquidityManagerConfig: LiquidityManagerConfig) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[TradeRoom])
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
@@ -101,15 +104,15 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
   private var finishedOrderBundles: List[FinishedOrderBundle] = List()
   private var finishedLiquidityTx: List[FinishedLiquidityTx] = List()
 
-  val ExchangesConfig: Map[String, ExchangeConfig] = Config.activeExchanges.map(e => (e, Config.exchange(e))).toMap
-  private val fees: Map[String, Fee] = ExchangesConfig.values.map(e => (e.exchangeName, e.fee)).toMap // TODO query from exchange
+  private val fees: Map[String, Fee] =
+    exchangesConfig.values.map(e => (e.exchangeName, e.fee)).toMap // TODO query from exchange
 
   private val doNotTouchAssets: Map[String, Seq[Asset]] =
-    ExchangesConfig.values.map(e => (e.exchangeName, e.doNotTouchTheseAssets)).toMap
+    exchangesConfig.values.map(e => (e.exchangeName, e.doNotTouchTheseAssets)).toMap
 
   private val tradeContext: TradeContext = TradeContext(tickers, extendedTickers, orderBooks, wallets, fees, doNotTouchAssets)
 
-  private val orderBundleSafetyGuard = new OrderBundleSafetyGuard(config.orderBundleSafetyGuard, ExchangesConfig, tradeContext, dataAge, openOrderBundles)
+  private val orderBundleSafetyGuard = new OrderBundleSafetyGuard(config.orderBundleSafetyGuard, exchangesConfig, tradeContext, dataAge, openOrderBundles)
 
   val orderManagementSupervisorSchedule: Cancellable = actorSystem.scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, OrderManagementSupervisor())
   val logScheduleRate: FiniteDuration = FiniteDuration(config.stats.reportInterval.toNanos, TimeUnit.NANOSECONDS)
@@ -262,7 +265,7 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     }
     val assetsToRemove: Set[Asset] = eTradePairs
       .map(_._2.baseAsset) // set of candidate assets
-      .filterNot(e => ExchangesConfig.values.exists(_.reserveAssets.contains(e))) // don't select reserve assets
+      .filterNot(e => exchangesConfig.values.exists(_.reserveAssets.contains(e))) // don't select reserve assets
       .filterNot(a =>
         eTradePairs
           .filter(_._2.baseAsset == a) // all connected tradepairs X -> ...
@@ -287,13 +290,14 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
     orderBooks += exchangeName -> TrieMap[TradePair, OrderBook]()
     dataAge += exchangeName -> TPDataTimestamps(Instant.MIN, Instant.MIN, Instant.MIN)
 
-    wallets += exchangeName -> Wallet(Map())
+    wallets += exchangeName -> Wallet(exchangeName, Map(), exchangesConfig(exchangeName))
     activeOrders += exchangeName -> TrieMap()
 
     exchanges = exchanges + (exchangeName -> context.actorOf(
       Exchange.props(
         exchangeName,
-        Config.exchange(exchangeName),
+        exchangesConfig(exchangeName),
+        liquidityManagerConfig,
         self,
         exchangeInit,
         ExchangeTPData(
@@ -383,22 +387,14 @@ class TradeRoom(config: TradeRoomConfig) extends Actor {
       log.warn(s"Currently we cannot calculate the correct balance, because no reference ticker available for converting them to $liquiditySumCurrency: $inconvertibleAssets")
       log.debug(s"ReferenceTicker trade pairs: ${referenceTicker.keys.toSeq.sorted}")
     }
-    val liquidityPerExchange: String =
-      wallets.map { case (exchange, b) =>
-        LocalCryptoValue(
-          exchange,
-          liquiditySumCurrency,
-          b.balance
-            .filterNot(e => doNotTouchAssets(exchange).contains(e._1))
-            .filterNot(e => inconvertibleAssets.exists(i => i.exchange == exchange && i.asset == e._1))
-            .map(e => LocalCryptoValue(exchange, e._2.asset, e._2.amountAvailable).convertTo(liquiditySumCurrency, tradeContext.tickers).get)
-            .map(_.amount)
-            .sum
-        )
-      }.map(e => s"${e.exchange}: ${formatDecimal(e.amount,2)} ${e.asset.officialSymbol}").mkString(", ")
-    log.info(s"${Emoji.Robot}  Liquidity sums available for trades: $liquidityPerExchange")
 
-    log.debug(s"${Emoji.Robot}  Balance per exchange: $wallets")
+    for (w <- wallets.values) {
+      log.info(
+        s"""${Emoji.Robot}  Wallet [${w.exchange}]:
+           |Crypto liquidity total: ${w.liquidCryptoValueSum(USDT, tickers(w.exchange))},
+           |Fiat Money: ${w.fiatMoney.mkString(",")},
+           |Not-touching: ${w.notTouchAssets.mkString(",")}""".stripMargin)
+    }
 
     val freshestTicker = dataAge.maxBy(_._2.tickerTS.toEpochMilli)
     val oldestTicker = dataAge.minBy(_._2.tickerTS.toEpochMilli)

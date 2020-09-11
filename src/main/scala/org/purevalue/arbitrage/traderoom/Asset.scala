@@ -9,7 +9,7 @@ import org.slf4j.LoggerFactory
 
 // Crypto asset / coin.
 // It should NOT be created somewhere else. The way to get it is via Asset(officialSymbol)
-case class Asset(officialSymbol: String, name: String, visibleAmountFractionDigits: Int = 4) {
+case class Asset(officialSymbol: String, name: String, visibleAmountFractionDigits: Int = 4, isFiat: Boolean = false) {
   override def equals(obj: Any): Boolean = {
     obj.isInstanceOf[Asset] &&
       this.officialSymbol == obj.asInstanceOf[Asset].officialSymbol
@@ -21,6 +21,8 @@ case class Asset(officialSymbol: String, name: String, visibleAmountFractionDigi
 }
 object Asset {
   // very often used assets
+  val Euro: Asset = Asset("EUR")
+  val USDollar: Asset = Asset("USD")
   val Bitcoin: Asset = Asset("BTC")
   val USDT: Asset = Asset("USDT")
 
@@ -35,7 +37,6 @@ object Asset {
 
 // a universal usable trade-pair
 abstract class TradePair extends Ordered[TradePair] {
-
 
   def baseAsset: Asset
   def quoteAsset: Asset
@@ -66,9 +67,13 @@ object TradePair {
   }
 }
 
+case class FiatMoney(asset:Asset, amount:Double) {
+  if (!asset.isFiat) throw new IllegalArgumentException(s"$asset is not Fiat Money")
+}
 
 case class CryptoValue(asset: Asset, amount: Double) {
   private val log = LoggerFactory.getLogger(classOf[CryptoValue])
+  if (asset.isFiat) throw new IllegalArgumentException(s"Fiat $asset isn't a crypto asset")
 
   override def toString: String = s"${formatDecimal(amount, asset.visibleAmountFractionDigits)} ${asset.officialSymbol}"
 
@@ -90,7 +95,7 @@ case class CryptoValue(asset: Asset, amount: Double) {
                 && (findConversionRate(TradePair(targetAsset, Bitcoin)).isDefined || findConversionRate(TradePair(Bitcoin, targetAsset)).isDefined)) {
                 this.convertTo(Bitcoin, findConversionRate).get.convertTo(targetAsset, findConversionRate)
               } else {
-                log.debug(s"No option available to convert $asset -> $targetAsset")
+                log.warn(s"No option available to convert $asset -> $targetAsset")
                 None
               }
           }
@@ -105,6 +110,8 @@ case class CryptoValue(asset: Asset, amount: Double) {
  * CryptoValue on a specific exchange
  */
 case class LocalCryptoValue(exchange: String, asset: Asset, amount: Double) {
+  if (asset.isFiat) throw new IllegalArgumentException(s"FIAT $asset isn't a crypto asset")
+
   def convertTo(targetAsset: Asset, findConversionRate: (String, TradePair) => Option[Double]): Option[LocalCryptoValue] =
     CryptoValue(asset, amount)
       .convertTo(targetAsset, tradepair => findConversionRate(exchange, tradepair))

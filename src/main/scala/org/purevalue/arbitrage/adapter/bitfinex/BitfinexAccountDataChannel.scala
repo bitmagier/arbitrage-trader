@@ -28,7 +28,7 @@ import scala.concurrent.{Await, ExecutionContextExecutor, Future, Promise}
 
 trait IncomingBitfinexAccountJson
 
-case class BitfinexAuthMessage(apiKey: String, authSig: String, authNonce: String, authPayload: String, event: String = "auth")
+case class BitfinexAuthMessage(apiKey: String, authSig: String, authNonce: String, authPayload: String, filter:Array[String], event: String = "auth")
 case class BitfinexOrderUpdateJson(streamType: String, // "os" = order snapshot, "on" = order new, "ou" = order update, "oc" = order cancel
                                    orderId: Long,
                                    groupId: Long,
@@ -198,14 +198,14 @@ case class BitfinexWalletUpdateJson(walletType: String,
                                     currency: String,
                                     balance: Double,
                                     unsettledInterest: Double,
-                                    balanceAvailable: Double, // maybe null if not fresh enough
-                                    description: String
+                                    balanceAvailable: Option[Double], // maybe null if not fresh enough
+                                    description: Option[String]
                                     // ignoring meta: json // Provides info on the reason for the wallet update, if available.
                                    ) extends IncomingBitfinexAccountJson {
   def toWalletAssetUpdate(resolveAsset: String => Asset): WalletAssetUpdate = WalletAssetUpdate(
     if (walletType == "exchange") {
       val asset = resolveAsset(currency)
-      val balanceAvailable: Double = Option(this.balanceAvailable).getOrElse(balance)
+      val balanceAvailable: Double = this.balanceAvailable.getOrElse(balance)
       Map(asset -> Balance(asset, balanceAvailable, balance - balanceAvailable))
     }
     else Map() // ignore "margin/funding" wallets
@@ -221,8 +221,8 @@ object BitfinexWalletUpdateJson {
       v(1).convertTo[String],
       v(2).convertTo[Double],
       v(3).convertTo[Double],
-      v(4).convertTo[Double],
-      v(5).convertTo[String])
+      v(4).convertTo[Option[Double]],
+      v(5).convertTo[Option[String]])
 }
 
 case class SubmitLimitOrderJson(`type`: String, symbol: String, price: String, amount: String, meta: String)
@@ -240,7 +240,7 @@ case class OrderResponseJson(mts: Long,
                              text: String)
 
 object BitfinexAccountDataJsonProtocoll extends DefaultJsonProtocol {
-  implicit val bitfinexAuthMessage: RootJsonFormat[BitfinexAuthMessage] = jsonFormat5(BitfinexAuthMessage)
+  implicit val bitfinexAuthMessage: RootJsonFormat[BitfinexAuthMessage] = jsonFormat6(BitfinexAuthMessage)
   implicit val submitLimitOrderJson: RootJsonFormat[SubmitLimitOrderJson] = jsonFormat5(SubmitLimitOrderJson)
 
   implicit object singleOrderResponseJson extends RootJsonFormat[SingleOrderResponseJson] {
@@ -283,6 +283,19 @@ class BitfinexAccountDataChannel(config: ExchangeConfig, exchangePublicDataInqui
   var bitfinexTradePairs: Set[BitfinexTradePair] = _
   var bitfinexAssets: Set[BitfinexSymbol] = _
 
+  def tradePairToApiSymbol(tp: TradePair): String = bitfinexTradePairs.find(e => e.baseAsset == tp.baseAsset && e.quoteAsset == tp.quoteAsset) match {
+    case Some(tp) => tp.apiSymbol
+    case None => throw new IllegalArgumentException(s"unable to find bitfinex tradepair: $tp. Available are: $bitfinexTradePairs")
+  }
+
+  def symbolToAsset(symbol:String): Asset = bitfinexAssets.find(_.apiSymbol == symbol) match {
+    case Some(bitfinexAsset) => bitfinexAsset.asset
+    case None => StaticConfig.AllAssets.find(_._1 == symbol) match {
+      case Some(globalAsset) => globalAsset._2
+      case None => throw new IllegalArgumentException(s"unable to find Asset for bitfinex symbol $symbol. Bitfinex has: $bitfinexAssets")
+    }
+  }
+
   import BitfinexAccountDataJsonProtocoll._
 
   val downStreamFlow: Flow[Seq[IncomingBitfinexAccountJson], Seq[ExchangeAccountStreamData], NotUsed] = Flow.fromFunction {
@@ -291,7 +304,7 @@ class BitfinexAccountDataChannel(config: ExchangeConfig, exchangePublicDataInqui
         // @formatter:off
         case o: BitfinexOrderUpdateJson   => o.toOrderOrOrderUpdate(config.exchangeName, symbol => bitfinexTradePairs.find(_.apiSymbol == symbol).get)
         case t: BitfinexTradeExecutedJson => t.toOrderUpdate(config.exchangeName, symbol => bitfinexTradePairs.find(_.apiSymbol == symbol).get)
-        case w: BitfinexWalletUpdateJson  => w.toWalletAssetUpdate(symbol => bitfinexAssets.find(_.apiSymbol == symbol).get.asset)
+        case w: BitfinexWalletUpdateJson  => w.toWalletAssetUpdate(symbol => symbolToAsset(symbol))
 
         case x@_                          => log.debug(s"$x"); throw new NotImplementedError
         // @formatter:on
@@ -308,7 +321,7 @@ class BitfinexAccountDataChannel(config: ExchangeConfig, exchangePublicDataInqui
           case "auth" =>
             throw new RuntimeException(s"bitfinex account WebSocket authentification failed with: $j")
           case x@_ =>
-            log.warn(s"bitfinex: Unhandled event message received: $x")
+            log.info(s"bitfinex: watching event message: $s")
             None
         }
       case j: JsObject =>
@@ -319,14 +332,17 @@ class BitfinexAccountDataChannel(config: ExchangeConfig, exchangePublicDataInqui
 
 
   def decodeDataArray(s: String): Seq[IncomingBitfinexAccountJson] = {
-    JsonParser(s).convertTo[List[JsObject]] match {
-      case dataArray: List[JsObject] if dataArray.length >= 2 && dataArray.head.convertTo[Long] == 0 =>
+    JsonParser(s).convertTo[List[JsValue]] match {
+      case dataArray: List[JsValue] if dataArray.length >= 2 && dataArray.head.convertTo[Long] == 0 =>
         dataArray(1).convertTo[String] match {
+          case "hb" =>
+            if (log.isTraceEnabled) log.trace(s"received heartbeat event")
+            Seq()
           case streamType: String if Seq("os", "on", "ou", "oc").contains(streamType) =>
             if (log.isTraceEnabled) log.trace(s"received event 'order update': $s")
             dataArray(2).convertTo[Array[JsObject]].map(e => BitfinexOrderUpdateJson(streamType, e.convertTo[Array[JsValue]]))
           case streamType: String if Seq("ps", "pn", "pu", "pc").contains(streamType) =>
-            log.warn(s"received unexpected 'Position' data: $s")
+            log.debug(s"ignoring 'Position' data: $s")
             Seq()
           case "tu" =>
             if (log.isTraceEnabled) log.trace(s"ignoring trade update event: $s")
@@ -334,11 +350,14 @@ class BitfinexAccountDataChannel(config: ExchangeConfig, exchangePublicDataInqui
           case "te" =>
             if (log.isTraceEnabled) log.trace(s"received event 'trade executed': $s") // TODO maybe we can ignore trade events because we have order events
             Seq(BitfinexTradeExecutedJson(dataArray(2).convertTo[Array[JsValue]]))
-          case s: String if Seq("ws", "wu").contains(s) =>
-            if (log.isTraceEnabled) log.trace(s"received event 'wallet snapshot/update': $s")
-            dataArray(2).convertTo[Array[JsObject]].map(e => BitfinexWalletUpdateJson(e.convertTo[Array[JsValue]]))
+          case "ws" =>
+            if (log.isTraceEnabled) log.trace(s"received event 'wallet snapshot': $s")
+            dataArray(2).convertTo[Array[JsValue]].map(e => BitfinexWalletUpdateJson(e.convertTo[Array[JsValue]]))
+          case "wu" =>
+            if (log.isTraceEnabled) log.trace(s"received event 'wallet update': $s")
+            Seq(BitfinexWalletUpdateJson(dataArray(2).convertTo[Array[JsValue]]))
           case "bu" =>
-            if (log.isTraceEnabled) log.trace(s"received event 'balance update': $s")
+            if (log.isTraceEnabled) log.trace(s"watching event 'balance update': $s")
             Seq() // we ignore that event, we can calculate balance from wallet
           case "miu" => Seq() // ignore margin info update
           case "fiu" => Seq() // ignore funding info
@@ -380,7 +399,8 @@ class BitfinexAccountDataChannel(config: ExchangeConfig, exchangePublicDataInqui
       apiKey = config.secrets.apiKey,
       HttpUtil.hmacSha384Signature(authPayload, config.secrets.apiSecretKey),
       authNonce,
-      authPayload
+      authPayload,
+      filter = Array("trading","trading-tBTCUSD","wallet","wallet-exchange-BTC","balance","notify")
     )
   }
 
@@ -444,8 +464,6 @@ class BitfinexAccountDataChannel(config: ExchangeConfig, exchangePublicDataInqui
     wsSourceUpstream._1.offer(TextMessage(authMessage.toJson.compactPrint))
   }
 
-  def resolveApiSymbol(tp: TradePair): String = bitfinexTradePairs.find(e => e.baseAsset == tp.baseAsset && e.quoteAsset == tp.quoteAsset).get.apiSymbol
-
   def toSubmitLimitOrderJson(o: OrderRequest, resolveSymbol: TradePair => String, affiliateCode: Option[String]): SubmitLimitOrderJson =
     SubmitLimitOrderJson(
       "LIMIT",
@@ -461,7 +479,7 @@ class BitfinexAccountDataChannel(config: ExchangeConfig, exchangePublicDataInqui
     HttpUtil.httpRequestJsonBitfinexAccount[OrderResponseJson](
       HttpMethods.POST,
       s"$BaseRestEndpoint/v2/auth/w/order/submit",
-      Some(toSubmitLimitOrderJson(o, tp => resolveApiSymbol(tp), config.refCode).toJson.compactPrint),
+      Some(toSubmitLimitOrderJson(o, tp => tradePairToApiSymbol(tp), config.refCode).toJson.compactPrint),
       config.secrets
     ).map {
       case r: OrderResponseJson if r.status == "SUCCESS" && r.orders.length == 1 =>

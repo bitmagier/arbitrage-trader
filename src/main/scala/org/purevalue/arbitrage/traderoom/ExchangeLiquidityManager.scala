@@ -8,7 +8,7 @@ import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.traderoom.Asset.USDT
 import org.purevalue.arbitrage.traderoom.ExchangeLiquidityManager._
 import org.purevalue.arbitrage.traderoom.TradeRoom.{LiquidityTransformationOrder, LiquidityTx, WalletUpdateTrigger}
-import org.purevalue.arbitrage.{ExchangeConfig, LiquidityManagerConfig}
+import org.purevalue.arbitrage.{Config, ExchangeConfig, LiquidityManagerConfig}
 import org.slf4j.LoggerFactory
 
 import scala.collection.Map
@@ -66,7 +66,9 @@ object ExchangeLiquidityManager {
   private case class LiquidityDemand(exchange: String,
                                      tradePattern: String,
                                      coins: Seq[CryptoValue],
-                                     dontUseTheseReserveAssets: Set[Asset])
+                                     dontUseTheseReserveAssets: Set[Asset]) {
+    if (coins.exists(_.asset.isFiat)) throw new IllegalArgumentException("Seriously, you demand for Fiat Money?")
+  }
   private object LiquidityDemand {
     def apply(r: LiquidityRequest): LiquidityDemand =
       LiquidityDemand(r.exchange, r.tradePattern, r.coins, r.dontUseTheseReserveAssets)
@@ -152,6 +154,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
       .map(e => (e._1, e._2.map(_.amount).sum)) // sum up values of same asset
 
     wallet.balance
+      .filterNot(_._1.isFiat)
       .filterNot(e => exchangeConfig.doNotTouchTheseAssets.contains(e._1))
       .map(e => (e._1, Math.max(0.0, e._2.amountAvailable - lockedLiquidity.getOrElse(e._1, 0.0)))
     )
@@ -161,6 +164,8 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
   // Accept, if free (not locked) coins are available.
   def lockLiquidity(r: LiquidityRequest): Option[LiquidityLock] = {
     if (exchangeConfig.doNotTouchTheseAssets.intersect(r.coins).nonEmpty) throw new IllegalArgumentException
+    if (r.coins.exists(_.asset.isFiat)) throw new IllegalArgumentException
+
     noticeDemand(LiquidityDemand(r)) // we always notice/refresh the demand, when 'someone' wants to lock liquidity
 
     val unlockedBalances: Map[Asset, Double] = determineUnlockedBalance
@@ -289,13 +294,17 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
     try {
       wallet.balance
         .filterNot(e => exchangeConfig.doNotTouchTheseAssets.contains(e._1))
-        .map(e => (e, CryptoValue(e._1, e._2.amountAvailable).convertTo(USDT, referenceTicker.apply()).get))
+        .filterNot(_._1.isFiat)
+        .map(e => (e, CryptoValue(e._1, e._2.amountAvailable).convertTo(USDT, tpData.ticker).get))
         .filter(e => e._2.amount < config.minimumKeepReserveLiquidityPerAssetInUSDT)
         .map(_._1._1)
         .toSet
     } catch {
       case e: NoSuchElementException =>
-        val missing: Seq[Asset] = wallet.balance.keys.filter(e => CryptoValue(e, 1.0).convertTo(USDT, referenceTicker.apply()).isEmpty).toSeq
+        val missing: Seq[Asset] = wallet.balance.keys
+          .filterNot(e => exchangeConfig.doNotTouchTheseAssets.contains(e))
+          .filterNot(_.isFiat)
+          .filter(e => CryptoValue(e, 1.0).convertTo(USDT, tpData.ticker).isEmpty).toSeq
         log.error(s"ReferenceTicker does not contain exchange rate for wallet assets $missing to USDT")
         log.info(s"ReferenceTicker cointains: ${referenceTicker.apply().keys.toSeq.sorted}")
         Set()
@@ -382,6 +391,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
                 .sum
           )))
         .filter(_._2 > 0.0) // remove empty values
+        .filter(e => CryptoValue(e._1, e._2).convertTo(USDT, tpData.ticker).get.amount >= config.dustLevelInUsdt) // ignore dust
 
     var incomingLiquidity: List[CryptoValue] = List()
     for (f <- freeUnusedNoneReserveAssetLiquidity) {
@@ -396,7 +406,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
   }
 
   def rebalanceReserveAssetsAmountOrders(pendingIncomingReserveLiquidity: List[CryptoValue]): List[OrderRequest] = {
-    log.trace(s"re-balancing reserve assets with pending incoming $pendingIncomingReserveLiquidity")
+    log.trace(s"re-balancing reserve asset wallet:${wallet.balance} with pending incoming $pendingIncomingReserveLiquidity")
     val currentReserveAssetsBalance: List[CryptoValue] = wallet.balance
       .filter(e => exchangeConfig.reserveAssets.contains(e._1))
       .map(e => CryptoValue(e._1, e._2.amountAvailable))
@@ -409,6 +419,8 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
       (pendingIncomingReserveLiquidity ::: currentReserveAssetsBalance)
         .groupBy(_.asset)
         .map(e => CryptoValue(e._1, e._2.map(_.amount).sum))
+
+    log.debug(s"re-balance reserve assets: $virtualReserveAssetsAggregated")
 
     // a bucket is a portion of an reserve asset having a specific value (value is configured in 'rebalance-tx-granularity-in-usdt')
 
@@ -440,7 +452,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
 
     var weAreDoneHere: Boolean = false
     while (liquiditySourcesBuckets.nonEmpty && !weAreDoneHere) {
-      log.debug(s"Re-balance reserve assets: sources: $liquiditySourcesBuckets / sinks: $liquiditySinkBuckets")
+      log.trace(s"Re-balance reserve assets: sources: $liquiditySourcesBuckets / sinks: $liquiditySinkBuckets")
       import util.control.Breaks._
       breakable {
         val DefaultSink = exchangeConfig.reserveAssets.head
