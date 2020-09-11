@@ -21,7 +21,7 @@ case object TotalTransactionUneconomic extends SafetyGuardDecision
 class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
                              val exchangesConfig: Map[String, ExchangeConfig],
                              val tc: TradeContext,
-                             val dataAge: scala.collection.Map[String, TPDataTimestamps],
+                             val dataAge: collection.Map[String, TPDataTimestamps],
                              val activeOrderBundles: ActiveOrderBundlesReadonly) {
   private val log = LoggerFactory.getLogger(classOf[OrderBundleSafetyGuard])
   private var stats: Map[SafetyGuardDecision, Int] = Map()

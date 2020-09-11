@@ -28,19 +28,19 @@ import scala.util.{Failure, Success}
 
 object TradeRoom {
 
-  type TickersReadonly = scala.collection.Map[String, scala.collection.Map[TradePair, Ticker]]
-  type ActiveOrderBundlesReadonly = scala.collection.Map[UUID, OrderBundle]
+  type TickersReadonly = collection.Map[String, collection.Map[TradePair, Ticker]]
+  type ActiveOrderBundlesReadonly = collection.Map[UUID, OrderBundle]
 
   /**
    * An always-uptodate view on the TradeRoom Pre-Trade Data.
    * Modification of the content is NOT permitted by users of the TRadeContext (even if technically possible)!
    */
   case class TradeContext(tickers: TickersReadonly,
-                          orderBooks: scala.collection.Map[String, scala.collection.Map[TradePair, OrderBook]],
-                          balances: scala.collection.Map[String, Wallet],
-                          fees: scala.collection.Map[String, Fee],
+                          orderBooks: collection.Map[String, collection.Map[TradePair, OrderBook]],
+                          balances: collection.Map[String, Wallet],
+                          fees: collection.Map[String, Fee],
                           doNotTouch: Map[String, Seq[Asset]]) {
-    def referenceTicker: scala.collection.Map[TradePair, Ticker] = tickers(Config.tradeRoom.referenceTickerExchange)
+    def referenceTicker: collection.Map[TradePair, Ticker] = tickers(Config.tradeRoom.referenceTickerExchange)
   }
 
   case class OrderRef(exchange: String, tradePair: TradePair, externalOrderId: String)
@@ -95,13 +95,13 @@ class TradeRoom(config: TradeRoomConfig,
   private var traders: Map[String, ActorRef] = Map()
 
   // a map per exchange
-  type ConcurrentMap[A, B] = scala.collection.concurrent.Map[A, B]
+  type ConcurrentMap[A, B] = collection.concurrent.Map[A, B]
   private val tickers: ConcurrentMap[String, ConcurrentMap[TradePair, Ticker]] = TrieMap()
   private val orderBooks: ConcurrentMap[String, ConcurrentMap[TradePair, OrderBook]] = TrieMap()
   private var wallets: Map[String, Wallet] = Map()
   private val dataAge: ConcurrentMap[String, TPDataTimestamps] = TrieMap()
 
-  private def referenceTicker: scala.collection.Map[TradePair, Ticker] = tickers(config.referenceTickerExchange)
+  private def referenceTicker: collection.Map[TradePair, Ticker] = tickers(config.referenceTickerExchange)
 
   // Map(exchange-name -> Map(order-ref -> order)) contains incoming order & order-update data from exchanges data stream
   private val activeOrders: ConcurrentMap[String, ConcurrentMap[OrderRef, Order]] = TrieMap()
@@ -383,7 +383,7 @@ class TradeRoom(config: TradeRoomConfig,
   }
 
   def logStats(): Unit = {
-    def toEntriesPerExchange[T](m: scala.collection.Map[String, scala.collection.Map[TradePair, T]]): String = {
+    def toEntriesPerExchange[T](m: collection.Map[String, collection.Map[TradePair, T]]): String = {
       m.map(e => (e._1, e._2.values.size))
         .toSeq
         .sortBy(_._1)
@@ -391,16 +391,9 @@ class TradeRoom(config: TradeRoomConfig,
         .mkString(", ")
     }
 
-    val aggregateAsset: Asset = config.stats.aggregatedliquidityReportAsset
     for (w <- wallets.values) {
-      val liquidity = w.liquidCryptoValueSum(aggregateAsset, tickers(w.exchange))
-      val unconvertable = w.unconvertableCryptoValues(aggregateAsset, tickers(w.exchange))
-      log.info(
-        s"${Emoji.Robot}  Wallet [${w.exchange}]: Liquid Crypto total: $liquidity" +
-          (if (unconvertable.nonEmpty) s""", Unconvertable to ${aggregateAsset.officialSymbol}: ${unconvertable.mkString(", ")}""") +
-          s""", Fiat Money: ${w.fiatMoney.mkString(", ")}""" +
-          (if (w.notTouchValues.nonEmpty) s""", Not-touching: ${w.notTouchValues.mkString(", ")}""")
-      )
+      val walletOverview: String = w.toOverviewString(config.stats.aggregatedliquidityReportAsset, tickers(w.exchange))
+      log.info(s"${Emoji.Robot}  $walletOverview")
     }
 
     val freshestTicker = dataAge.maxBy(_._2.tickerTS.toEpochMilli)

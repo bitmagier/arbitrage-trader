@@ -6,7 +6,7 @@ import akka.Done
 import akka.actor.{Actor, ActorRef, Props}
 import akka.stream.scaladsl.Sink
 import org.purevalue.arbitrage.traderoom.ExchangeAccountDataManager._
-import org.purevalue.arbitrage.traderoom.TradeRoom.{OrderRef, OrderUpdateTrigger, WalletUpdateTrigger}
+import org.purevalue.arbitrage.traderoom.TradeRoom.{OrderRef, OrderUpdateTrigger, TickersReadonly, WalletUpdateTrigger}
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.{Config, ExchangeConfig}
 import org.slf4j.LoggerFactory
@@ -60,7 +60,7 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
           // TODO validate if an update of amountAvailable is the right thing, that is meant by this message (I'm 95% sure so far)
           case (a: Asset, b: Balance) if a == w.asset =>
             (a, Balance(b.asset, b.amountAvailable + w.amountDelta, b.amountLocked))
-          case (a: Asset, b: Balance) => (a,b)
+          case (a: Asset, b: Balance) => (a, b)
         }
         tradeRoom ! WalletUpdateTrigger(config.exchangeName)
 
@@ -109,8 +109,18 @@ case class Balance(asset: Asset, amountAvailable: Double, amountLocked: Double) 
 }
 // we use a [var immutable map] instead of mutable one here, to be able to update the whole map at once without a race condition
 case class Wallet(exchange: String, var balance: Map[Asset, Balance], exchangeConfig: ExchangeConfig) {
+  def toOverviewString(aggregateAsset: Asset, ticker: collection.Map[TradePair, Ticker]): String = {
+    val liquidity = this.liquidCryptoValueSum(aggregateAsset, ticker)
+    val unconvertible = this.unconvertibleCryptoValues(aggregateAsset, ticker)
+    s"Wallet [$exchange]: Liquid Crypto total: $liquidity" +
+      (if (unconvertible.nonEmpty) s""", Unconvertable to ${aggregateAsset.officialSymbol}: ${unconvertible.mkString(", ")}""" else "") +
+      s""", Fiat Money: ${this.fiatMoney.mkString(", ")}""" +
+      (if (this.notTouchValues.nonEmpty) s""", Not-touching: ${this.notTouchValues.mkString(", ")}""" else "")
+  }
+
   override def toString: String = s"""Wallet($exchange, ${balance.mkString(",")})"""
-  def unconvertableCryptoValues(aggregateAsset: Asset, ticker: scala.collection.Map[TradePair, Ticker]): Seq[CryptoValue] =
+
+  def unconvertibleCryptoValues(aggregateAsset: Asset, ticker: collection.Map[TradePair, Ticker]): Seq[CryptoValue] =
     balance
       .filterNot(_._1.isFiat)
       .map(e => CryptoValue(e._1, e._2.amountAvailable))
@@ -132,17 +142,17 @@ case class Wallet(exchange: String, var balance: Map[Asset, Balance], exchangeCo
       .toSeq
       .sortBy(_.asset.officialSymbol)
 
-  private def liquidCryptoValues(aggregateAsset:Asset, ticker: scala.collection.Map[TradePair, Ticker]): Iterable[CryptoValue] =
+  private def liquidCryptoValues(aggregateAsset: Asset, ticker: collection.Map[TradePair, Ticker]): Iterable[CryptoValue] =
     balance
-    .filter(b => !b._1.isFiat)
-    .filterNot(b => exchangeConfig.doNotTouchTheseAssets.contains(b._1))
-    .map(b => CryptoValue(b._1, b._2.amountAvailable))
-    .filter(_.canConvertTo(aggregateAsset, ticker))
+      .filter(b => !b._1.isFiat)
+      .filterNot(b => exchangeConfig.doNotTouchTheseAssets.contains(b._1))
+      .map(b => CryptoValue(b._1, b._2.amountAvailable))
+      .filter(_.canConvertTo(aggregateAsset, ticker))
 
-  def liquidCryptoValueSum(aggregateAsset:Asset, ticker: scala.collection.Map[TradePair, Ticker]): CryptoValue = {
+  def liquidCryptoValueSum(aggregateAsset: Asset, ticker: collection.Map[TradePair, Ticker]): CryptoValue = {
     liquidCryptoValues(aggregateAsset, ticker)
       .map(_.convertTo(aggregateAsset, ticker))
-      .foldLeft(CryptoValue(aggregateAsset, 0.0))((a,x) => CryptoValue(a.asset, a.amount + x.amount))
+      .foldLeft(CryptoValue(aggregateAsset, 0.0))((a, x) => CryptoValue(a.asset, a.amount + x.amount))
   }
 }
 

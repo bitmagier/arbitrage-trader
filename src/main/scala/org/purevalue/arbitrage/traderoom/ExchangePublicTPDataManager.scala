@@ -76,8 +76,8 @@ case class ExchangeTPData(ticker: concurrent.Map[TradePair, Ticker],
                           age: TPDataTimestamps) {
   def readonly: ExchangeTPDataReadonly = ExchangeTPDataReadonly(ticker, orderBook)
 }
-case class ExchangeTPDataReadonly(ticker: scala.collection.Map[TradePair, Ticker],
-                                  orderBook: scala.collection.Map[TradePair, OrderBook])
+case class ExchangeTPDataReadonly(ticker: collection.Map[TradePair, Ticker],
+                                  orderBook: collection.Map[TradePair, OrderBook])
 
 object ExchangePublicTPDataManager {
   case class InitCheck()

@@ -80,7 +80,7 @@ object ExchangeLiquidityManager {
             tradeRoom: ActorRef,
             tpData: ExchangeTPDataReadonly,
             wallet: Wallet,
-            referenceTicker: () => scala.collection.Map[TradePair, Ticker],
+            referenceTicker: () => collection.Map[TradePair, Ticker],
             openLiquidityTx: () => Iterable[LiquidityTx]): Props =
     Props(new ExchangeLiquidityManager(config, exchangeConfig, tradeRoom, tpData, wallet, referenceTicker, openLiquidityTx))
 }
@@ -89,7 +89,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
                                val tradeRoom: ActorRef,
                                val tpData: ExchangeTPDataReadonly,
                                val wallet: Wallet,
-                               val referenceTicker: () => scala.collection.Map[TradePair, Ticker],
+                               val referenceTicker: () => collection.Map[TradePair, Ticker],
                                val openLiquidityTx: () => Iterable[LiquidityTx]
                               ) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[ExchangeLiquidityManager])

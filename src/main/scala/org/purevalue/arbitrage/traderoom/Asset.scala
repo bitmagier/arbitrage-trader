@@ -100,7 +100,7 @@ case class CryptoValue(asset: Asset, amount: Double) {
 
   override def toString: String = s"${formatDecimal(amount, asset.visibleAmountFractionDigits)} ${asset.officialSymbol}"
 
-  def canConvertTo(targetAsset: Asset, ticker: scala.collection.Map[TradePair, Ticker]): Boolean =
+  def canConvertTo(targetAsset: Asset, ticker: collection.Map[TradePair, Ticker]): Boolean =
     this.asset.canConvertTo(targetAsset, ticker)
 
   def convertTo(targetAsset: Asset, findConversionRate: TradePair => Option[Double]): CryptoValue = {
@@ -128,7 +128,7 @@ case class CryptoValue(asset: Asset, amount: Double) {
     }
   }
 
-  def convertTo(targetAsset: Asset, ticker: scala.collection.Map[TradePair, Ticker]): CryptoValue =
+  def convertTo(targetAsset: Asset, ticker: collection.Map[TradePair, Ticker]): CryptoValue =
     convertTo(targetAsset, tp => ticker.get(tp).map(_.priceEstimate))
 }
 /**

@@ -31,7 +31,7 @@ object Exchange {
             initStuff: ExchangeInitStuff,
             tpData: ExchangeTPData,
             accountData: IncomingExchangeAccountData,
-            referenceTicker: () => scala.collection.Map[TradePair, Ticker],
+            referenceTicker: () => collection.Map[TradePair, Ticker],
             openLiquidityTx: () => Iterable[LiquidityTx]): Props =
     Props(new Exchange(exchangeName, config, liquidityManagerConfig, tradeRoom, initStuff, tpData, accountData, referenceTicker, openLiquidityTx))
 }
@@ -43,7 +43,7 @@ case class Exchange(exchangeName: String,
                     initStuff: ExchangeInitStuff,
                     tpData: ExchangeTPData,
                     accountData: IncomingExchangeAccountData,
-                    referenceTicker: () => scala.collection.Map[TradePair, Ticker],
+                    referenceTicker: () => collection.Map[TradePair, Ticker],
                     openLiquidityTx: () => Iterable[LiquidityTx]) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[Exchange])
   implicit val system: ActorSystem = Main.actorSystem
