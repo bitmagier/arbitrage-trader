@@ -404,16 +404,9 @@ class BitfinexAccountDataChannel(config: ExchangeConfig, exchangePublicDataInqui
     )
   }
 
-//  val restSourceTowardsDownstream: (SourceQueueWithComplete[Seq[IncomingBitfinexAccountJson]], Source[Seq[IncomingBitfinexAccountJson], NotUsed]) =
-//    Source.queue[Seq[IncomingBitfinexAccountJson]](10, OverflowStrategy.backpressure).preMaterialize()
-
-//  val wsSourceUpstream: (SourceQueueWithComplete[Message], Source[Message, NotUsed]) =
-//    Source.queue[Message](1, OverflowStrategy.backpressure).preMaterialize()
-
   def createFlowTo(sink: Sink[Seq[ExchangeAccountStreamData], Future[Done]]): Flow[Message, Message, Promise[Option[Message]]] = {
     Flow.fromSinkAndSourceCoupledMat(
       wsFlow
-//        .mergePreferred(restSourceTowardsDownstream._2, priority = true, eagerComplete = false)
         .via(downStreamFlow)
         .toMat(sink)(Keep.right),
       Source(List(

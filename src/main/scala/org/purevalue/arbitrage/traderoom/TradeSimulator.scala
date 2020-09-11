@@ -36,6 +36,7 @@ class TradeSimulator(config: ExchangeConfig, accountDataManager: ActorRef) exten
   def walletBalanceUpdate(delta: LocalCryptoValue): WalletBalanceUpdate = WalletBalanceUpdate(delta.asset, delta.amount)
 
   def simulateOrderLifetime(externalOrderId: String, o: OrderRequest): Unit = {
+    Thread.sleep(100)
     val creationTime = Instant.now
     accountDataManager ! SimulatedData(newOrder(externalOrderId, creationTime, o))
     Thread.sleep(100)

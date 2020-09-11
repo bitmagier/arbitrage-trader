@@ -135,20 +135,6 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
       })
 
     val balanceSheet: Iterable[LocalCryptoValue] = transactions.flatMap(OrderBill.calcBalanceSheet)
-    val balanceSheetNoneReserveAssetsPart: Iterable[LocalCryptoValue] =
-      balanceSheet
-        .filterNot(e => exchangesConfig(e.exchange).reserveAssets.contains(e.asset))
-
-    // self check - none reserve assets should sum up to zero
-    val aggregatedNoneReserveAssetBalanceSheet: Iterable[CryptoValue] =
-      balanceSheetNoneReserveAssetsPart
-        .groupBy(_.asset)
-        .map(e => CryptoValue(e._1, e._2.map(_.amount).sum))
-        .filterNot(_.amount == 0.0) // ignore expected calculative zero amounts (in reality we will have a difference in the real transaction because we never know how much fee we actually pay)
-    if (aggregatedNoneReserveAssetBalanceSheet.nonEmpty) {
-      log.error(s"Summed up none reserve balances should result in zero, but they don't: $aggregatedNoneReserveAssetBalanceSheet")
-      return None
-    }
 
     Some(
       OrderBill.aggregateValues(

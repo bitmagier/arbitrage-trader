@@ -126,7 +126,10 @@ case class Exchange(exchangeName: String,
     publicDataInquirer = context.actorOf(initStuff.publicDataInquirerProps(config), s"$exchangeName-PublicDataInquirer")
 
     implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
-    tradePairs = Await.result((publicDataInquirer ? GetTradePairs()).mapTo[TradePairs], timeout.duration.plus(500.millis)).value
+    tradePairs = Await.result(
+      (publicDataInquirer ? GetTradePairs()).mapTo[TradePairs].map(_.value),
+      timeout.duration.plus(500.millis))
+      .filter(e => config.tradeAssets.contains(e.baseAsset) && config.tradeAssets.contains(e.quoteAsset))
 
     log.info(s"$exchangeName: ${tradePairs.size} TradePairs: ${tradePairs.toSeq.sortBy(e => e.toString)}")
   }
