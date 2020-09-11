@@ -22,7 +22,7 @@ case class UnknownChannelDataMessage(m: String) extends DecodedBitfinexMessage
 case class JsonMessage(j: JsObject) extends DecodedBitfinexMessage
 case class SubscribeRequestJson(event: String = "subscribe", channel: String, symbol: String)
 
-case class Heartbeat() extends DecodedBitfinexMessage
+case class RawHeartbeat() extends DecodedBitfinexMessage
 
 case class RawOrderBookEntryJson(price: Double, count: Int, amount: Double)
 object RawOrderBookEntryJson {
@@ -199,7 +199,7 @@ case class BitfinexTPWebSocketFlow(config: ExchangeConfig, tradePair: BitfinexTr
   def decodeDataArray(s: String): DecodedBitfinexMessage = {
     val heatBeatPattern = """^\[\s*\d+,\s*"hb"\s*]""".r
     heatBeatPattern.findFirstIn(s) match {
-      case Some(_) => Heartbeat()
+      case Some(_) => RawHeartbeat()
       case None =>
         val channelIdDecodePatter = """^\[(\d+)\s*,.*""".r
         channelIdDecodePatter.findFirstMatchIn(s) match {

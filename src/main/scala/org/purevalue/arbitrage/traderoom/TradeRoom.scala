@@ -29,7 +29,6 @@ import scala.util.{Failure, Success}
 object TradeRoom {
 
   type TickersReadonly = scala.collection.Map[String, scala.collection.Map[TradePair, Ticker]]
-  type ExtendedTickersReadonly = scala.collection.Map[String, scala.collection.Map[TradePair, ExtendedTicker]]
   type ActiveOrderBundlesReadonly = scala.collection.Map[UUID, OrderBundle]
 
   /**
@@ -37,7 +36,6 @@ object TradeRoom {
    * Modification of the content is NOT permitted by users of the TRadeContext (even if technically possible)!
    */
   case class TradeContext(tickers: TickersReadonly,
-                          extendedTickers: ExtendedTickersReadonly,
                           orderBooks: scala.collection.Map[String, scala.collection.Map[TradePair, OrderBook]],
                           balances: scala.collection.Map[String, Wallet],
                           fees: scala.collection.Map[String, Fee],
@@ -88,7 +86,6 @@ class TradeRoom(config: TradeRoomConfig,
   // a map per exchange
   type ConcurrentMap[A, B] = scala.collection.concurrent.Map[A, B]
   private val tickers: ConcurrentMap[String, ConcurrentMap[TradePair, Ticker]] = TrieMap()
-  private val extendedTickers: ConcurrentMap[String, ConcurrentMap[TradePair, ExtendedTicker]] = TrieMap()
   private val orderBooks: ConcurrentMap[String, ConcurrentMap[TradePair, OrderBook]] = TrieMap()
   private var wallets: Map[String, Wallet] = Map()
   private val dataAge: ConcurrentMap[String, TPDataTimestamps] = TrieMap()
@@ -110,7 +107,7 @@ class TradeRoom(config: TradeRoomConfig,
   private val doNotTouchAssets: Map[String, Seq[Asset]] =
     exchangesConfig.values.map(e => (e.exchangeName, e.doNotTouchTheseAssets)).toMap
 
-  private val tradeContext: TradeContext = TradeContext(tickers, extendedTickers, orderBooks, wallets, fees, doNotTouchAssets)
+  private val tradeContext: TradeContext = TradeContext(tickers, orderBooks, wallets, fees, doNotTouchAssets)
 
   private val orderBundleSafetyGuard = new OrderBundleSafetyGuard(config.orderBundleSafetyGuard, exchangesConfig, tradeContext, dataAge, openOrderBundles)
 
@@ -286,9 +283,8 @@ class TradeRoom(config: TradeRoomConfig,
   def runExchange(exchangeName: String, exchangeInit: ExchangeInitStuff): Unit = {
     val camelName = exchangeName.substring(0, 1).toUpperCase + exchangeName.substring(1)
     tickers += exchangeName -> TrieMap[TradePair, Ticker]()
-    extendedTickers += exchangeName -> TrieMap[TradePair, ExtendedTicker]()
     orderBooks += exchangeName -> TrieMap[TradePair, OrderBook]()
-    dataAge += exchangeName -> TPDataTimestamps(Instant.MIN, Instant.MIN, Instant.MIN)
+    dataAge += exchangeName -> TPDataTimestamps(None, Instant.MIN, None)
 
     wallets += exchangeName -> Wallet(exchangeName, Map(), exchangesConfig(exchangeName))
     activeOrders += exchangeName -> TrieMap()
@@ -302,7 +298,6 @@ class TradeRoom(config: TradeRoomConfig,
         exchangeInit,
         ExchangeTPData(
           tickers(exchangeName),
-          extendedTickers(exchangeName),
           orderBooks(exchangeName),
           dataAge(exchangeName)
         ),
@@ -345,13 +340,15 @@ class TradeRoom(config: TradeRoomConfig,
    */
   def deathWatch(): Unit = {
     dataAge.keys.foreach {
-      e =>
-        if (Duration.between(dataAge(e).tickerTS, Instant.now).compareTo(config.restartWhenAnExchangeDataStreamIsOlderThan) > 0) {
+      e => {
+        val lastSeen: Instant = (dataAge(e).heartbeatTS.toSeq ++ dataAge(e).orderBookTS.toSeq ++ Seq(dataAge(e).tickerTS)).max
+        if (Duration.between(lastSeen, Instant.now).compareTo(config.restartWhenAnExchangeDataStreamIsOlderThan) > 0) {
           log.info(s"${
             Emoji.Robot
           }  Killing TradeRoom actor because of outdated ticker data from $e")
           self ! Kill
         }
+      }
     }
   }
 
@@ -402,7 +399,6 @@ class TradeRoom(config: TradeRoomConfig,
       s"ticker:[${toEntriesPerExchange(tickers)}]" +
       s" (oldest: ${oldestTicker._1} ${Duration.between(oldestTicker._2.tickerTS, Instant.now).toMillis} ms," +
       s" freshest: ${freshestTicker._1} ${Duration.between(freshestTicker._2.tickerTS, Instant.now).toMillis} ms)" +
-      s" / ExtendedTicker:[${toEntriesPerExchange(extendedTickers)}]" +
       s" / OrderBooks:[${toEntriesPerExchange(orderBooks)}]")
     if (config.orderBooksEnabled) {
       val orderBookTop3 = orderBooks.flatMap(_._2.values)

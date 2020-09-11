@@ -16,6 +16,7 @@ import scala.concurrent.duration.DurationInt
 import scala.concurrent.{ExecutionContextExecutor, Future}
 
 trait ExchangeTPStreamData
+case class Heartbeat(ts:Instant) extends ExchangeTPStreamData
 case class Ticker(exchange: String,
                   tradePair: TradePair,
                   highestBidPrice: Double,
@@ -27,15 +28,6 @@ case class Ticker(exchange: String,
     case Some(last) => (highestBidPrice + last + lowestAskPrice) / 3
     case None => (highestBidPrice + lowestAskPrice) / 2
   }
-}
-case class ExtendedTicker(exchange: String,
-                          tradePair: TradePair,
-                          highestBidPrice: Double,
-                          lowestAskPrice: Double,
-                          lastPrice: Double,
-                          lastQuantity: Double,
-                          weightedAveragePrice24h: Double) extends ExchangeTPStreamData {
-  def currentPriceEstimate: Double = (highestBidPrice + lastPrice + lowestAskPrice) / 3
 }
 case class OrderBookSnapshot(bids: Seq[Bid], asks: Seq[Ask]) extends ExchangeTPStreamData
 case class OrderBookUpdate(bids: Seq[Bid], asks: Seq[Ask]) extends ExchangeTPStreamData
@@ -73,28 +65,19 @@ case class OrderBook(exchange: String,
   def lowestAsk: Ask = asks(asks.keySet.min)
 }
 
-case class TPDataTimestamps(var tickerTS: Instant,
-                            var extendedTickerTS: Instant,
-                            var orderBookTS: Instant) {
-  def readonly: TPDataTimestampsReadonly = TPDataTimestampsReadonly(tickerTS, extendedTickerTS, orderBookTS)
-}
-case class TPDataTimestampsReadonly(tickerTS: Instant,
-                                    extendedTickerTS: Instant,
-                                    orderBookTS: Instant)
-
+case class TPDataTimestamps(var heartbeatTS: Option[Instant],
+                            var tickerTS: Instant,
+                            var orderBookTS: Option[Instant])
 /**
  * Exchange-part of the global data structure the TPDataManager shall write to
  */
 case class ExchangeTPData(ticker: concurrent.Map[TradePair, Ticker],
-                          extendedTicker: concurrent.Map[TradePair, ExtendedTicker],
                           orderBook: concurrent.Map[TradePair, OrderBook],
                           age: TPDataTimestamps) {
-  def readonly: ExchangeTPDataReadonly = ExchangeTPDataReadonly(ticker, extendedTicker, orderBook, age.readonly)
+  def readonly: ExchangeTPDataReadonly = ExchangeTPDataReadonly(ticker, orderBook)
 }
 case class ExchangeTPDataReadonly(ticker: scala.collection.Map[TradePair, Ticker],
-                                  extendedTicker: scala.collection.Map[TradePair, ExtendedTicker],
-                                  orderBook: scala.collection.Map[TradePair, OrderBook],
-                                  age: TPDataTimestampsReadonly)
+                                  orderBook: scala.collection.Map[TradePair, OrderBook])
 
 object ExchangePublicTPDataManager {
   case class InitCheck()
@@ -145,13 +128,12 @@ case class ExchangePublicTPDataManager(config: ExchangeConfig,
   private def applyDataset(data: Seq[ExchangeTPStreamData]): Unit = {
     if (!stopData.get()) {
       data.foreach {
+        case h: Heartbeat =>
+          tpData.age.heartbeatTS = Some(h.ts)
+
         case t: Ticker =>
           tpData.ticker += tradePair -> t
           tpData.age.tickerTS = Instant.now
-
-        case t: ExtendedTicker =>
-          tpData.extendedTicker += tradePair -> t
-          tpData.age.extendedTickerTS = Instant.now
 
         case o: OrderBookSnapshot =>
           tpData.orderBook += tradePair ->
@@ -161,7 +143,7 @@ case class ExchangePublicTPDataManager(config: ExchangeConfig,
               o.bids.filterNot(_.quantity == 0.0d).map(e => (e.price, e)).toMap,
               o.asks.filterNot(_.quantity == 0.0d).map(e => (e.price, e)).toMap
             )
-          tpData.age.orderBookTS = Instant.now
+          tpData.age.orderBookTS = Some(Instant.now)
           orderBookInitialized = true
 
         case o: OrderBookUpdate =>
@@ -173,7 +155,7 @@ case class ExchangePublicTPDataManager(config: ExchangeConfig,
                 (tpData.orderBook(tradePair).bids ++ o.bids.map(e => e.price -> e)).filterNot(_._2.quantity == 0.0d),
                 (tpData.orderBook(tradePair).asks ++ o.asks.map(e => e.price -> e)).filterNot(_._2.quantity == 0.0d)
               )
-            tpData.age.orderBookTS = Instant.now
+            tpData.age.orderBookTS = Some(Instant.now)
           } else {
             log.warn(s"$o received, but no OrderBook present yet")
           }

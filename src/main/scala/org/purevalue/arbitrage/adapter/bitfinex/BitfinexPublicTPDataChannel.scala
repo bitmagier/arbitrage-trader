@@ -1,5 +1,7 @@
 package org.purevalue.arbitrage.adapter.bitfinex
 
+import java.time.Instant
+
 import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
 import akka.pattern.ask
 import akka.stream.scaladsl.{Flow, Keep, Sink}
@@ -8,7 +10,7 @@ import akka.{Done, NotUsed}
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.GetBitfinexTradePair
 import org.purevalue.arbitrage.traderoom.ExchangePublicTPDataManager.StartStreamRequest
-import org.purevalue.arbitrage.traderoom.{ExchangeTPStreamData, TradePair}
+import org.purevalue.arbitrage.traderoom.{ExchangeTPStreamData, Heartbeat, TradePair}
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration.DurationInt
@@ -48,8 +50,8 @@ class BitfinexPublicTPDataChannel(config: ExchangeConfig, tradePair: TradePair, 
     case o: RawOrderBookUpdateJson =>
       Seq(o.toOrderBookUpdate)
 
-    case h: Heartbeat =>
-      Seq()
+    case RawHeartbeat() =>
+      Seq(Heartbeat(Instant.now))
 
     case other =>
       log.error(s"unhandled: $other")

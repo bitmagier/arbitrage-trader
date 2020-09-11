@@ -71,7 +71,7 @@ class ExchangeLiquidityManagerSpec
   private val tickers: Map[String, Map[TradePair, Ticker]] =
     Map("e1" -> referenceTicker)
 
-  private val tpData = ExchangeTPDataReadonly(tickers("e1"), Map(), Map(), null)
+  private val tpData = ExchangeTPDataReadonly(tickers("e1"), Map())
 
   val CheckSpread = 0.01
 
