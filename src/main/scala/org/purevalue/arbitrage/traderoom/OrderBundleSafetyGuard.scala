@@ -162,11 +162,11 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
   def totalTransactionsWinInRage(t: OrderRequestBundle): (Boolean, Option[Double]) = {
     val b: Option[Double] = balanceOfLiquidityTransformationCompensationTransactionsInUSDT(t)
     if (b.isEmpty) return (false, None)
-    if ((t.bill.sumUSDT + b.get) < config.minTotalGainInUSDT) {
+    if ((t.bill.sumUSDTAtCalcTime + b.get) < config.minTotalGainInUSDT) {
       log.debug(s"${Emoji.LookingDown}  Got interesting $t, but the sum of costs (${formatDecimal(b.get)} USDT) of the necessary " +
-        s"liquidity transformation transactions makes the whole thing uneconomic (total gain: ${formatDecimal(t.bill.sumUSDT + b.get)} USDT = lower than threshold ${config.minTotalGainInUSDT} USDT).")
+        s"liquidity transformation transactions makes the whole thing uneconomic (total gain: ${formatDecimal(t.bill.sumUSDTAtCalcTime + b.get)} USDT = lower than threshold ${config.minTotalGainInUSDT} USDT).")
       (false, None)
-    } else (true, Some(t.bill.sumUSDT))
+    } else (true, Some(t.bill.sumUSDTAtCalcTime))
   }
 
   // ^^^ TODO instead of taking only the first possible one, better try all alternatives of reserve liquidity asset conversion before giving up here
@@ -201,14 +201,14 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
 
     def unsafe(d: SafetyGuardDecision): (Boolean, SafetyGuardDecision, Option[Double]) = (false, d, None)
 
-    if (bundle.bill.sumUSDT <= 0) {
-      log.warn(s"${Emoji.Disagree}  Got OrderBundle with negative balance: ${bundle.bill.sumUSDT}. I will not execute that one!")
+    if (bundle.bill.sumUSDTAtCalcTime <= 0) {
+      log.warn(s"${Emoji.Disagree}  Got OrderBundle with negative balance: ${bundle.bill.sumUSDTAtCalcTime}. I will not execute that one!")
       log.debug(s"$bundle")
       unsafe(NegativeBalance)
     } else if (!bundle.orderRequests.forall(tickerDataUpToDate)) {
       unsafe(TickerOutdated)
-    } else if (bundle.bill.sumUSDT >= config.maximumReasonableWinPerOrderBundleUSDT) {
-      log.warn(s"${Emoji.Disagree}  Got OrderBundle with unbelievable high estimated win of ${formatDecimal(bundle.bill.sumUSDT)} USDT. I will rather not execute that one - seem to be a bug!")
+    } else if (bundle.bill.sumUSDTAtCalcTime >= config.maximumReasonableWinPerOrderBundleUSDT) {
+      log.warn(s"${Emoji.Disagree}  Got OrderBundle with unbelievable high estimated win of ${formatDecimal(bundle.bill.sumUSDTAtCalcTime)} USDT. I will rather not execute that one - seem to be a bug!")
       log.debug(s"${Emoji.Disagree}  $bundle")
       unsafe(TooFantasticWin)
     } else if (!bundle.orderRequests.forall(orderLimitCloseToTicker))

@@ -53,8 +53,7 @@ object TradeRoom {
                                  finishTime: Instant,
                                  bill: OrderBill) {
     def shortDesc: String = s"FinishedOrderBundle(${finishedOrders.map(o => o.shortDesc).mkString(" & ")})"
-
-  } // with sumUSDT at finish time time
+  }
   case class LiquidityTx(orderRequest: OrderRequest,
                          orderRef: OrderRef,
                          creationTime: Instant)
@@ -427,30 +426,42 @@ class TradeRoom(config: TradeRoomConfig,
 
     val now = Instant.now
 
-    val lastHourArbitrageSumUSDT: Double = finishedOrderBundles
-      .filter(b => Duration.between(b.finishTime, now).toHours < 1)
-      .map(_.bill.sumUSDT)
-      .foldLeft(0.0)((sum, x) => sum + x)
-    val lastHourLiquidityTxSumUSDT: Double = finishedLiquidityTxs
-      .filter(b => Duration.between(b.finishTime, now).toHours < 1)
-      .map(_.bill.sumUSDT)
-      .foldLeft(0.0)((sum, x) => sum + x)
+    val lastHourArbitrageSumUSDT: Double =
+      OrderBill.aggregateValues(
+        finishedOrderBundles
+          .filter(b => Duration.between(b.finishTime, now).toHours < 1)
+          .flatMap(_.bill.balanceSheet),
+        USDT,
+        tickers)
+    val lastHourLiquidityTxSumUSDT: Double =
+      OrderBill.aggregateValues(
+        finishedLiquidityTxs
+          .filter(b => Duration.between(b.finishTime, now).toHours < 1)
+          .flatMap(_.bill.balanceSheet),
+        USDT,
+        tickers)
+
     val lastHourSumUSDT: Double = lastHourArbitrageSumUSDT + lastHourLiquidityTxSumUSDT
-    log.info(s"${Emoji.Robot}  Last 1h: cumulated gain: ${formatDecimal(lastHourSumUSDT,2)} USDT " +
-      s"(arbitrage orders: ${formatDecimal(lastHourArbitrageSumUSDT,2)} USDT, " +
+    log.info(s"${Emoji.Robot}  Last 1h: cumulated gain: ${formatDecimal(lastHourSumUSDT, 2)} USDT " +
+      s"(arbitrage orders: ${formatDecimal(lastHourArbitrageSumUSDT, 2)} USDT, " +
       s"liquidity tx: ${formatDecimal(lastHourLiquidityTxSumUSDT)} USDT) ")
 
-    val totalArbitrageSumUSDT: Double = finishedOrderBundles
-      .map(_.bill.sumUSDT)
-      .foldLeft(0.0)((sum, x) => sum + x)
-    val totalLiquidityTxSumUSDT: Double = finishedLiquidityTxs
-      .map(_.bill.sumUSDT)
-      .foldLeft(0.0)((sum, x) => sum + x)
+    val totalArbitrageSumUSDT: Double =
+      OrderBill.aggregateValues(
+        finishedOrderBundles
+          .flatMap(_.bill.balanceSheet),
+        USDT,
+        tickers)
+    val totalLiquidityTxSumUSDT: Double =
+      OrderBill.aggregateValues(
+        finishedLiquidityTxs
+          .flatMap(_.bill.balanceSheet),
+        USDT,
+        tickers)
     val totalSumUSDT: Double = totalArbitrageSumUSDT + totalLiquidityTxSumUSDT
     log.info(s"${Emoji.Robot}  Total cumulated gain: ${formatDecimal(totalSumUSDT, 2)} USDT " +
-      s"(arbitrage orders: ${formatDecimal(totalArbitrageSumUSDT,2)} USDT, liquidity tx: " +
-      s"${formatDecimal(totalLiquidityTxSumUSDT,2)} USDT) ")
-
+      s"(arbitrage orders: ${formatDecimal(totalArbitrageSumUSDT, 2)} USDT, liquidity tx: " +
+      s"${formatDecimal(totalLiquidityTxSumUSDT, 2)} USDT) ")
   }
 
 
@@ -505,11 +516,11 @@ class TradeRoom(config: TradeRoomConfig,
 
     clearLockedLiquidity(bundle.lockedLiquidity)
 
-    if (bill.sumUSDT >= 0) {
-      val emoji = if (bill.sumUSDT >= 1.0) Emoji.Opera else Emoji.Winning
-      log.info(s"$emoji  ${finishedOrderBundle.shortDesc} completed with a win of ${bill.sumUSDT}")
+    if (bill.sumUSDTAtCalcTime >= 0) {
+      val emoji = if (bill.sumUSDTAtCalcTime >= 1.0) Emoji.Opera else Emoji.Winning
+      log.info(s"$emoji  ${finishedOrderBundle.shortDesc} completed with a win of ${bill.sumUSDTAtCalcTime}")
     } else {
-      log.warn(s"${Emoji.SadFace}  ${finishedOrderBundle.shortDesc} completed with a loss of ${bill.sumUSDT} ${Emoji.LookingDown}: $finishedOrderBundle")
+      log.warn(s"${Emoji.SadFace}  ${finishedOrderBundle.shortDesc} completed with a loss of ${bill.sumUSDTAtCalcTime} ${Emoji.LookingDown}: $finishedOrderBundle")
     }
   }
 

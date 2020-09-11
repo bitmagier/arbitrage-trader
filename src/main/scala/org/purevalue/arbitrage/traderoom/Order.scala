@@ -166,8 +166,8 @@ case class OrderRequest(id: UUID,
  * The bill which is expected from executing an OrderRequest
  * (direct costs only, not including liquidity TXs)
  */
-case class OrderBill(balanceSheet: Seq[LocalCryptoValue], sumUSDT: Double) {
-  override def toString: String = s"""OrderBill(balanceSheet:[${balanceSheet.mkString(", ")}], sumUSDT:${formatDecimal(sumUSDT, 2)})"""
+case class OrderBill(balanceSheet: Seq[LocalCryptoValue], sumUSDTAtCalcTime: Double) {
+  override def toString: String = s"""OrderBill(balanceSheet:[${balanceSheet.mkString(", ")}], sumUSDT:${formatDecimal(sumUSDTAtCalcTime, 2)})"""
 }
 object OrderBill {
   /**

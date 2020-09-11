@@ -125,7 +125,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
       )
 
     val bill: OrderBill = OrderBill.calc(Seq(ourBuyBaseAssetOrder, ourSellBaseAssetOrder), tc.tickers)
-    if (bill.sumUSDT >= config.getDouble("order-bundle.min-gain-in-usdt")) {
+    if (bill.sumUSDTAtCalcTime >= config.getDouble("order-bundle.min-gain-in-usdt")) {
       (Some(OrderRequestBundle(
         orderBundleId,
         name,
@@ -231,8 +231,8 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
           case (Some(shot), _) if result.size < topN =>
             result = shot :: result
 
-          case (Some(shot), _) if shot.bill.sumUSDT > result.map(_.bill.sumUSDT).min =>
-            result = shot :: result.sortBy(_.bill.sumUSDT).tail
+          case (Some(shot), _) if shot.bill.sumUSDTAtCalcTime > result.map(_.bill.sumUSDTAtCalcTime).min =>
+            result = shot :: result.sortBy(_.bill.sumUSDTAtCalcTime).tail
 
           case (Some(_), _) => // ignoring result
 
@@ -243,7 +243,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
         }
       }
     }
-    result.sortBy(_.bill.sumUSDT).reverse
+    result.sortBy(_.bill.sumUSDTAtCalcTime).reverse
   }
 
   def lifeSign(): Unit = {
