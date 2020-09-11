@@ -111,16 +111,16 @@ case class Balance(asset: Asset, amountAvailable: Double, amountLocked: Double) 
 case class Wallet(exchange: String, var balance: Map[Asset, Balance], exchangeConfig: ExchangeConfig) {
   def toOverviewString(aggregateAsset: Asset, ticker: collection.Map[TradePair, Ticker]): String = {
     val liquidity = this.liquidCryptoValueSum(aggregateAsset, ticker)
-    val unconvertible = this.unconvertibleCryptoValues(aggregateAsset, ticker)
-    s"Wallet [$exchange]: Liquid Crypto total: $liquidity" +
-      (if (unconvertible.nonEmpty) s""", Unconvertable to ${aggregateAsset.officialSymbol}: ${unconvertible.mkString(", ")}""" else "") +
+    val inconvertible = this.inconvertibleCryptoValues(aggregateAsset, ticker)
+    s"Wallet [$exchange]: Liquid crypto total: $liquidity" +
+      (if (inconvertible.nonEmpty) s""", Inconvertible to ${aggregateAsset.officialSymbol}: ${inconvertible.mkString(", ")}""" else "") +
       s""", Fiat Money: ${this.fiatMoney.mkString(", ")}""" +
       (if (this.notTouchValues.nonEmpty) s""", Not-touching: ${this.notTouchValues.mkString(", ")}""" else "")
   }
 
   override def toString: String = s"""Wallet($exchange, ${balance.mkString(",")})"""
 
-  def unconvertibleCryptoValues(aggregateAsset: Asset, ticker: collection.Map[TradePair, Ticker]): Seq[CryptoValue] =
+  def inconvertibleCryptoValues(aggregateAsset: Asset, ticker: collection.Map[TradePair, Ticker]): Seq[CryptoValue] =
     balance
       .filterNot(_._1.isFiat)
       .map(e => CryptoValue(e._1, e._2.amountAvailable))

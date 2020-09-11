@@ -323,7 +323,8 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
 
     if (availableReserveAssets.isEmpty) {
       if (possibleReserveAssets.isEmpty) log.debug(s"No reserve asset available to convert back $coins")
-      else log.debug(s"Currently no reserve asset available with a good exchange-rate to convert back $coins")
+      else log.debug(s"Currently no reserve asset available with a good exchange-rate to convert back $coins. " +
+        s"Available assets/ticker-rating: $availableReserveAssets")
       return None
     }
 
@@ -527,7 +528,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
         }.toList
 
     if (liquidityTransactions.nonEmpty) {
-      log.debug(s"re-balance reserve assets: $virtualReserveAssetsAggregated with following transactions: $liquidityTransactions")
+      log.debug(s"${exchangeConfig.exchangeName}: re-balance reserve assets: $virtualReserveAssetsAggregated with following transactions: $liquidityTransactions")
     }
     liquidityTransactions
   }
