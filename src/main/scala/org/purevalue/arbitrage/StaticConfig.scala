@@ -1,15 +1,14 @@
 package org.purevalue.arbitrage
 
-import akka.actor.{ActorRef, Props}
-import org.purevalue.arbitrage.adapter.binance.{BinanceAccountDataChannel, BinancePublicDataInquirer, BinancePublicDataChannel}
-import org.purevalue.arbitrage.adapter.bitfinex.{BitfinexAccountDataChannel, BitfinexPublicDataInquirer, BitfinexPublicDataChannel}
-import org.purevalue.arbitrage.traderoom.{Asset, TradePair}
+import org.purevalue.arbitrage.adapter.binance.{BinanceAccountDataChannel, BinancePublicDataChannel, BinancePublicDataInquirer}
+import org.purevalue.arbitrage.adapter.bitfinex.{BitfinexAccountDataChannel, BitfinexPublicDataChannel, BitfinexPublicDataInquirer}
+import org.purevalue.arbitrage.traderoom.Asset
+import org.purevalue.arbitrage.traderoom.Exchange.{ExchangeAccountDataChannelInit, ExchangePublicDataChannelInit, ExchangePublicDataInquirerInit}
 import org.slf4j.LoggerFactory
 
-
-case class ExchangeInitStuff(publicDataInquirerProps: Function1[ExchangeConfig, Props],
-                             exchangePublicDataChannelProps: Function2[ExchangeConfig, ActorRef, Props],
-                             exchangeAccountDataChannelProps: Function2[ExchangeConfig, ActorRef, Props])
+case class ExchangeInitStuff(exchangePublicDataInquirerProps: ExchangePublicDataInquirerInit,
+                             exchangePublicDataChannelProps: ExchangePublicDataChannelInit,
+                             exchangeAccountDataChannelProps: ExchangeAccountDataChannelInit)
 
 object StaticConfig {
   private val log = LoggerFactory.getLogger("StaticConfig")

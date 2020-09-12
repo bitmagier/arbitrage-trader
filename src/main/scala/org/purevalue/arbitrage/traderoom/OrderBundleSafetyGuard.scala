@@ -6,7 +6,7 @@ import org.purevalue.arbitrage.traderoom.Asset.USDT
 import org.purevalue.arbitrage.traderoom.TradeRoom.{ActiveOrderBundlesReadonly, TradeContext}
 import org.purevalue.arbitrage.util.Emoji
 import org.purevalue.arbitrage.util.Util.formatDecimal
-import org.purevalue.arbitrage.{Config, ExchangeConfig, OrderBundleSafetyGuardConfig}
+import org.purevalue.arbitrage.{ExchangeConfig, OrderBundleSafetyGuardConfig}
 import org.slf4j.LoggerFactory
 
 sealed trait SafetyGuardDecision

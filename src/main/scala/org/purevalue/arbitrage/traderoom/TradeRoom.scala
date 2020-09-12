@@ -95,7 +95,7 @@ class TradeRoom(config: TradeRoomConfig,
   // a map per exchange
   type ConcurrentMap[A, B] = collection.concurrent.Map[A, B]
   private val tickers: ConcurrentMap[String, ConcurrentMap[TradePair, Ticker]] = TrieMap()
-//  private val orderBooks: ConcurrentMap[String, ConcurrentMap[TradePair, OrderBook]] = TrieMap()
+  //  private val orderBooks: ConcurrentMap[String, ConcurrentMap[TradePair, OrderBook]] = TrieMap()
   private var wallets: Map[String, Wallet] = Map()
   private val dataAge: ConcurrentMap[String, PublicDataTimestamps] = TrieMap()
 
@@ -345,7 +345,7 @@ class TradeRoom(config: TradeRoomConfig,
     }
   }
 
-  def initialized: Boolean = exchanges.keySet == initializedExchanges
+  def exchangesInitialized: Boolean = exchanges.keySet == initializedExchanges
 
   /**
    * Will trigger a restart of the TradeRoom if stale data is found
@@ -572,7 +572,7 @@ class TradeRoom(config: TradeRoomConfig,
     // messages from Exchanges
     case Exchange.Initialized(exchange) =>
       initializedExchanges = initializedExchanges + exchange
-      if (initialized) {
+      if (exchangesInitialized && traders.isEmpty) {
         log.info(s"${Emoji.Satisfied}  All exchanges initialized")
         startTraders()
       }
@@ -595,11 +595,11 @@ class TradeRoom(config: TradeRoomConfig,
       exchanges(t.exchange).forward(t)
 
     case LogStats() =>
-      if (initialized)
+      if (exchangesInitialized)
         logStats()
 
     case DeathWatch() =>
-      if (initialized)
+      if (exchangesInitialized)
         deathWatch()
 
     case Status.Failure(cause) =>

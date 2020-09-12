@@ -7,8 +7,7 @@ import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{HttpMethods, StatusCodes, Uri}
 import akka.pattern.{ask, pipe}
-import akka.stream.OverflowStrategy
-import akka.stream.scaladsl.{Flow, Keep, Sink, Source, SourceQueueWithComplete}
+import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
 import akka.{Done, NotUsed}
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexOrderUpdateJson.{toOrderStatus, toOrderType}
@@ -270,9 +269,11 @@ object BitfinexAccountDataJsonProtocoll extends DefaultJsonProtocol {
 
 
 object BitfinexAccountDataChannel {
-  def props(config: ExchangeConfig, exchangePublicDataInquirer: ActorRef): Props = Props(new BitfinexAccountDataChannel(config, exchangePublicDataInquirer))
+  def props(config: ExchangeConfig,exchangePublicDataInquirer: ActorRef): Props =
+    Props(new BitfinexAccountDataChannel(config, exchangePublicDataInquirer))
 }
-class BitfinexAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquirer: ActorRef) extends Actor {
+class BitfinexAccountDataChannel(config: ExchangeConfig,
+                                 exchangePublicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BitfinexAccountDataChannel])
 
   val BaseRestEndpoint = "https://api.bitfinex.com"
@@ -306,7 +307,6 @@ class BitfinexAccountDataChannel(config: ExchangeConfig, exchangePublicDataInqui
         case o: BitfinexOrderUpdateJson   => o.toOrderOrOrderUpdate(config.exchangeName, symbol => bitfinexTradePairs.find(_.apiSymbol == symbol).get)
         case t: BitfinexTradeExecutedJson => t.toOrderUpdate(config.exchangeName, symbol => bitfinexTradePairs.find(_.apiSymbol == symbol).get)
         case w: BitfinexWalletUpdateJson  => w.toWalletAssetUpdate(symbol => symbolToAsset(symbol))
-
         case x                            => log.debug(s"$x"); throw new NotImplementedError
         // @formatter:on
       }
@@ -451,9 +451,7 @@ class BitfinexAccountDataChannel(config: ExchangeConfig, exchangePublicDataInqui
 
   def connect(sink: Sink[Seq[ExchangeAccountStreamData], Future[Done]]): Unit = {
     if (log.isTraceEnabled) log.trace("starting WebSocket stream")
-    ws = Http().singleWebSocketRequest(
-      WebSocketRequest(WebSocketEndpoint),
-      createFlowTo(sink))
+    ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), createFlowTo(sink))
     connected = createConnected
   }
 
@@ -500,8 +498,9 @@ class BitfinexAccountDataChannel(config: ExchangeConfig, exchangePublicDataInqui
   }
 
   override def receive: Receive = {
-    case StartStreamRequest(sink) => connect(sink)
-
+    case StartStreamRequest(sink) =>
+      connect(sink)
+      sender() ! Initialized()
     // Messages from ExchangeAccountDataManager (forwarded from TradeRoom-LiquidityManager or TradeRoom-OrderExecutionManager)
     case CancelOrder(tradePair, externalOrderId) => cancelOrder(tradePair, externalOrderId.toLong).pipeTo(sender())
     case NewLimitOrder(o) => newLimitOrder(o).pipeTo(sender())

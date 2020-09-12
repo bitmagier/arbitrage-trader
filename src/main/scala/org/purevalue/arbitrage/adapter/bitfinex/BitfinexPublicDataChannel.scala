@@ -91,162 +91,187 @@ object WebSocketJsonProtocoll extends DefaultJsonProtocol {
 }
 
 
-
-
 object BitfinexPublicDataChannel {
   def props(config: ExchangeConfig, bitfinexPublicDataInquirer: ActorRef): Props =
     Props(new BitfinexPublicDataChannel(config, bitfinexPublicDataInquirer))
 }
 
 /**
- * Bitfinex TradePair-based data channel
- * Converts Raw TradePair-based data to unified ExchangeTPStreamData
+ * Bitfinex public data channel
+ * Converts Raw data to unified ExchangeTPStreamData
  */
 class BitfinexPublicDataChannel(config: ExchangeConfig, bitfinexPublicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BitfinexPublicDataChannel])
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
+  val WebSocketEndpoint: Uri = Uri(s"wss://api-pub.bitfinex.com/ws/2")
+  val MaximumNumberOfChannelsPerConnection: Int = 25
+
+  var bitfinexTradePairBySymbol: Map[String, BitfinexTradePair] = _
+  var wsList: List[(Future[WebSocketUpgradeResponse], Promise[Option[Message]])] = List()
+  var connectedList: List[Future[Done.type]] = List()
+
   import WebSocketJsonProtocoll._
 
+  //
+  //  def createFanInSinksTo(numSinks:Int, downstreamSink: Sink[Seq[ExchangePublicStreamData], Future[Done]]): Seq[Sink[IncomingPublicBitfinexJson, NotUsed]] = {
+  //    class MsgFanInShape[In, Out](_init: Init[Out] = Name("BitfinexStreamCombiner")) extends FanInShape[Out](_init) {
+  //      protected override def construct(i: Init[Out]) = new MsgFanInShape(i)
+  //
+  //      val sink1: Inlet[In] = newInlet[In]("name1")
+  //      val sink2: Inlet[In] = newInlet[In]("name2")
+  //      // Outlet[Out] with name "out" is automatically created
+  //    }
+  //
+  //    new MsgFanInShape[IncomingBitfinexAccountJson, IncomingBitfinexAccountJson]().
+  //
+  //  }
 
-  var tickerSymbolsByChannelId: Map[Int, String] = Map()
+  // handles one partition of incoming data
+  class FlowPart() {
+    var tickerSymbolsByChannelId: Map[Int, String] = Map()
 
-  private var bitfinexTradePairBySymbol: Map[String, BitfinexTradePair] = _
-  private var sink: Sink[IncomingPublicBitfinexJson, NotUsed] = _
+    def tickerChannelIdToTradePair(channelId: Int): TradePair = bitfinexTradePairBySymbol(tickerSymbolsByChannelId(channelId))
 
-  def createSinkTo(downstreamSink: Sink[Seq[ExchangePublicStreamData], Future[Done]]): Sink[IncomingPublicBitfinexJson, NotUsed] = {
-    Flow.fromFunction(streamMapping).toMat(downstreamSink)(Keep.none)
-  }
-
-  def tickerChannelIdToTradePair(channelId: Int): TradePair =
-    bitfinexTradePairBySymbol(
-      tickerSymbolsByChannelId(channelId))
-
-  def streamMapping(in: IncomingPublicBitfinexJson): Seq[ExchangePublicStreamData] = in match {
-    // @formatter:off
-    case t: RawTickerJson => Seq(t.value.toTicker(config.exchangeName, tickerChannelIdToTradePair(t.channelId)))
-    case RawHeartbeat()   => Seq(Heartbeat(Instant.now))
-    case other            => throw new NotImplementedError(s"unhandled: $other")
-    // @formatter:on
-    //    case o: RawOrderBookSnapshotJson =>
-    //      Seq(o.toOrderBookSnapshot)
-    //
-    //    case o: RawOrderBookUpdateJson =>
-    //      Seq(o.toOrderBookUpdate)
-  }
-
-
-  // TODO handle bitfinex Info codes:
-  // 20051 : Stop/Restart Websocket Server (please reconnect)
-  // 20060 : Entering in Maintenance mode. Please pause any activity and resume after receiving the info message 20061 (it should take 120 seconds at most).
-  // 20061 : Maintenance ended. You can resume normal activity. It is advised to unsubscribe/subscribe again all channels.
-
-  def handleEvent(event: String, j: JsObject): Unit = event match {
-    case "subscribed" =>
-      if (log.isTraceEnabled) log.trace(s"received SubscribeResponse message: $j")
-      val channel = j.fields("channel").convertTo[String]
-      val channelId = j.fields("chanId").convertTo[Int]
-
-      channel match {
-        case "ticker" =>
-          val symbol = j.fields("symbol").convertTo[String]
-          tickerSymbolsByChannelId = tickerSymbolsByChannelId + (channelId -> symbol)
-      }
-    case "error" => log.error(s"received error message: $j")
-    case "info" => log.trace(s"received info message: $j")
-    case _ => log.warn(s"received unidentified message: $j")
-  }
-
-  def decodeJsonObject(s: String): IncomingPublicBitfinexJson = JsonMessage(JsonParser(s).asJsObject)
-
-  def decodeDataArray(s: String): IncomingPublicBitfinexJson = {
-    val heatBeatPattern = """^\[\s*\d+,\s*"hb"\s*]""".r
-    heatBeatPattern.findFirstIn(s) match {
-      case Some(_) => RawHeartbeat()
-      case None =>
-        val channelIdDecodePatter = """^\[(\d+)\s*,.*""".r
-        channelIdDecodePatter.findFirstMatchIn(s) match {
-          case Some(m) =>
-            m.group(1).toInt match {
-              case tickerChannelId if tickerSymbolsByChannelId.keySet.contains(tickerChannelId) =>
-                JsonParser(s).convertTo[RawTickerJson]
-              //              case OrderBookChannelId =>
-              //                val snapshotPattern = "^\\[\\d+\\s*,\\s*\\[\\s*\\[.*".r
-              //                snapshotPattern.findFirstIn(s) match {
-              //                  case Some(_) => JsonParser(s).convertTo[RawOrderBookSnapshotJson]
-              //                  case None => JsonParser(s).convertTo[RawOrderBookUpdateJson]
-              //                }
-              case id =>
-                log.error(s"[bitfinex] data message with unknown channelId $id received.")
-                UnknownChannelDataMessage(s)
-            }
-          case None => throw new RuntimeException(s"Unable to decode bifinex data message:\n$s")
-        }
+    def streamMapping(in: IncomingPublicBitfinexJson): Seq[ExchangePublicStreamData] = in match {
+      // @formatter:off
+      case t: RawTickerJson => Seq(t.value.toTicker(config.exchangeName, tickerChannelIdToTradePair(t.channelId)))
+      case RawHeartbeat()   => Seq(Heartbeat(Instant.now))
+      case other            => throw new NotImplementedError(s"unhandled: $other")
+      // @formatter:on
+      //    case o: RawOrderBookSnapshotJson =>
+      //      Seq(o.toOrderBookSnapshot)
+      //
+      //    case o: RawOrderBookUpdateJson =>
+      //      Seq(o.toOrderBookUpdate)
     }
-  }
 
-  val wsFlow: Flow[Message, Option[IncomingPublicBitfinexJson], NotUsed] = Flow.fromFunction {
-    case msg: TextMessage =>
-      val f: Future[Option[IncomingPublicBitfinexJson]] = {
-        msg.toStrict(Config.httpTimeout)
-          .map(_.getStrictText)
-          .map {
-            case s: String if s.startsWith("{") => decodeJsonObject(s)
-            case s: String if s.startsWith("[") => decodeDataArray(s)
-            case x => throw new RuntimeException(s"unidentified response: $x")
-          } map {
-          case j: JsonMessage if j.j.fields.contains("event") =>
-            handleEvent(j.j.fields("event").convertTo[String], j.j)
-            None
-          case j: JsonMessage =>
-            log.warn(s"Unhandled JsonMessage received: $j")
-            None
-          case _: UnknownChannelDataMessage =>
-            None
-          case m: IncomingPublicBitfinexJson =>
-            if (log.isTraceEnabled) log.trace(s"received: $m")
-            Some(m)
-          case other =>
-            log.warn(s"${Emoji.Confused}  Unhandled object $other")
-            None
+    def createSinkTo(downstreamSink: Sink[Seq[ExchangePublicStreamData], Future[Done]]): Sink[IncomingPublicBitfinexJson, NotUsed] = {
+      Flow.fromFunction(streamMapping).toMat(downstreamSink)(Keep.none)
+    }
+
+    // TODO handle bitfinex Info codes:
+    // 20051 : Stop/Restart Websocket Server (please reconnect)
+    // 20060 : Entering in Maintenance mode. Please pause any activity and resume after receiving the info message 20061 (it should take 120 seconds at most).
+    // 20061 : Maintenance ended. You can resume normal activity. It is advised to unsubscribe/subscribe again all channels.
+
+    def handleEvent(event: String, j: JsObject): Unit = event match {
+      case "subscribed" =>
+        if (log.isTraceEnabled) log.trace(s"received SubscribeResponse message: $j")
+        val channel = j.fields("channel").convertTo[String]
+        val channelId = j.fields("chanId").convertTo[Int]
+
+        channel match {
+          case "ticker" =>
+            val symbol = j.fields("symbol").convertTo[String]
+            if (symbol.startsWith("t")) {
+              val symbolWithoutLeadingT = symbol.substring(1)
+              tickerSymbolsByChannelId = tickerSymbolsByChannelId + (channelId -> symbolWithoutLeadingT)
+            } else throw new RuntimeException("basic assumption proved wrong")
         }
+      case "error" =>
+        val errorName: String = j.fields("code").convertTo[Int] match {
+          case 10000 => "Unknown event"
+          case 10001 => "Unknown pair"
+          case 10300 => "Subscription failed (generic)"
+          case 10301 => "Already subscribed"
+          case 10302 => "Unknown channel"
+          case 10305 => "Reached limit of open channels"
+          case 10400 => "Subscription failed (generic)"
+          case 10401 => "Not subscribed"
+          case _ => "unknown error code"
+        }
+        log.error(s"received error ($errorName) message: $j")
+      case "info" => log.trace(s"received info message: $j")
+      case _ => log.warn(s"received unidentified message: $j")
+    }
+
+    def decodeJsonObject(s: String): IncomingPublicBitfinexJson = JsonMessage(JsonParser(s).asJsObject)
+
+    def decodeDataArray(s: String): IncomingPublicBitfinexJson = {
+      val heatBeatPattern = """^\[\s*\d+,\s*"hb"\s*]""".r
+      heatBeatPattern.findFirstIn(s) match {
+        case Some(_) => RawHeartbeat()
+        case None =>
+          val channelIdDecodePatter = """^\[(\d+)\s*,.*""".r
+          channelIdDecodePatter.findFirstMatchIn(s) match {
+            case Some(m) =>
+              m.group(1).toInt match {
+                case tickerChannelId if tickerSymbolsByChannelId.keySet.contains(tickerChannelId) =>
+                  JsonParser(s).convertTo[RawTickerJson]
+                //              case OrderBookChannelId =>
+                //                val snapshotPattern = "^\\[\\d+\\s*,\\s*\\[\\s*\\[.*".r
+                //                snapshotPattern.findFirstIn(s) match {
+                //                  case Some(_) => JsonParser(s).convertTo[RawOrderBookSnapshotJson]
+                //                  case None => JsonParser(s).convertTo[RawOrderBookUpdateJson]
+                //                }
+                case id =>
+                  log.error(s"[bitfinex] data message with unknown channelId $id received.")
+                  UnknownChannelDataMessage(s)
+              }
+            case None => throw new RuntimeException(s"Unable to decode bifinex data message:\n$s")
+          }
       }
-      try {
-        Await.result(f, Config.httpTimeout.plus(1000.millis))
-      } catch {
-        case e: Exception => throw new RuntimeException(s"While decoding WebSocket stream event: $msg", e)
-      }
-    case msg: Message =>
-      log.warn(s"Unexpected kind of Message received: $msg")
-      None
+    }
+
+    val wsFlow: Flow[Message, Option[IncomingPublicBitfinexJson], NotUsed] = Flow.fromFunction {
+      case msg: TextMessage =>
+        val f: Future[Option[IncomingPublicBitfinexJson]] = {
+          msg.toStrict(Config.httpTimeout)
+            .map(_.getStrictText)
+            .map {
+              case s: String if s.startsWith("{") => decodeJsonObject(s)
+              case s: String if s.startsWith("[") => decodeDataArray(s)
+              case x => throw new RuntimeException(s"unidentified response: $x")
+            } map {
+            case j: JsonMessage if j.j.fields.contains("event") =>
+              handleEvent(j.j.fields("event").convertTo[String], j.j)
+              None
+            case j: JsonMessage =>
+              log.warn(s"Unhandled JsonMessage received: $j")
+              None
+            case _: UnknownChannelDataMessage =>
+              None
+            case m: IncomingPublicBitfinexJson =>
+              if (log.isTraceEnabled) log.trace(s"received: $m")
+              Some(m)
+            case other =>
+              log.warn(s"${Emoji.Confused}  Unhandled object $other")
+              None
+          }
+        }
+        try {
+          Await.result(f, Config.httpTimeout.plus(1000.millis))
+        } catch {
+          case e: Exception => throw new RuntimeException(s"While decoding WebSocket stream event: $msg", e)
+        }
+      case msg: Message =>
+        log.warn(s"Unexpected kind of Message received: $msg")
+        None
+    }
+
+
   }
 
-  private val SubscribeMessages: List[SubscribeRequestJson] =
-    bitfinexTradePairBySymbol.keys
-      .map(symbol => SubscribeRequestJson(channel = "ticker", symbol = symbol))
-      .toList
 
   // flow to us
   // emits a list of Messages and then keep the connection open
-  def createFlowTo(sink: Sink[IncomingPublicBitfinexJson, NotUsed]): Flow[Message, Message, Promise[Option[Message]]] = {
+  def createWSFlowTo(wsFlow: Flow[Message, Option[IncomingPublicBitfinexJson], NotUsed],
+                     sink: Sink[IncomingPublicBitfinexJson, NotUsed],
+                     subscribeMessages: List[SubscribeRequestJson]): Flow[Message, Message, Promise[Option[Message]]] = {
     Flow.fromSinkAndSourceCoupledMat(
       wsFlow
         .filter(_.isDefined)
         .map(_.get)
         .toMat(sink)(Keep.right),
       Source(
-        SubscribeMessages.map(m => TextMessage(m.toJson.compactPrint))
+        subscribeMessages.map(m => TextMessage(m.toJson.compactPrint))
       ).concatMat(Source.maybe[Message])(Keep.right))(Keep.right)
   }
 
-  val WebSocketEndpoint: Uri = Uri(s"wss://api-pub.bitfinex.com/ws/2")
-  var ws: (Future[WebSocketUpgradeResponse], Promise[Option[Message]]) = _
-
-  var connected: Future[Done.type] = _
-
-  def createConnected: Future[Done.type] =
-    ws._1.flatMap {
+  def createConnected(futureResponse: Future[WebSocketUpgradeResponse]): Future[Done.type] =
+    futureResponse.flatMap {
       upgrade =>
         if (upgrade.response.status == StatusCodes.SwitchingProtocols) {
           if (log.isTraceEnabled) log.trace("WebSocket connected")
@@ -256,6 +281,8 @@ class BitfinexPublicDataChannel(config: ExchangeConfig, bitfinexPublicDataInquir
         }
     }
 
+  private def subscribeMessage(tradePair:BitfinexTradePair): SubscribeRequestJson =
+    SubscribeRequestJson(channel = "ticker", symbol = tradePair.apiSymbol)
 
   override def preStart() {
     if (log.isTraceEnabled()) log.trace(s"BitfinexPublicDataChannel initializing...")
@@ -267,12 +294,18 @@ class BitfinexPublicDataChannel(config: ExchangeConfig, bitfinexPublicDataInquir
       .toMap
   }
 
+
   override def receive: Receive = {
     case StartStreamRequest(downstreamSink) =>
-      sink = createSinkTo(downstreamSink)
-      if (log.isTraceEnabled) log.trace("starting WebSocket stream")
-      ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), createFlowTo(sink))
-      connected = createConnected
+      bitfinexTradePairBySymbol.values.sliding(MaximumNumberOfChannelsPerConnection).foreach { group =>
+        if (log.isTraceEnabled) log.trace("starting a WebSocket stream partition")
+        val subscribeMessages: List[SubscribeRequestJson] = group.map(e => subscribeMessage(e)).toList
+        val flowPart = new FlowPart()
+        val sink: Sink[IncomingPublicBitfinexJson, NotUsed] = flowPart.createSinkTo(downstreamSink)
+        val ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), createWSFlowTo(flowPart.wsFlow, sink, subscribeMessages))
+        wsList = ws :: wsList
+        connectedList = createConnected(ws._1) :: connectedList
+      }
 
     case Status.Failure(cause) =>
       log.error("Failure received", cause)

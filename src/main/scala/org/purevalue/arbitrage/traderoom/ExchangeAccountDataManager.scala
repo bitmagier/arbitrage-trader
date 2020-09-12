@@ -5,8 +5,9 @@ import java.util.UUID
 import akka.Done
 import akka.actor.{Actor, ActorRef, Props}
 import akka.stream.scaladsl.Sink
+import org.purevalue.arbitrage.traderoom.Exchange.ExchangeAccountDataChannelInit
 import org.purevalue.arbitrage.traderoom.ExchangeAccountDataManager._
-import org.purevalue.arbitrage.traderoom.TradeRoom.{OrderRef, OrderUpdateTrigger, TickersReadonly, WalletUpdateTrigger}
+import org.purevalue.arbitrage.traderoom.TradeRoom.{OrderRef, OrderUpdateTrigger, WalletUpdateTrigger}
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.{Config, ExchangeConfig}
 import org.slf4j.LoggerFactory
@@ -30,7 +31,7 @@ object ExchangeAccountDataManager {
             exchange: ActorRef,
             exchangePublicDataInquirer: ActorRef,
             tradeRoom: ActorRef,
-            exchangeAccountDataChannelInit: Function2[ExchangeConfig, ActorRef, Props],
+            exchangeAccountDataChannelInit: ExchangeAccountDataChannelInit,
             accountData: ExchangeAccountData): Props =
     Props(new ExchangeAccountDataManager(config, exchange, exchangePublicDataInquirer, tradeRoom, exchangeAccountDataChannelInit, accountData))
 }
@@ -38,7 +39,7 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
                                  exchange: ActorRef,
                                  exchangePublicDataInquirer: ActorRef,
                                  tradeRoom: ActorRef,
-                                 exchangeAccountDataChannelInit: Function2[ExchangeConfig, ActorRef, Props],
+                                 exchangeAccountDataChannelInit: ExchangeAccountDataChannelInit,
                                  accountData: ExchangeAccountData) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[ExchangeAccountDataManager])
   var accountDataChannel: ActorRef = _

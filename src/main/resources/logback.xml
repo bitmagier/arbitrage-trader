@@ -1,24 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
 
-  <statusListener class="ch.qos.logback.core.status.NopStatusListener" />
+    <statusListener class="ch.qos.logback.core.status.NopStatusListener"/>
 
-  <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
-    <layout class="ch.qos.logback.classic.PatternLayout">
-      <!-- <Pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</Pattern> -->
-      <Pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level %logger{36} - %msg%n</Pattern>
-    </layout>
-  </appender>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <layout class="ch.qos.logback.classic.PatternLayout">
+            <!-- <Pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</Pattern> -->
+            <Pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level %logger{36} - %msg%n</Pattern>
+        </layout>
+    </appender>
 
-  <logger name="org.purevalue.arbitrage" level="INFO"/>
-  <logger name="org.purevalue.arbitrage.traderoom.ExchangeLiquidityManager" level="DEBUG"/>
-<!--  <logger name="org.purevalue.arbitrage.traderoom.ExchangeAccountDataManager" level="TRACE"/>-->
-  <logger name="org.purevalue.arbitrage.traderoom.TradeRoom" level="DEBUG"/>
-<!--  <logger name="org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel" level="TRACE"/>-->
-<!--  <logger name="org.purevalue.arbitrage.adapter.bitfinex.BitfinexAccountDataChannel" level="TRACE"/>-->
-<!--  <logger name="org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer" level="DEBUG"/>-->
+    <logger name="org.purevalue.arbitrage" level="INFO"/>
+    <logger name="org.purevalue.arbitrage.traderoom" level="DEBUG"/>
+    <logger name="org.purevalue.arbitrage.adapter.binance" level="TRACE"/>
+    <logger name="org.purevalue.arbitrage.adapter.bitfinex" level="INFO"/>
 
-  <root level="INFO">
-    <appender-ref ref="STDOUT" />
-  </root>
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+    </root>
 </configuration>

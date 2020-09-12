@@ -1,11 +1,11 @@
 package org.purevalue.arbitrage.traderoom
 
 import java.time.{Duration, Instant}
-import java.util.concurrent.atomic.AtomicBoolean
 
 import akka.Done
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, Props, Status}
 import akka.stream.scaladsl.Sink
+import org.purevalue.arbitrage.traderoom.Exchange.ExchangePublicDataChannelInit
 import org.purevalue.arbitrage.traderoom.ExchangePublicDataManager._
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.{Config, ExchangeConfig, Main}
@@ -62,9 +62,7 @@ case class OrderBook(exchange: String,
 
 case class PublicDataTimestamps(var heartbeatTS: Option[Instant],
                                 var tickerTS: Instant)
-/**
- * Exchange-part of the global data structure the TPDataManager shall write to
- */
+
 case class ExchangePublicData(ticker: concurrent.Map[TradePair, Ticker],
                               age: PublicDataTimestamps) {
   def readonly: ExchangePublicDataReadonly = ExchangePublicDataReadonly(ticker)
@@ -80,7 +78,7 @@ object ExchangePublicDataManager {
             tradePairs: Set[TradePair],
             exchangePublicDataInquirer: ActorRef,
             exchange: ActorRef,
-            publicDataChannelProps: Function2[ExchangeConfig, ActorRef, Props],
+            publicDataChannelProps: ExchangePublicDataChannelInit,
             publicData: ExchangePublicData): Props =
     Props(new ExchangePublicDataManager(config, tradePairs, exchangePublicDataInquirer, exchange, publicDataChannelProps, publicData))
 }
@@ -92,7 +90,7 @@ case class ExchangePublicDataManager(config: ExchangeConfig,
                                      tradePairs: Set[TradePair],
                                      exchangePublicDataInquirer: ActorRef,
                                      exchange: ActorRef,
-                                     exchangePublicDataChannelProps: Function2[ExchangeConfig, ActorRef, Props],
+                                     exchangePublicDataChannelProps: ExchangePublicDataChannelInit,
                                      publicData: ExchangePublicData) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[ExchangePublicDataManager])
   implicit val actorSystem: ActorSystem = Main.actorSystem
@@ -102,7 +100,6 @@ case class ExchangePublicDataManager(config: ExchangeConfig,
 
   private var initializedMsgSend = false
   private var initTimestamp: Instant = _
-  private val stopData: AtomicBoolean = new AtomicBoolean(false)
 
   val initCheckSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(1.seconds, 1.seconds, self, InitCheck())
 
@@ -115,19 +112,17 @@ case class ExchangePublicDataManager(config: ExchangeConfig,
   }
 
   private def applyDataset(data: Seq[ExchangePublicStreamData]): Unit = {
-    if (!stopData.get()) {
-      data.foreach {
-        case h: Heartbeat =>
-          publicData.age.heartbeatTS = Some(h.ts)
+    data.foreach {
+      case h: Heartbeat =>
+        publicData.age.heartbeatTS = Some(h.ts)
 
-        case t: Ticker =>
-          publicData.ticker += t.tradePair -> t
-          publicData.age.tickerTS = Instant.now
+      case t: Ticker =>
+        publicData.ticker += t.tradePair -> t
+        publicData.age.tickerTS = Instant.now
 
-        case _ => throw new NotImplementedError
-      }
-      eventuallyInitialized()
+      case _ => throw new NotImplementedError
     }
+    eventuallyInitialized()
   }
 
   def eventuallyInitialized(): Unit = {
@@ -147,7 +142,6 @@ case class ExchangePublicDataManager(config: ExchangeConfig,
 
   def receive: Receive = {
 
-    // Messages from Exchange
     case InitCheck() =>
       if (initialized) initCheckSchedule.cancel()
       else {

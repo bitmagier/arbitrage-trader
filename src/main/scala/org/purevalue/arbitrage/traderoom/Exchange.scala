@@ -22,6 +22,10 @@ object Exchange {
   case class TradePairs(value: Set[TradePair])
   case class RemoveTradePair(tradePair: TradePair)
 
+  type ExchangePublicDataInquirerInit = Function1[ExchangeConfig, Props]
+  type ExchangePublicDataChannelInit = Function2[ExchangeConfig, ActorRef, Props]
+  type ExchangeAccountDataChannelInit = Function2[ExchangeConfig, ActorRef, Props]
+
   def props(exchangeName: String,
             config: ExchangeConfig,
             liquidityManagerConfig: LiquidityManagerConfig,
@@ -100,7 +104,7 @@ case class Exchange(exchangeName: String,
     log.info(s"Initializing Exchange $exchangeName " +
       s"${if (tradeSimulationMode) " in TRADE-SIMULATION mode"}" +
       s"${if (config.doNotTouchTheseAssets.nonEmpty) s" DO-NOT-TOUCH: ${config.doNotTouchTheseAssets.mkString(",")}"}")
-    publicDataInquirer = context.actorOf(initStuff.publicDataInquirerProps(config), s"$exchangeName-PublicDataInquirer")
+    publicDataInquirer = context.actorOf(initStuff.exchangePublicDataInquirerProps(config), s"$exchangeName-PublicDataInquirer")
 
     implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
     tradePairs = Await.result(
@@ -123,7 +127,7 @@ case class Exchange(exchangeName: String,
   }
 
   def eventuallyInitialized(): Unit = {
-    if (publicDataManagerInitialized && accountDataManagerInitialized) {
+    if (publicDataManagerInitialized && accountDataManagerInitialized && !liquidityManagerInitialized) {
       initLiquidityManager()
       liquidityManagerInitialized = true
       log.info(s"${Emoji.Robot}  [$exchangeName]: All data streams initialized and running")

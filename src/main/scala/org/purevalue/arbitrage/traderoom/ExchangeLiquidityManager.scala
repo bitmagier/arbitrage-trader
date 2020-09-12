@@ -9,7 +9,7 @@ import org.purevalue.arbitrage.traderoom.Asset.USDT
 import org.purevalue.arbitrage.traderoom.ExchangeLiquidityManager._
 import org.purevalue.arbitrage.traderoom.TradeRoom.{LiquidityTransformationOrder, LiquidityTx, WalletUpdateTrigger}
 import org.purevalue.arbitrage.util.Emoji
-import org.purevalue.arbitrage.{Config, ExchangeConfig, LiquidityManagerConfig}
+import org.purevalue.arbitrage.{ExchangeConfig, LiquidityManagerConfig}
 import org.slf4j.LoggerFactory
 
 import scala.collection.Map
@@ -528,7 +528,8 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
         }.toList
 
     if (liquidityTransactions.nonEmpty) {
-      log.debug(s"${exchangeConfig.exchangeName}: re-balance reserve assets: $virtualReserveAssetsAggregated with following transactions: $liquidityTransactions")
+      log.debug(s"${exchangeConfig.exchangeName}: re-balance reserve assets: $virtualReserveAssetsAggregated " +
+        s"with following transactions:\n${liquidityTransactions.mkString("\n")}")
     }
     liquidityTransactions
   }

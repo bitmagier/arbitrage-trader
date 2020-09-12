@@ -31,10 +31,13 @@ object BinanceAccountDataChannel {
   case class SendPing()
   case class QueryAccountInformation()
 
-  def props(config: ExchangeConfig, exchangePublicDataInquirer: ActorRef): Props = Props(new BinanceAccountDataChannel(config, exchangePublicDataInquirer))
+  def props(config: ExchangeConfig,
+            exchangePublicDataInquirer: ActorRef): Props =
+    Props(new BinanceAccountDataChannel(config, exchangePublicDataInquirer))
 }
 
-class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquirer: ActorRef) extends Actor {
+class BinanceAccountDataChannel(config: ExchangeConfig,
+                                exchangePublicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BinanceAccountDataChannel])
 
   private val OutboundAccountPositionStreamName = "outboundAccountPosition"
