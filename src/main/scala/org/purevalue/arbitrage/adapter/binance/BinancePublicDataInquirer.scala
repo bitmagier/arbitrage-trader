@@ -31,7 +31,6 @@ import scala.concurrent.{Await, ExecutionContextExecutor}
 case class BinanceTradePair(baseAsset: Asset, quoteAsset: Asset, symbol: String) extends TradePair
 
 object BinancePublicDataInquirer {
-  case class GetBinanceTradePair(tradePair: TradePair)
   case class GetBinanceTradePairs()
 
   def toBid(e: Seq[String]): Bid = {
@@ -87,9 +86,6 @@ class BinancePublicDataInquirer(config: ExchangeConfig) extends Actor {
       sender() ! TradePairs(tradePairs)
 
     // Messages from BinanceTPDataChannel
-    case GetBinanceTradePair(tp) =>
-      sender() ! binanceTradePairs.find(e => e.baseAsset == tp.baseAsset && e.quoteAsset == tp.quoteAsset).get
-
     case GetBinanceTradePairs() =>
       sender() ! binanceTradePairs
 

@@ -7,8 +7,8 @@ import akka.actor.ActorSystem
 import akka.pattern.ask
 import akka.testkit.{ImplicitSender, TestKit, TestProbe}
 import akka.util.Timeout
-import org.purevalue.arbitrage.traderoom.Asset.{Bitcoin, Euro, USDollar, USDT}
-import org.purevalue.arbitrage.traderoom.ExchangeLiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityRequest}
+import org.purevalue.arbitrage.traderoom.Asset.{Bitcoin, Euro, USDT, USDollar}
+import org.purevalue.arbitrage.traderoom.ExchangeLiquidityManager.{HouseKeeping, LiquidityLock, LiquidityLockClearance, LiquidityRequest}
 import org.purevalue.arbitrage.traderoom.TradeRoom.{LiquidityTransformationOrder, WalletUpdateTrigger}
 import org.purevalue.arbitrage.{ExchangeConfig, LiquidityManagerConfig}
 import org.scalatest.BeforeAndAfterAll
@@ -44,7 +44,6 @@ class ExchangeLiquidityManagerSpec
       tradeAssets = null,
       makerFee = 0.0, // TODO make everything working including fees
       takerFee = 0.0,
-      orderBooksEnabled = false,
       Seq(Asset("OMG")),
       None
     )
@@ -71,7 +70,7 @@ class ExchangeLiquidityManagerSpec
   private val tickers: Map[String, Map[TradePair, Ticker]] =
     Map("e1" -> referenceTicker)
 
-  private val tpData = ExchangeTPDataReadonly(tickers("e1"), Map())
+  private val tpData = ExchangePublicDataReadonly(tickers("e1"))
 
   val CheckSpread = 0.01
 
@@ -91,7 +90,7 @@ class ExchangeLiquidityManagerSpec
       ), exchangeConfig)
       val m = system.actorOf(ExchangeLiquidityManager.props(Config, exchangeConfig, tradeRoom.ref, tpData, wallet, () => referenceTicker, () => Seq()))
 
-      m ! WalletUpdateTrigger("e1") // trigger housekeeping
+      m ! HouseKeeping() // trigger housekeeping
 
       // expect:
       // BTC -> ETH [fill-up 50 USDT]
@@ -243,7 +242,7 @@ class ExchangeLiquidityManagerSpec
 
       // remaining 400 ALGO demand should go back to USDT also after liquidityDemandActiveTime + houseKeeping
       Thread.sleep(Config.liquidityDemandActiveTime.toMillis + 500)
-      m ! WalletUpdateTrigger("e1") // trigger houseKeeping
+      m ! HouseKeeping() // trigger houseKeeping
       Thread.sleep(500)
 
       val message3: LiquidityTransformationOrder = tradeRoom.expectMsgClass(2.seconds, classOf[LiquidityTransformationOrder])

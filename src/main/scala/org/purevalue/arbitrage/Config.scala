@@ -19,7 +19,6 @@ case class ExchangeConfig(exchangeName: String,
                           tradeAssets: Set[Asset],
                           makerFee: Double,
                           takerFee: Double,
-                          orderBooksEnabled: Boolean,
                           doNotTouchTheseAssets: Seq[Asset],
                           refCode: Option[String]) {
   def fee: Fee = Fee(exchangeName, makerFee, takerFee)
@@ -40,7 +39,6 @@ object ExchangeConfig {
       c.getStringList("trade-assets").asScala.map(e => Asset(e)).toSet,
       c.getDouble("fee.maker"),
       c.getDouble("fee.taker"),
-      c.getBoolean("order-books-enabled"),
       doNotTouchTheseAssets,
       if (c.hasPath("ref-code")) Some(c.getString("ref-code")) else None
     )
@@ -59,7 +57,6 @@ case class OrderBundleSafetyGuardConfig(maximumReasonableWinPerOrderBundleUSDT: 
 case class TradeRoomConfig(oneTradeOnlyTestMode: Boolean,
                            tradeSimulation: Boolean,
                            referenceTickerExchange: String,
-                           orderBooksEnabled: Boolean,
                            stats: TradeRoomStatsConfig,
                            restartWhenAnExchangeDataStreamIsOlderThan: Duration,
                            orderBundleSafetyGuard: OrderBundleSafetyGuardConfig)
@@ -68,7 +65,6 @@ object TradeRoomConfig {
     c.getBoolean("one-trade-only-test-mode"),
     c.getBoolean("trade-simulation"),
     c.getString("reference-ticker-exchange"),
-    c.getBoolean("order-books-enabled"),
     TradeRoomStatsConfig(
       c.getDuration("stats.report-interval"),
       Asset(c.getString("stats.aggregated-liquidity-report-asset"))

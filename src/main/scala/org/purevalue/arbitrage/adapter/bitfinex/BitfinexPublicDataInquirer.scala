@@ -2,7 +2,7 @@ package org.purevalue.arbitrage.adapter.bitfinex
 
 import akka.actor.{Actor, ActorSystem, Props, Status}
 import org.purevalue.arbitrage._
-import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.{GetBitfinexAssets, GetBitfinexTradePair, GetBitfinexTradePairs}
+import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.{GetBitfinexAssets, GetBitfinexTradePairs}
 import org.purevalue.arbitrage.traderoom.Exchange.{GetTradePairs, TradePairs}
 import org.purevalue.arbitrage.traderoom.{Asset, TradePair}
 import org.purevalue.arbitrage.util.HttpUtil.httpGetJson
@@ -16,7 +16,6 @@ case class BitfinexSymbol(asset: Asset, apiSymbol: String)
 case class BitfinexTradePair(baseAsset: Asset, quoteAsset: Asset, apiSymbol: String) extends TradePair
 
 object BitfinexPublicDataInquirer {
-  case class GetBitfinexTradePair(tp: TradePair)
   case class GetBitfinexTradePairs()
   case class GetBitfinexAssets()
 
@@ -99,9 +98,6 @@ class BitfinexPublicDataInquirer(config: ExchangeConfig) extends Actor {
       sender() ! TradePairs(tradePairs)
 
     // Messages from BitfinexTPDataChannel
-    case GetBitfinexTradePair(tp) =>
-      sender() ! bitfinexTradePairs.find(e => e.baseAsset == tp.baseAsset && e.quoteAsset == tp.quoteAsset).get
-
     case GetBitfinexTradePairs() =>
       sender() ! bitfinexTradePairs
 

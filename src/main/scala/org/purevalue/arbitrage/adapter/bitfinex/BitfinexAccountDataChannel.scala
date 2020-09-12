@@ -307,7 +307,7 @@ class BitfinexAccountDataChannel(config: ExchangeConfig, exchangePublicDataInqui
         case t: BitfinexTradeExecutedJson => t.toOrderUpdate(config.exchangeName, symbol => bitfinexTradePairs.find(_.apiSymbol == symbol).get)
         case w: BitfinexWalletUpdateJson  => w.toWalletAssetUpdate(symbol => symbolToAsset(symbol))
 
-        case x@_                          => log.debug(s"$x"); throw new NotImplementedError
+        case x                            => log.debug(s"$x"); throw new NotImplementedError
         // @formatter:on
       }
   }
@@ -321,7 +321,7 @@ class BitfinexAccountDataChannel(config: ExchangeConfig, exchangePublicDataInqui
             None
           case "auth" =>
             throw new RuntimeException(s"bitfinex account WebSocket authentification failed with: $j")
-          case x@_ =>
+          case _ =>
             log.info(s"bitfinex: watching event message: $s")
             None
         }
@@ -366,7 +366,7 @@ class BitfinexAccountDataChannel(config: ExchangeConfig, exchangePublicDataInqui
           case "n" =>
             if (log.isTraceEnabled) log.trace(s"received notification event: $s")
             Seq() // ignore notifications
-          case x@_ => throw new RuntimeException(s"bitfinex: received data of unidentified stream type '$x': $s")
+          case x => throw new RuntimeException(s"bitfinex: received data of unidentified stream type '$x': $s")
         }
     }
   }
@@ -379,7 +379,7 @@ class BitfinexAccountDataChannel(config: ExchangeConfig, exchangePublicDataInqui
           .map {
             case s: String if s.startsWith("{") => decodeJsonObject(s); Nil
             case s: String if s.startsWith("[") => decodeDataArray(s)
-            case x@_ => throw new RuntimeException(s"unidentified response: $x")
+            case x => throw new RuntimeException(s"unidentified response: $x")
           }
       }
       try {

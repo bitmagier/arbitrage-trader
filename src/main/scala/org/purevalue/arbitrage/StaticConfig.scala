@@ -1,14 +1,14 @@
 package org.purevalue.arbitrage
 
 import akka.actor.{ActorRef, Props}
-import org.purevalue.arbitrage.adapter.binance.{BinanceAccountDataChannel, BinancePublicDataInquirer, BinancePublicTPDataChannel}
-import org.purevalue.arbitrage.adapter.bitfinex.{BitfinexAccountDataChannel, BitfinexPublicDataInquirer, BitfinexPublicTPDataChannel}
+import org.purevalue.arbitrage.adapter.binance.{BinanceAccountDataChannel, BinancePublicDataInquirer, BinancePublicDataChannel}
+import org.purevalue.arbitrage.adapter.bitfinex.{BitfinexAccountDataChannel, BitfinexPublicDataInquirer, BitfinexPublicDataChannel}
 import org.purevalue.arbitrage.traderoom.{Asset, TradePair}
 import org.slf4j.LoggerFactory
 
 
 case class ExchangeInitStuff(publicDataInquirerProps: Function1[ExchangeConfig, Props],
-                             exchangePublicTPDataChannelProps: Function3[ExchangeConfig, TradePair, ActorRef, Props],
+                             exchangePublicDataChannelProps: Function2[ExchangeConfig, ActorRef, Props],
                              exchangeAccountDataChannelProps: Function2[ExchangeConfig, ActorRef, Props])
 
 object StaticConfig {
@@ -18,12 +18,12 @@ object StaticConfig {
   val AllExchanges: Map[String, ExchangeInitStuff] = Map(
     "binance" -> ExchangeInitStuff(
       BinancePublicDataInquirer.props,
-      BinancePublicTPDataChannel.props,
+      BinancePublicDataChannel.props,
       BinanceAccountDataChannel.props
     ),
     "bitfinex" -> ExchangeInitStuff(
       BitfinexPublicDataInquirer.props,
-      BitfinexPublicTPDataChannel.props,
+      BitfinexPublicDataChannel.props,
       BitfinexAccountDataChannel.props
     )
   )

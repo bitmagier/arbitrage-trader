@@ -17,7 +17,7 @@ import scala.concurrent.Future
 
 object ExchangeAccountDataManager {
   case class StartStreamRequest(sink: Sink[Seq[ExchangeAccountStreamData], Future[Done]])
-  case class FetchOrder(tradePair: TradePair, externalOrderId: String) // order shall be queried from exchange and feed into the data stream (e.g. for refreshing persisted open orders after restart)
+  case class Initialized()
   case class CancelOrder(tradePair: TradePair, externalOrderId: String)
   case class CancelOrderResult(tradePair: TradePair, externalOrderId: String, success: Boolean)
   case class NewLimitOrder(o: OrderRequest) // response is NewOrderAck
@@ -27,17 +27,19 @@ object ExchangeAccountDataManager {
   case class SimulatedData(dataset: ExchangeAccountStreamData)
 
   def props(config: ExchangeConfig,
+            exchange: ActorRef,
             exchangePublicDataInquirer: ActorRef,
             tradeRoom: ActorRef,
             exchangeAccountDataChannelInit: Function2[ExchangeConfig, ActorRef, Props],
-            accountData: IncomingExchangeAccountData): Props =
-    Props(new ExchangeAccountDataManager(config, exchangePublicDataInquirer, tradeRoom, exchangeAccountDataChannelInit, accountData))
+            accountData: ExchangeAccountData): Props =
+    Props(new ExchangeAccountDataManager(config, exchange, exchangePublicDataInquirer, tradeRoom, exchangeAccountDataChannelInit, accountData))
 }
 class ExchangeAccountDataManager(config: ExchangeConfig,
+                                 exchange: ActorRef,
                                  exchangePublicDataInquirer: ActorRef,
                                  tradeRoom: ActorRef,
                                  exchangeAccountDataChannelInit: Function2[ExchangeConfig, ActorRef, Props],
-                                 accountData: IncomingExchangeAccountData) extends Actor {
+                                 accountData: ExchangeAccountData) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[ExchangeAccountDataManager])
   var accountDataChannel: ActorRef = _
 
@@ -88,7 +90,7 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
   }
 
   override def receive: Receive = {
-    case f: FetchOrder => accountDataChannel.forward(f)
+    case i: Initialized => exchange.forward(i)
     case c: CancelOrder => accountDataChannel.forward(c)
     case o: NewLimitOrder => accountDataChannel.forward(o)
 
@@ -168,4 +170,4 @@ case class Fee(exchange: String,
   def average: Double = (makerFee + takerFee) / 2
 }
 
-case class IncomingExchangeAccountData(wallet: Wallet, activeOrders: concurrent.Map[OrderRef, Order])
+case class ExchangeAccountData(wallet: Wallet, activeOrders: concurrent.Map[OrderRef, Order])

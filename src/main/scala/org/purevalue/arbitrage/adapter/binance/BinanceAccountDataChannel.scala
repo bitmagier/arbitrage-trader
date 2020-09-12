@@ -19,7 +19,7 @@ import org.purevalue.arbitrage.traderoom.ExchangeAccountDataManager._
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.util.HttpUtil.{httpRequestJsonBinanceAccount, httpRequestPureJsonBinanceAccount}
 import org.purevalue.arbitrage.util.Util.formatDecimal
-import org.purevalue.arbitrage.{traderoom, _}
+import org.purevalue.arbitrage.{Config, ExchangeConfig, Main, StaticConfig}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
@@ -109,7 +109,7 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
         case b: BalanceUpdateJson           => b.toWalletBalanceUpdate
         case o: OrderExecutionReportJson    => o.toOrderOrOrderUpdate(config.exchangeName, symbol => binanceTradePairs.find(_.symbol == symbol).get) // expecting, that we have all relevant trade pairs
         case o: OpenOrderJson               => o.toOrder(config.exchangeName, symbol => binanceTradePairs.find(_.symbol == symbol).get)
-        case x@_                            => log.debug(s"$x"); throw new NotImplementedError
+        case x                              => log.debug(s"$x"); throw new NotImplementedError
         // @formatter:on
       }
   }
@@ -250,6 +250,7 @@ class BinanceAccountDataChannel(config: ExchangeConfig, exchangePublicDataInquir
 
       restSource._1.offer(List(queryAccountInformation()))
       restSource._1.offer(queryOpenOrders())
+      sender() ! Initialized()
 
     case QueryAccountInformation() => // do the REST call to get a fresh snapshot. balance changes done via the web interface do not seem to be tracked by the streams
       restSource._1.offer(List(queryAccountInformation()))
@@ -365,7 +366,7 @@ case class OpenOrderJson(symbol: String,
                          isWorking: Boolean
                          // origQuoteOrderQty: String
                         ) extends IncomingBinanceAccountJson {
-  def toOrder(exchange: String, resolveTradePair: String => TradePair): Order = traderoom.Order(
+  def toOrder(exchange: String, resolveTradePair: String => TradePair): Order = Order(
     orderId.toString,
     exchange,
     resolveTradePair(symbol),
@@ -443,7 +444,7 @@ case class OrderExecutionReportJson(e: String, // Event type
     Z.toDouble / z.toDouble,
     Instant.ofEpochMilli(E))
 
-  def toOrder(exchange: String, resolveTradePair: String => TradePair): Order = traderoom.Order(
+  def toOrder(exchange: String, resolveTradePair: String => TradePair): Order = Order(
     i.toString,
     exchange,
     resolveTradePair(s),

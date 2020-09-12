@@ -36,7 +36,6 @@ object TradeRoom {
    * Modification of the content is NOT permitted by users of the TRadeContext (even if technically possible)!
    */
   case class TradeContext(tickers: TickersReadonly,
-                          orderBooks: collection.Map[String, collection.Map[TradePair, OrderBook]],
                           balances: collection.Map[String, Wallet],
                           fees: collection.Map[String, Fee],
                           doNotTouch: Map[String, Seq[Asset]]) {
@@ -96,9 +95,9 @@ class TradeRoom(config: TradeRoomConfig,
   // a map per exchange
   type ConcurrentMap[A, B] = collection.concurrent.Map[A, B]
   private val tickers: ConcurrentMap[String, ConcurrentMap[TradePair, Ticker]] = TrieMap()
-  private val orderBooks: ConcurrentMap[String, ConcurrentMap[TradePair, OrderBook]] = TrieMap()
+//  private val orderBooks: ConcurrentMap[String, ConcurrentMap[TradePair, OrderBook]] = TrieMap()
   private var wallets: Map[String, Wallet] = Map()
-  private val dataAge: ConcurrentMap[String, TPDataTimestamps] = TrieMap()
+  private val dataAge: ConcurrentMap[String, PublicDataTimestamps] = TrieMap()
 
   private def referenceTicker: collection.Map[TradePair, Ticker] = tickers(config.referenceTickerExchange)
 
@@ -117,7 +116,7 @@ class TradeRoom(config: TradeRoomConfig,
   private val doNotTouchAssets: Map[String, Seq[Asset]] =
     exchangesConfig.values.map(e => (e.exchangeName, e.doNotTouchTheseAssets)).toMap
 
-  private val tradeContext: TradeContext = TradeContext(tickers, orderBooks, wallets, fees, doNotTouchAssets)
+  private val tradeContext: TradeContext = TradeContext(tickers, wallets, fees, doNotTouchAssets)
 
   private val orderBundleSafetyGuard = new OrderBundleSafetyGuard(config.orderBundleSafetyGuard, exchangesConfig, tradeContext, dataAge, openOrderBundles)
 
@@ -299,9 +298,7 @@ class TradeRoom(config: TradeRoomConfig,
   def runExchange(exchangeName: String, exchangeInit: ExchangeInitStuff): Unit = {
     val camelName = exchangeName.substring(0, 1).toUpperCase + exchangeName.substring(1)
     tickers += exchangeName -> TrieMap[TradePair, Ticker]()
-    orderBooks += exchangeName -> TrieMap[TradePair, OrderBook]()
-    dataAge += exchangeName -> TPDataTimestamps(None, Instant.MIN, None)
-
+    dataAge += exchangeName -> PublicDataTimestamps(None, Instant.MIN)
     wallets += exchangeName -> Wallet(exchangeName, Map(), exchangesConfig(exchangeName))
     activeOrders += exchangeName -> TrieMap()
 
@@ -312,12 +309,11 @@ class TradeRoom(config: TradeRoomConfig,
         liquidityManagerConfig,
         self,
         exchangeInit,
-        ExchangeTPData(
+        ExchangePublicData(
           tickers(exchangeName),
-          orderBooks(exchangeName),
           dataAge(exchangeName)
         ),
-        IncomingExchangeAccountData(
+        ExchangeAccountData(
           wallets(exchangeName),
           activeOrders(exchangeName)
         ),
@@ -357,7 +353,7 @@ class TradeRoom(config: TradeRoomConfig,
   def deathWatch(): Unit = {
     dataAge.keys.foreach {
       e => {
-        val lastSeen: Instant = (dataAge(e).heartbeatTS.toSeq ++ dataAge(e).orderBookTS.toSeq ++ Seq(dataAge(e).tickerTS)).max
+        val lastSeen: Instant = (dataAge(e).heartbeatTS.toSeq ++ Seq(dataAge(e).tickerTS)).max
         if (Duration.between(lastSeen, Instant.now).compareTo(config.restartWhenAnExchangeDataStreamIsOlderThan) > 0) {
           log.info(s"${
             Emoji.Robot
@@ -400,27 +396,7 @@ class TradeRoom(config: TradeRoomConfig,
     log.info(s"${Emoji.Robot}  TradeRoom stats: [general] " +
       s"ticker:[${toEntriesPerExchange(tickers)}]" +
       s" (oldest: ${oldestTicker._1} ${Duration.between(oldestTicker._2.tickerTS, Instant.now).toMillis} ms," +
-      s" freshest: ${freshestTicker._1} ${Duration.between(freshestTicker._2.tickerTS, Instant.now).toMillis} ms)" +
-      s" / OrderBooks:[${toEntriesPerExchange(orderBooks)}]")
-    if (config.orderBooksEnabled) {
-      val orderBookTop3 = orderBooks.flatMap(_._2.values)
-        .map(e => (e.bids.size + e.asks.size, e))
-        .toSeq
-        .sortBy(_._1)
-        .reverse
-        .take(3)
-        .map(e => s"[${e._2.bids.size} bids/${e._2.asks.size} asks: ${e._2.exchange}:${e._2.tradePair}] ")
-        .toList
-      log.info(s"${Emoji.Robot}  TradeRoom stats: [biggest 3 OrderBooks] : $orderBookTop3")
-      val orderBookBottom3 = orderBooks.flatMap(_._2.values)
-        .map(e => (e.bids.size + e.asks.size, e))
-        .toSeq
-        .sortBy(_._1)
-        .take(3)
-        .map(e => s"[${e._2.bids.size} bids/${e._2.asks.size} asks: ${e._2.exchange}:${e._2.tradePair}] ")
-        .toList
-      log.info(s"${Emoji.Robot}  TradeRoom stats: [smallest 3 OrderBooks] : $orderBookBottom3")
-    }
+      s" freshest: ${freshestTicker._1} ${Duration.between(freshestTicker._2.tickerTS, Instant.now).toMillis} ms)")
 
     log.info(s"${Emoji.Robot}  OrderBundleSafetyGuard decision stats: [${orderBundleSafetyGuard.unsafeStats.mkString("|")}]")
 

@@ -78,7 +78,7 @@ object ExchangeLiquidityManager {
   def props(config: LiquidityManagerConfig,
             exchangeConfig: ExchangeConfig,
             tradeRoom: ActorRef,
-            tpData: ExchangeTPDataReadonly,
+            tpData: ExchangePublicDataReadonly,
             wallet: Wallet,
             referenceTicker: () => collection.Map[TradePair, Ticker],
             openLiquidityTx: () => Iterable[LiquidityTx]): Props =
@@ -87,7 +87,7 @@ object ExchangeLiquidityManager {
 class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
                                val exchangeConfig: ExchangeConfig,
                                val tradeRoom: ActorRef,
-                               val tpData: ExchangeTPDataReadonly,
+                               val tpData: ExchangePublicDataReadonly,
                                val wallet: Wallet,
                                val referenceTicker: () => collection.Map[TradePair, Ticker],
                                val openLiquidityTx: () => Iterable[LiquidityTx]
