@@ -70,14 +70,20 @@ class BinancePublicDataInquirer(config: ExchangeConfig) extends Actor {
   override def preStart(): Unit = {
     import BinanceJsonProtocol._
 
-    exchangeInfo = Await.result(
-      httpGetJson[RawBinanceExchangeInformationJson](s"$BinanceBaseRestEndpoint/api/v3/exchangeInfo"),
-      Config.httpTimeout.plus(500.millis))
-    binanceTradePairs = exchangeInfo.symbols
-      .filter(s => s.status == "TRADING" && s.orderTypes.contains("LIMIT") /* && s.orderTypes.contains("LIMIT_MAKER")*/ && s.permissions.contains("SPOT"))
-      .map(s => BinanceTradePair(Asset(s.baseAsset), Asset(s.quoteAsset), s.symbol))
-      .toSet
-    log.debug("received ExchangeInfo")
+    try {
+      exchangeInfo = Await.result(
+        httpGetJson[RawBinanceExchangeInformationJson](s"$BinanceBaseRestEndpoint/api/v3/exchangeInfo"),
+        Config.httpTimeout.plus(500.millis))
+
+      binanceTradePairs = exchangeInfo.symbols
+        .filter(s => s.status == "TRADING" && s.orderTypes.contains("LIMIT") /* && s.orderTypes.contains("LIMIT_MAKER")*/ && s.permissions.contains("SPOT"))
+        .filter(s => StaticConfig.AllAssets.contains(s.baseAsset) && StaticConfig.AllAssets.contains(s.quoteAsset))
+        .map(s => BinanceTradePair(Asset(s.baseAsset), Asset(s.quoteAsset), s.symbol))
+        .toSet
+      log.debug("received ExchangeInfo")
+    } catch {
+      case e: Exception => log.error("preStart failed", e)
+    }
   }
 
   override def receive: Receive = {
@@ -98,11 +104,11 @@ case class RawBinanceTradePairJson(symbol: String, status: String, baseAsset: St
                                    quotePrecision: Int, baseCommissionPrecision: Int, quoteCommissionPrecision: Int,
                                    orderTypes: Seq[String], icebergAllowed: Boolean, ocoAllowed: Boolean,
                                    quoteOrderQtyMarketAllowed: Boolean, isSpotTradingAllowed: Boolean,
-                                   isMarginTradingAllowed: Boolean, /*filters*/ permissions: Seq[String])
+                                   isMarginTradingAllowed: Boolean, filters: Seq[JsObject], permissions: Seq[String])
 
-case class RawBinanceExchangeInformationJson(timezone: String, serverTime: Long, /*rateLimits,exchangeFilters*/ symbols: Seq[RawBinanceTradePairJson])
+case class RawBinanceExchangeInformationJson(timezone: String, serverTime: Long, rateLimits: Seq[JsObject], exchangeFilters: Seq[JsObject], symbols: Seq[RawBinanceTradePairJson])
 
 object BinanceJsonProtocol extends DefaultJsonProtocol {
-  implicit val rawSymbolFormat: RootJsonFormat[RawBinanceTradePairJson] = jsonFormat15(RawBinanceTradePairJson)
-  implicit val rawExchangeInformationFormat: RootJsonFormat[RawBinanceExchangeInformationJson] = jsonFormat3(RawBinanceExchangeInformationJson)
+  implicit val rawSymbolFormat: RootJsonFormat[RawBinanceTradePairJson] = jsonFormat16(RawBinanceTradePairJson)
+  implicit val rawExchangeInformationFormat: RootJsonFormat[RawBinanceExchangeInformationJson] = jsonFormat5(RawBinanceExchangeInformationJson)
 }

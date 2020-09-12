@@ -36,6 +36,7 @@ class BinancePublicDataChannel(config: ExchangeConfig, binancePublicDataInquirer
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
   val BaseRestEndpoint = "https://api.binance.com"
+  val WebSocketEndpoint: Uri = Uri(s"wss://stream.binance.com:9443/stream")
   val IdBookTickerStreamRequest: Int = 1
   val BookTickerStreamName: String = "!bookTicker" // real-time stream
 
@@ -92,8 +93,9 @@ class BinancePublicDataChannel(config: ExchangeConfig, binancePublicDataInquirer
       Nil
   }
 
-  val SubscribeMessages: List[TPStreamSubscribeRequestJson] = List(
-    TPStreamSubscribeRequestJson(params = Seq(BookTickerStreamName), id = IdBookTickerStreamRequest),
+  def subscribeMessages: List[StreamSubscribeRequestJson] = List(
+    //StreamSubscribeRequestJson(params = Seq(BookTickerStreamName), id = IdBookTickerStreamRequest),
+    StreamSubscribeRequestJson(params = binanceTradePairBySymbol.keys.map(s => s"$s@bookTicker").toSeq, id = IdBookTickerStreamRequest),
   )
 
   val restSource: (SourceQueueWithComplete[Seq[IncomingPublicBinanceJson]], Source[Seq[IncomingPublicBinanceJson], NotUsed]) =
@@ -107,7 +109,7 @@ class BinancePublicDataChannel(config: ExchangeConfig, binancePublicDataInquirer
         .mergePreferred(restSource._2, priority = true, eagerComplete = false) // merge with data coming from REST requests (preferring REST data)
         .toMat(sink)(Keep.right),
       Source(
-        SubscribeMessages.map(msg => TextMessage(msg.toJson.compactPrint))
+        subscribeMessages.map(msg => TextMessage(msg.toJson.compactPrint))
       ).concatMat(Source.maybe[Message])(Keep.right))(Keep.right)
   }
 
@@ -115,7 +117,6 @@ class BinancePublicDataChannel(config: ExchangeConfig, binancePublicDataInquirer
   // the materialized value is a tuple with
   // upgradeResponse is a Future[WebSocketUpgradeResponse] that completes or fails when the connection succeeds or fails
   // and closed is a Future[Done] with the stream completion from the incoming sink
-  val WebSocketEndpoint: Uri = Uri(s"wss://stream.binance.com:9443/stream")
   var ws: (Future[WebSocketUpgradeResponse], Promise[Option[Message]]) = _
 
   // just like a regular http request we can access response status which is available via upgrade.response.status
@@ -137,19 +138,26 @@ class BinancePublicDataChannel(config: ExchangeConfig, binancePublicDataInquirer
 
   def deliverBookTickerState(): Unit = {
     httpGetJson[Seq[RawBookTickerRestJson]](s"$BaseRestEndpoint/api/v3/ticker/bookTicker") onComplete {
-      case Success(tickers) => restSource._1.offer(tickers)
+      case Success(tickers) =>
+        restSource._1.offer(
+          tickers.filter(e => binanceTradePairBySymbol.keySet.contains(e.symbol))
+        )
       case Failure(e) => log.error("Query/Transform RawBookTickerRestJson failed", e)
     }
   }
 
   override def preStart() {
-    log.trace(s"BinancePublicDataChannel initializing...")
-    implicit val timeout: Timeout = Config.internalCommunicationTimeoutDuringInit
-    binanceTradePairBySymbol = Await.result(
-      (binancePublicDataInquirer ? GetBinanceTradePairs()).mapTo[Set[BinanceTradePair]],
-      Config.internalCommunicationTimeout.duration.plus(500.millis))
-      .map(e => (e.symbol, e))
-      .toMap
+    try {
+      log.trace(s"BinancePublicDataChannel initializing...")
+      implicit val timeout: Timeout = Config.internalCommunicationTimeoutDuringInit
+      binanceTradePairBySymbol = Await.result(
+        (binancePublicDataInquirer ? GetBinanceTradePairs()).mapTo[Set[BinanceTradePair]],
+        Config.internalCommunicationTimeout.duration.plus(500.millis))
+        .map(e => (e.symbol, e))
+        .toMap
+    } catch {
+      case e:Exception => log.error("preStart failed", e)
+    }
   }
 
   override def receive: Receive = {
@@ -165,7 +173,7 @@ class BinancePublicDataChannel(config: ExchangeConfig, binancePublicDataInquirer
   }
 }
 
-case class TPStreamSubscribeRequestJson(method: String = "SUBSCRIBE", params: Seq[String], id: Int)
+case class StreamSubscribeRequestJson(method: String = "SUBSCRIBE", params: Seq[String], id: Int)
 
 trait IncomingPublicBinanceJson
 
@@ -191,7 +199,7 @@ case class RawBookTickerStreamJson(u: Long, // order book updateId
 }
 
 object WebSocketJsonProtocoll extends DefaultJsonProtocol {
-  implicit val subscribeMsg: RootJsonFormat[TPStreamSubscribeRequestJson] = jsonFormat3(TPStreamSubscribeRequestJson)
+  implicit val subscribeMsg: RootJsonFormat[StreamSubscribeRequestJson] = jsonFormat3(StreamSubscribeRequestJson)
   implicit val rawBookTickerRest: RootJsonFormat[RawBookTickerRestJson] = jsonFormat5(RawBookTickerRestJson)
   implicit val rawBookTickerStream: RootJsonFormat[RawBookTickerStreamJson] = jsonFormat6(RawBookTickerStreamJson)
 }

@@ -285,13 +285,17 @@ class BitfinexPublicDataChannel(config: ExchangeConfig, bitfinexPublicDataInquir
     SubscribeRequestJson(channel = "ticker", symbol = tradePair.apiSymbol)
 
   override def preStart() {
-    if (log.isTraceEnabled()) log.trace(s"BitfinexPublicDataChannel initializing...")
-    implicit val timeout: Timeout = Config.internalCommunicationTimeoutDuringInit
-    bitfinexTradePairBySymbol = Await.result(
-      (bitfinexPublicDataInquirer ? GetBitfinexTradePairs()).mapTo[Set[BitfinexTradePair]],
-      timeout.duration.plus(500.millis))
-      .map(e => (e.apiSymbol, e))
-      .toMap
+    try {
+      if (log.isTraceEnabled()) log.trace(s"BitfinexPublicDataChannel initializing...")
+      implicit val timeout: Timeout = Config.internalCommunicationTimeoutDuringInit
+      bitfinexTradePairBySymbol = Await.result(
+        (bitfinexPublicDataInquirer ? GetBitfinexTradePairs()).mapTo[Set[BitfinexTradePair]],
+        timeout.duration.plus(500.millis))
+        .map(e => (e.apiSymbol, e))
+        .toMap
+    } catch {
+      case e:Exception => log.error("preStart failed", e)
+    }
   }
 
 

@@ -445,8 +445,12 @@ class BitfinexAccountDataChannel(config: ExchangeConfig,
   }
 
   override def preStart(): Unit = {
-    pullBitfinexTradePairs()
-    pullBitfinexAssets()
+    try {
+      pullBitfinexTradePairs()
+      pullBitfinexAssets()
+    } catch {
+      case e: Exception => log.error("preStart failed", e)
+    }
   }
 
   def connect(sink: Sink[Seq[ExchangeAccountStreamData], Future[Done]]): Unit = {

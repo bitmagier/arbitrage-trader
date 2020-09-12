@@ -89,7 +89,11 @@ class BitfinexPublicDataInquirer(config: ExchangeConfig) extends Actor {
   }
 
   override def preStart(): Unit = {
-    initTradePairs()
+    try {
+      initTradePairs()
+    } catch {
+      case e: Exception => log.error("preStart failed", e)
+    }
   }
 
   override def receive: Receive = {

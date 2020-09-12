@@ -96,25 +96,6 @@ case class Exchange(exchangeName: String,
     tradePairs = tradePairs - tp
   }
 
-  override val supervisorStrategy: OneForOneStrategy =
-    OneForOneStrategy(maxNrOfRetries = 5, withinTimeRange = 10.minutes, loggingEnabled = true) {
-      case _ => Restart
-    }
-
-  override def preStart(): Unit = {
-    log.info(s"Initializing Exchange $exchangeName " +
-      s"${if (tradeSimulationMode) " in TRADE-SIMULATION mode"}" +
-      s"${if (config.doNotTouchTheseAssets.nonEmpty) s" DO-NOT-TOUCH: ${config.doNotTouchTheseAssets.mkString(",")}"}")
-    publicDataInquirer = context.actorOf(initStuff.exchangePublicDataInquirerProps(config), s"$exchangeName-PublicDataInquirer")
-
-    implicit val timeout: Timeout = Config.internalCommunicationTimeoutDuringInit
-    tradePairs = Await.result(
-      (publicDataInquirer ? GetTradePairs()).mapTo[TradePairs].map(_.value),
-      timeout.duration.plus(500.millis))
-      .filter(e => config.tradeAssets.contains(e.baseAsset) && config.tradeAssets.contains(e.quoteAsset))
-
-    log.info(s"$exchangeName: ${tradePairs.size} TradePairs: ${tradePairs.toSeq.sortBy(e => e.toString)}")
-  }
 
   def checkValidity(o: OrderRequest): Unit = {
     if (config.doNotTouchTheseAssets.contains(o.tradePair.baseAsset) || config.doNotTouchTheseAssets.contains(o.tradePair.quoteAsset))
@@ -138,6 +119,30 @@ case class Exchange(exchangeName: String,
         log.info(s"${Emoji.Robot}  [$exchangeName]: completely initialized and running")
         tradeRoom ! Exchange.Initialized(exchangeName)
       }
+  }
+
+  override val supervisorStrategy: OneForOneStrategy =
+    OneForOneStrategy(maxNrOfRetries = 5, withinTimeRange = 10.minutes, loggingEnabled = true) {
+      case _ => Restart
+    }
+
+  override def preStart(): Unit = {
+    try {
+      log.info(s"Initializing Exchange $exchangeName " +
+        s"${if (tradeSimulationMode) " in TRADE-SIMULATION mode"}" +
+        s"${if (config.doNotTouchTheseAssets.nonEmpty) s" DO-NOT-TOUCH: ${config.doNotTouchTheseAssets.mkString(",")}"}")
+      publicDataInquirer = context.actorOf(initStuff.exchangePublicDataInquirerProps(config), s"$exchangeName-PublicDataInquirer")
+
+      implicit val timeout: Timeout = Config.internalCommunicationTimeoutDuringInit
+      tradePairs = Await.result(
+        (publicDataInquirer ? GetTradePairs()).mapTo[TradePairs].map(_.value),
+        timeout.duration.plus(500.millis))
+        .filter(e => config.tradeAssets.contains(e.baseAsset) && config.tradeAssets.contains(e.quoteAsset))
+
+      log.info(s"$exchangeName: ${tradePairs.size} TradePairs: ${tradePairs.toSeq.sortBy(e => e.toString)}")
+    } catch {
+      case e:Exception => log.error(s"$exchangeName: preStart failed", e)
+    }
   }
 
   override def receive: Receive = {

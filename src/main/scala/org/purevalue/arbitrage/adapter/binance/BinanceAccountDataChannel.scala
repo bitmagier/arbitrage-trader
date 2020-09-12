@@ -239,8 +239,12 @@ class BinanceAccountDataChannel(config: ExchangeConfig,
   }
 
   override def preStart(): Unit = {
-    createListenKey()
-    pullBinanceTradePairs()
+    try {
+      createListenKey()
+      pullBinanceTradePairs()
+    } catch {
+      case e:Exception => log.error("preStart failed", e)
+    }
   }
 
   override def receive: Receive = {
