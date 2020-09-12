@@ -12,10 +12,14 @@ import org.purevalue.arbitrage.traderoom.ExchangeAccountDataManager._
 import scala.concurrent.{ExecutionContextExecutor, Future}
 
 object TradeSimulator {
-  def props(config: ExchangeConfig, accountDataManager: ActorRef): Props =
-    Props(new TradeSimulator(config, accountDataManager))
+  def props(config: ExchangeConfig,
+            accountDataManager: ActorRef,
+            publicData: ExchangePublicData): Props =
+    Props(new TradeSimulator(config, accountDataManager, publicData))
 }
-class TradeSimulator(config: ExchangeConfig, accountDataManager: ActorRef) extends Actor {
+class TradeSimulator(config: ExchangeConfig,
+                     accountDataManager: ActorRef,
+                     publicData: ExchangePublicData) extends Actor {
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
   def cancelOrder(tradePair: TradePair, externalOrderId: String): Future[CancelOrderResult] = {
@@ -24,13 +28,13 @@ class TradeSimulator(config: ExchangeConfig, accountDataManager: ActorRef) exten
     )
   }
 
-  def newOrder(externalOrderId: String, creationTime: Instant, o: OrderRequest): Order =
+  def newLimitOrder(externalOrderId: String, creationTime: Instant, o: OrderRequest): Order =
     Order(externalOrderId, o.exchange, o.tradePair, o.tradeSide, OrderType.LIMIT, o.limit, None, o.amountBaseAsset, None, creationTime, OrderStatus.NEW, 0.0, o.limit, creationTime)
 
-  def orderPartiallyFilled(externalOrderId: String, creationTime: Instant, o: OrderRequest): OrderUpdate =
+  def limitOrderPartiallyFilled(externalOrderId: String, creationTime: Instant, o: OrderRequest): OrderUpdate =
     OrderUpdate(externalOrderId, o.tradePair, o.tradeSide, OrderType.LIMIT, o.limit, None, Some(o.amountBaseAsset), Some(creationTime), OrderStatus.PARTIALLY_FILLED, o.amountBaseAsset / 2.0, o.limit, Instant.now)
 
-  def orderFilled(externalOrderId: String, creationTime: Instant, o: OrderRequest): OrderUpdate =
+  def limitOrderFilled(externalOrderId: String, creationTime: Instant, o: OrderRequest): OrderUpdate =
     OrderUpdate(externalOrderId, o.tradePair, o.tradeSide, OrderType.LIMIT, o.limit, None, Some(o.amountBaseAsset), Some(creationTime), OrderStatus.FILLED, o.amountBaseAsset, o.limit, Instant.now)
 
   def walletBalanceUpdate(delta: LocalCryptoValue): WalletBalanceUpdate = WalletBalanceUpdate(delta.asset, delta.amount)
@@ -38,9 +42,9 @@ class TradeSimulator(config: ExchangeConfig, accountDataManager: ActorRef) exten
   def simulateOrderLifetime(externalOrderId: String, o: OrderRequest): Unit = {
     Thread.sleep(100)
     val creationTime = Instant.now
-    accountDataManager ! SimulatedData(newOrder(externalOrderId, creationTime, o))
+    accountDataManager ! SimulatedData(newLimitOrder(externalOrderId, creationTime, o))
     Thread.sleep(100)
-    accountDataManager ! SimulatedData(orderPartiallyFilled(externalOrderId, creationTime, o))
+    accountDataManager ! SimulatedData(limitOrderPartiallyFilled(externalOrderId, creationTime, o))
     val out = o.calcOutgoingLiquidity
     val outPart = LocalCryptoValue(out.exchange, out.asset, -out.amount / 2)
     val in = o.calcIncomingLiquidity
@@ -49,7 +53,7 @@ class TradeSimulator(config: ExchangeConfig, accountDataManager: ActorRef) exten
     accountDataManager ! SimulatedData(walletBalanceUpdate(inPart))
 
     Thread.sleep(100)
-    accountDataManager ! SimulatedData(orderFilled(externalOrderId, creationTime, o))
+    accountDataManager ! SimulatedData(limitOrderFilled(externalOrderId, creationTime, o))
     accountDataManager ! SimulatedData(walletBalanceUpdate(outPart))
     accountDataManager ! SimulatedData(walletBalanceUpdate(inPart))
   }

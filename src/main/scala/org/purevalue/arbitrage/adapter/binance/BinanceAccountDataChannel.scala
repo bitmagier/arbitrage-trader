@@ -231,7 +231,7 @@ class BinanceAccountDataChannel(config: ExchangeConfig,
   }
 
   def pullBinanceTradePairs(): Unit = {
-    implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
+    implicit val timeout: Timeout = Config.internalCommunicationTimeoutDuringInit
     binanceTradePairs = Await.result(
       (exchangePublicDataInquirer ? GetBinanceTradePairs()).mapTo[Set[BinanceTradePair]],
       timeout.duration.plus(500.millis)

@@ -286,7 +286,7 @@ class BitfinexPublicDataChannel(config: ExchangeConfig, bitfinexPublicDataInquir
 
   override def preStart() {
     if (log.isTraceEnabled()) log.trace(s"BitfinexPublicDataChannel initializing...")
-    implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
+    implicit val timeout: Timeout = Config.internalCommunicationTimeoutDuringInit
     bitfinexTradePairBySymbol = Await.result(
       (bitfinexPublicDataInquirer ? GetBitfinexTradePairs()).mapTo[Set[BitfinexTradePair]],
       timeout.duration.plus(500.millis))

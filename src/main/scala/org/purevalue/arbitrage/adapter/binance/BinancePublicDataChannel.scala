@@ -144,7 +144,7 @@ class BinancePublicDataChannel(config: ExchangeConfig, binancePublicDataInquirer
 
   override def preStart() {
     log.trace(s"BinancePublicDataChannel initializing...")
-    implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
+    implicit val timeout: Timeout = Config.internalCommunicationTimeoutDuringInit
     binanceTradePairBySymbol = Await.result(
       (binancePublicDataInquirer ? GetBinanceTradePairs()).mapTo[Set[BinanceTradePair]],
       Config.internalCommunicationTimeout.duration.plus(500.millis))

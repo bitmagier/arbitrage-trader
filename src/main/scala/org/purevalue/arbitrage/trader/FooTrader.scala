@@ -41,7 +41,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
   var lastLifeSign: Instant = Instant.now()
 
   val scheduleDelay: FiniteDuration = FiniteDuration(config.getDuration("schedule-delay").toNanos, TimeUnit.NANOSECONDS)
-  val schedule: Cancellable = actorSystem.scheduler.scheduleWithFixedDelay(30.seconds, scheduleDelay, self, Trigger())
+  val schedule: Cancellable = actorSystem.scheduler.scheduleWithFixedDelay(3.minutes, scheduleDelay, self, Trigger())
 
   sealed trait NoResultReason
   case class BuyOrSellBookEmpty() extends NoResultReason
@@ -92,7 +92,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
     val buyExchange: String = lowestAsk._1
     val sellExchange: String = highestBid._1
 
-    // only want to have assets convertible to USDT here, to ignore the (3%) complicated special cases for now
+    // only want to have assets convertible to USDT here, to ignore the (~3%) complicated special cases for now
     if (!CryptoValue(USDT, tradeQuantityUSDT).canConvertTo(tradePair.baseAsset, tc.tickers(buyExchange)) ||
       !CryptoValue(USDT, tradeQuantityUSDT).canConvertTo(tradePair.baseAsset, tc.tickers(sellExchange))) {
       log.warn(s"Unable to convert ${tradePair.baseAsset} to USDT")
@@ -104,7 +104,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
     val ourBuyBaseAssetOrder =
       OrderRequest(
         UUID.randomUUID(),
-        orderBundleId,
+        Some(orderBundleId),
         buyExchange,
         tradePair,
         TradeSide.Buy,
@@ -115,7 +115,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
     val ourSellBaseAssetOrder =
       OrderRequest(
         UUID.randomUUID(),
-        orderBundleId,
+        Some(orderBundleId),
         sellExchange,
         tradePair,
         TradeSide.Sell,

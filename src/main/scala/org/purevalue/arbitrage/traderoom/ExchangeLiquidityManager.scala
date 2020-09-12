@@ -95,7 +95,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
   private val log = LoggerFactory.getLogger(classOf[ExchangeLiquidityManager])
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
-  val houseKeepingSchedule: Cancellable = actorSystem.scheduler.scheduleWithFixedDelay(1.minute, 30.seconds, self, HouseKeeping())
+  val houseKeepingSchedule: Cancellable = actorSystem.scheduler.scheduleWithFixedDelay(3.minute, 30.seconds, self, HouseKeeping())
 
   /**
    * UniqueDemand
@@ -252,7 +252,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
       val orderAmount: Double = demand.amount * (1.0 + config.providingLiquidityExtra)
       val tradePair = TradePair(demand.asset, bestReserveAssets.get._1)
       val limit = guessGoodLimit(tradePair, TradeSide.Buy, orderAmount)
-      val orderRequest = OrderRequest(UUID.randomUUID(), null, exchangeConfig.exchangeName, tradePair, TradeSide.Buy, exchangeConfig.fee, orderAmount, limit)
+      val orderRequest = OrderRequest(UUID.randomUUID(), None, exchangeConfig.exchangeName, tradePair, TradeSide.Buy, exchangeConfig.fee, orderAmount, limit)
 
       tradeRoom ! LiquidityTransformationOrder(orderRequest)
 
@@ -349,7 +349,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
     val limit: Double = guessGoodLimit(tradePair, TradeSide.Sell, coins.amount)
     val orderRequest = OrderRequest(
       UUID.randomUUID(),
-      null,
+      None,
       exchangeConfig.exchangeName,
       tradePair,
       TradeSide.Sell,
@@ -496,7 +496,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
               val baseAssetBucketValue: Double = CryptoValue(USDT, config.rebalanceTxGranularityInUSDT).convertTo(tradePair.baseAsset, tpData.ticker).amount
               val orderAmountBaseAsset = bucketsToTransfer * baseAssetBucketValue
               val limit = guessGoodLimit(tradePair, tradeSide, orderAmountBaseAsset)
-              OrderRequest(UUID.randomUUID(), null, exchangeConfig.exchangeName, tradePair, tradeSide, exchangeConfig.fee, orderAmountBaseAsset, limit)
+              OrderRequest(UUID.randomUUID(), None, exchangeConfig.exchangeName, tradePair, tradeSide, exchangeConfig.fee, orderAmountBaseAsset, limit)
 
             case tp if tpData.ticker.contains(tp.reverse) =>
               val tradePair = tp.reverse
@@ -505,7 +505,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
               val amountBaseAssetEstimate = bucketsToTransfer * quoteAssetBucketValue / tpData.ticker(tradePair).priceEstimate
               val limit = guessGoodLimit(tradePair, tradeSide, amountBaseAssetEstimate)
               val orderAmountBaseAsset = bucketsToTransfer * quoteAssetBucketValue / limit
-              OrderRequest(UUID.randomUUID(), null, exchangeConfig.exchangeName, tradePair, tradeSide, exchangeConfig.fee, orderAmountBaseAsset, limit)
+              OrderRequest(UUID.randomUUID(), None, exchangeConfig.exchangeName, tradePair, tradeSide, exchangeConfig.fee, orderAmountBaseAsset, limit)
 
             case _ => throw new RuntimeException(s"${exchangeConfig.exchangeName}: No local tradepair found to convert $sourceAsset to $sinkAsset")
           }

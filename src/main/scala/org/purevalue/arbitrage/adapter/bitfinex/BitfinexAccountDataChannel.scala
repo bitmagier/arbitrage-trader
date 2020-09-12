@@ -428,7 +428,7 @@ class BitfinexAccountDataChannel(config: ExchangeConfig,
     }
 
   def pullBitfinexTradePairs(): Unit = {
-    implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
+    implicit val timeout: Timeout = Config.internalCommunicationTimeoutDuringInit
     bitfinexTradePairs = Await.result(
       (exchangePublicDataInquirer ? GetBitfinexTradePairs()).mapTo[Set[BitfinexTradePair]],
       timeout.duration.plus(500.millis)
@@ -437,7 +437,7 @@ class BitfinexAccountDataChannel(config: ExchangeConfig,
 
 
   def pullBitfinexAssets(): Unit = {
-    implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
+    implicit val timeout: Timeout = Config.internalCommunicationTimeoutDuringInit
     bitfinexAssets = Await.result(
       (exchangePublicDataInquirer ? GetBitfinexAssets()).mapTo[Set[BitfinexSymbol]],
       timeout.duration.plus(500.millis)

@@ -65,6 +65,9 @@ object TradeRoom {
   case class OrderManagementSupervisor()
   case class LogStats()
   case class DeathWatch()
+  // from/to Exchange
+  case class RunPioneerTransaction(exchange: String)
+  case class PioneerTransactionCompleted()
   // from ExchangeAccountDataManager
   case class OrderUpdateTrigger(ref: OrderRef) // status of an order has changed
   case class WalletUpdateTrigger(exchange: String)
@@ -122,7 +125,7 @@ class TradeRoom(config: TradeRoomConfig,
 
   val orderManagementSupervisorSchedule: Cancellable = actorSystem.scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, OrderManagementSupervisor())
   val logScheduleRate: FiniteDuration = FiniteDuration(config.stats.reportInterval.toNanos, TimeUnit.NANOSECONDS)
-  val logSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(30.seconds, logScheduleRate, self, LogStats())
+  val logSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(3.minutes, logScheduleRate, self, LogStats())
   val deathWatchSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(3.minutes, 1.minute, self, DeathWatch())
 
   /**
@@ -233,13 +236,13 @@ class TradeRoom(config: TradeRoomConfig,
   }
 
   def dropTradePairSync(exchangeName: String, tp: TradePair): Unit = {
-    implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
+    implicit val timeout: Timeout = Config.internalCommunicationTimeoutDuringInit
     Await.result(exchanges(exchangeName) ? RemoveTradePair(tp), timeout.duration.plus(500.millis))
   }
 
 
   def queryTradePairs(exchange: String): Set[TradePair] = {
-    implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
+    implicit val timeout: Timeout = Config.internalCommunicationTimeoutDuringInit
     Await.result((exchanges(exchange) ? GetTradePairs()).mapTo[Set[TradePair]], timeout.duration.plus(500.millis))
   }
 
@@ -319,7 +322,7 @@ class TradeRoom(config: TradeRoomConfig,
         ),
         () => referenceTicker,
         () => openLiquidityTx.filter(_._1.exchange == exchangeName).values
-      ), camelName))
+      ), "Exchange-" + camelName))
   }
 
   def startExchanges(): Unit = {
@@ -402,6 +405,7 @@ class TradeRoom(config: TradeRoomConfig,
 
     val now = Instant.now
 
+
     val lastHourArbitrageSumUSDT: Double =
       OrderBill.aggregateValues(
         finishedOrderBundles
@@ -417,6 +421,7 @@ class TradeRoom(config: TradeRoomConfig,
         USDT,
         tickers)
 
+    // TODO log a info message with aggregation on currency level
     val lastHourSumUSDT: Double = lastHourArbitrageSumUSDT + lastHourLiquidityTxSumUSDT
     log.info(s"${Emoji.Robot}  Last 1h: cumulated gain: ${formatDecimal(lastHourSumUSDT, 2)} USDT " +
       s"(arbitrage orders: ${formatDecimal(lastHourArbitrageSumUSDT, 2)} USDT, " +
@@ -454,7 +459,6 @@ class TradeRoom(config: TradeRoomConfig,
     }
 
     startExchanges()
-    // REMARK: doing the tradepair cleanup here causes loss of some options for the reference ticker which leads to lesser balance conversion calculation options
     cleanupTradePairs()
     startStreaming()
   }
@@ -567,7 +571,53 @@ class TradeRoom(config: TradeRoomConfig,
     // TODO report apparently dead entries in openLiquidityTx
   }
 
+
+  def validateFinishedPioneerTx(request: OrderRequest, liquidityTx: FinishedLiquidityTx): Unit = {
+    def failed = throw new RuntimeException(s"Pioneer tx validation failed: \n$request, \n$liquidityTx")
+
+    if (liquidityTx.finishedOrder.exchange != request.exchange) failed
+    if (liquidityTx.finishedOrder.side != request.tradeSide) failed
+    if (liquidityTx.finishedOrder.tradePair != request.tradePair) failed
+    if (request.tradeSide == TradeSide.Buy && (liquidityTx.finishedOrder.priceAverage > request.limit)) failed
+    if (request.tradeSide == TradeSide.Sell && (liquidityTx.finishedOrder.priceAverage < request.limit)) failed
+    if (liquidityTx.finishedOrder.orderPrice != request.limit) failed
+    if (liquidityTx.finishedOrder.orderType != OrderType.LIMIT) failed
+    if (liquidityTx.finishedOrder.orderStatus != OrderStatus.FILLED) failed
+    if (liquidityTx.finishedOrder.quantity != request.amountBaseAsset) failed
+    if (liquidityTx.finishedOrder.cumulativeFilledQuantity != request.amountBaseAsset) failed
+    if (liquidityTx.bill.sumUSDTAtCalcTime < -0.01) failed // more than 1 cent loss is absolutely unacceptable
+  }
+
+  def watchPioneerTransaction(exchange: String, orderRequest: OrderRequest): Unit = {
+    val maxWaitTime = 5.minutes // the order may need some time go get filled ...
+    val startTime = Instant.now
+    var finished = false
+    do {
+      Thread.sleep(500)
+      finishedLiquidityTxs.find(e => e.liquidityTx.orderRequest.id == orderRequest.id) match {
+        case Some(liquidityTx) =>
+          validateFinishedPioneerTx(orderRequest, liquidityTx)
+          exchanges(exchange) ! PioneerTransactionCompleted()
+          finished = true
+        case None => // nop
+      }
+    } while (!finished && Duration.between(startTime, Instant.now).toMillis < maxWaitTime.toMillis)
+  }
+
+  // run a validated pioneer transaction before the exchange gets available for further orders
+  def runPioneerTransaction(exchange: String): Unit = {
+    log.debug(s"running pioneer tx for $exchange")
+    val tradePair = TradePair(Bitcoin, USDT)
+    val limit = tickers(exchange)(tradePair).priceEstimate
+    val amountBitcoin = CryptoValue(USDT, 5.0).convertTo(Bitcoin, tickers(exchange)).amount
+    val orderRequest = OrderRequest(UUID.randomUUID(), None, exchange, tradePair, TradeSide.Buy, exchangesConfig(exchange).fee, amountBitcoin, limit)
+    self ! LiquidityTransformationOrder(orderRequest)
+    executionContext.execute(() => watchPioneerTransaction(exchange, orderRequest))
+  }
+
   def receive: Receive = {
+
+    case RunPioneerTransaction(exchange) => runPioneerTransaction(exchange)
 
     // messages from Exchanges
     case Exchange.Initialized(exchange) =>

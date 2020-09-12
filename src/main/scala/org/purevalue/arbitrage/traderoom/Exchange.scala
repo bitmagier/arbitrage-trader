@@ -8,7 +8,7 @@ import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.traderoom.Exchange.{GetTradePairs, RemoveTradePair, StartStreaming, TradePairs}
 import org.purevalue.arbitrage.traderoom.ExchangeAccountDataManager.{CancelOrder, NewLimitOrder}
 import org.purevalue.arbitrage.traderoom.ExchangeLiquidityManager.{LiquidityLockClearance, LiquidityRequest}
-import org.purevalue.arbitrage.traderoom.TradeRoom.{LiquidityTx, WalletUpdateTrigger}
+import org.purevalue.arbitrage.traderoom.TradeRoom.{LiquidityTx, PioneerTransactionCompleted, RunPioneerTransaction, WalletUpdateTrigger}
 import org.purevalue.arbitrage.util.Emoji
 import org.slf4j.LoggerFactory
 
@@ -64,10 +64,11 @@ case class Exchange(exchangeName: String,
 
   var publicDataManagerInitialized = false
   var accountDataManagerInitialized = false
+  var pioneerTransactionStarted = false
+  var pioneerTransactionCompleted = false
   var liquidityManagerInitialized = false
 
-  def initialized: Boolean = publicDataManagerInitialized && accountDataManagerInitialized && liquidityManagerInitialized
-
+  def fullyInitialized: Boolean = publicDataManagerInitialized && accountDataManagerInitialized && pioneerTransactionCompleted && liquidityManagerInitialized
 
   def initPublicDataManager(): Unit = {
     publicDataManager = context.actorOf(
@@ -87,11 +88,11 @@ case class Exchange(exchangeName: String,
       s"${config.exchangeName}.AccountDataManager")
 
     if (tradeSimulationMode)
-      tradeSimulator = Some(context.actorOf(TradeSimulator.props(config, accountDataManager), s"${config.exchangeName}-TradeSimulator"))
+      tradeSimulator = Some(context.actorOf(TradeSimulator.props(config, accountDataManager, publicData), s"${config.exchangeName}-TradeSimulator"))
   }
 
   def removeTradePairBeforeInitialized(tp: TradePair): Unit = {
-    if (initialized) throw new RuntimeException("bad timing")
+    if (fullyInitialized) throw new RuntimeException("bad timing")
     tradePairs = tradePairs - tp
   }
 
@@ -106,7 +107,7 @@ case class Exchange(exchangeName: String,
       s"${if (config.doNotTouchTheseAssets.nonEmpty) s" DO-NOT-TOUCH: ${config.doNotTouchTheseAssets.mkString(",")}"}")
     publicDataInquirer = context.actorOf(initStuff.exchangePublicDataInquirerProps(config), s"$exchangeName-PublicDataInquirer")
 
-    implicit val timeout: Timeout = Config.internalCommunicationTimeoutWhileInit
+    implicit val timeout: Timeout = Config.internalCommunicationTimeoutDuringInit
     tradePairs = Await.result(
       (publicDataInquirer ? GetTradePairs()).mapTo[TradePairs].map(_.value),
       timeout.duration.plus(500.millis))
@@ -115,8 +116,8 @@ case class Exchange(exchangeName: String,
     log.info(s"$exchangeName: ${tradePairs.size} TradePairs: ${tradePairs.toSeq.sortBy(e => e.toString)}")
   }
 
-  def checkValidity(o: NewLimitOrder): Unit = {
-    if (config.doNotTouchTheseAssets.contains(o.o.tradePair.baseAsset) || config.doNotTouchTheseAssets.contains(o.o.tradePair.quoteAsset))
+  def checkValidity(o: OrderRequest): Unit = {
+    if (config.doNotTouchTheseAssets.contains(o.tradePair.baseAsset) || config.doNotTouchTheseAssets.contains(o.tradePair.quoteAsset))
       throw new IllegalArgumentException("Order with DO-NOT-TOUCH asset")
   }
 
@@ -126,13 +127,17 @@ case class Exchange(exchangeName: String,
         liquidityManagerConfig, config, tradeRoom, publicData.readonly, accountData.wallet, referenceTicker, openLiquidityTx))
   }
 
-  def eventuallyInitialized(): Unit = {
-    if (publicDataManagerInitialized && accountDataManagerInitialized && !liquidityManagerInitialized) {
-      initLiquidityManager()
-      liquidityManagerInitialized = true
-      log.info(s"${Emoji.Robot}  [$exchangeName]: All data streams initialized and running")
-      tradeRoom ! Exchange.Initialized(exchangeName)
-    }
+  def towardsFinalInitialization(): Unit = {
+    if (publicDataManagerInitialized && accountDataManagerInitialized)
+      if (!pioneerTransactionStarted) {
+        tradeRoom ! RunPioneerTransaction(exchangeName)
+        pioneerTransactionStarted = true
+      } else if (pioneerTransactionCompleted && !liquidityManagerInitialized) {
+        initLiquidityManager()
+        liquidityManagerInitialized = true
+        log.info(s"${Emoji.Robot}  [$exchangeName]: completely initialized and running")
+        tradeRoom ! Exchange.Initialized(exchangeName)
+      }
   }
 
   override def receive: Receive = {
@@ -145,14 +150,14 @@ case class Exchange(exchangeName: String,
       else accountDataManager.forward(c)
 
     case o: NewLimitOrder =>
-      checkValidity(o)
+      checkValidity(o.o)
       if (tradeSimulationMode) tradeSimulator.get.forward(o)
       else accountDataManager.forward(o)
 
     case l: LiquidityRequest => liquidityManager.forward(l)
     case c: LiquidityLockClearance => liquidityManager.forward(c)
 
-    case t: WalletUpdateTrigger => if (initialized) liquidityManager.forward(t)
+    case t: WalletUpdateTrigger => if (fullyInitialized) liquidityManager.forward(t)
 
     // removes tradepair before streaming has started
     case RemoveTradePair(tp) =>
@@ -170,12 +175,17 @@ case class Exchange(exchangeName: String,
     case ExchangePublicDataManager.Initialized() =>
       if (log.isTraceEnabled) log.trace(s"[$exchangeName]: PublicDataManager initialized")
       publicDataManagerInitialized = true
-      eventuallyInitialized()
+      towardsFinalInitialization()
 
     case ExchangeAccountDataManager.Initialized() =>
       if (log.isTraceEnabled) log.trace(s"[$exchangeName]: AccountDataManager initialized")
       accountDataManagerInitialized = true
-      eventuallyInitialized()
+      towardsFinalInitialization()
+
+    case PioneerTransactionCompleted() =>
+      log.info(s"$exchangeName pioneer transaction succeeded")
+      pioneerTransactionCompleted = true
+      towardsFinalInitialization()
 
     case Status.Failure(cause) =>
       log.error("received failure", cause)

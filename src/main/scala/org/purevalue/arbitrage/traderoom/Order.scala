@@ -138,7 +138,7 @@ case class OrderUpdate(externalOrderId: String,
  * This is the order flow: [Trader] -> OrderRequest -> [Exchange] -> Order(OrderStatus)
  */
 case class OrderRequest(id: UUID,
-                        orderBundleId: UUID, // nullable TODO: convert to Option
+                        orderBundleId: Option[UUID], // mandatory for arbitrage orders, empty for liquidity tx orders
                         exchange: String,
                         tradePair: TradePair,
                         tradeSide: TradeSide,
