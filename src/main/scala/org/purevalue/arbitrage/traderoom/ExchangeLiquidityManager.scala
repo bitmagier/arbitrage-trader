@@ -338,12 +338,12 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
     val reserveAssetsNeedFillUp: Set[Asset] = reserveAssetsWithLowLiquidity
     var destinationReserveAsset: Option[Asset] = bestAvailableReserveAssets.find(reserveAssetsNeedFillUp.contains) // [fill-up]
     if (destinationReserveAsset.isDefined) {
-      log.info(s"${Emoji.ThreeBitcoin}  transferring $coins back to reserve asset ${destinationReserveAsset.get} [fill-up]")
+      log.info(s"${Emoji.ThreeBitcoin}  ${exchangeConfig.exchangeName}: transferring $coins back to reserve asset ${destinationReserveAsset.get} [fill-up]")
     }
 
     if (destinationReserveAsset.isEmpty) {
       destinationReserveAsset = Some(availableReserveAssets.head._1) // [play safe]
-      log.info(s"${Emoji.ThreeBitcoin}  transferring $coins back to reserve asset ${destinationReserveAsset.get} [play safe]")
+      log.info(s"${Emoji.ThreeBitcoin}  ${exchangeConfig.exchangeName}: transferring $coins back to reserve asset ${destinationReserveAsset.get} [primary sink]")
     }
 
     val tradePair = TradePair(coins.asset, destinationReserveAsset.get)
@@ -529,7 +529,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
       }.toList
 
     if (liquidityTransactions.nonEmpty) {
-      log.debug(s"${exchangeConfig.exchangeName}: re-balance reserve assets: $virtualReserveAssetsAggregated " +
+      log.info(s"${Emoji.ThreeBitcoin}  ${exchangeConfig.exchangeName}: re-balance reserve assets: $virtualReserveAssetsAggregated " +
         s"with following transactions:\n${liquidityTransactions.mkString("\n")}")
     }
     liquidityTransactions
