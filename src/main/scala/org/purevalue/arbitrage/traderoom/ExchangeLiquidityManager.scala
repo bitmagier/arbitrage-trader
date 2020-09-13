@@ -278,7 +278,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
     var incomingLiquidity: List[CryptoValue] = List()
     for (d: UniqueDemand <- unsatisfiedDemand) {
       tryToPlaceALiquidityProvidingOrder(d) match {
-        case None => log.info(s"Unable to provide liquidity demand: $d")
+        case None => log.info(s"${Emoji.LookingDown}   Unable to provide liquidity demand: $d")
         case Some(incoming) => incomingLiquidity = incoming :: incomingLiquidity
       }
     }
@@ -338,12 +338,12 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
     val reserveAssetsNeedFillUp: Set[Asset] = reserveAssetsWithLowLiquidity
     var destinationReserveAsset: Option[Asset] = bestAvailableReserveAssets.find(reserveAssetsNeedFillUp.contains) // [fill-up]
     if (destinationReserveAsset.isDefined) {
-      log.info(s"transferring $coins back to reserve asset ${destinationReserveAsset.get} [fill-up]")
+      log.info(s"${Emoji.ThreeBitcoin}  transferring $coins back to reserve asset ${destinationReserveAsset.get} [fill-up]")
     }
 
     if (destinationReserveAsset.isEmpty) {
       destinationReserveAsset = Some(availableReserveAssets.head._1) // [play safe]
-      log.info(s"transferring $coins back to reserve asset ${destinationReserveAsset.get} [play safe]")
+      log.info(s"${Emoji.ThreeBitcoin}  transferring $coins back to reserve asset ${destinationReserveAsset.get} [play safe]")
     }
 
     val tradePair = TradePair(coins.asset, destinationReserveAsset.get)
