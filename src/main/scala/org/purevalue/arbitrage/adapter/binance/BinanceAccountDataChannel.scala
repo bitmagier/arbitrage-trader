@@ -3,15 +3,14 @@ package org.purevalue.arbitrage.adapter.binance
 import java.time.Instant
 import java.util.UUID
 
+import akka.Done
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{HttpMethods, StatusCodes, Uri}
 import akka.pattern.{ask, pipe}
-import akka.stream.OverflowStrategy
-import akka.stream.scaladsl.{Flow, Keep, Sink, Source, SourceQueueWithComplete}
+import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
-import akka.{Done, NotUsed}
 import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.{QueryAccountInformation, SendPing}
 import org.purevalue.arbitrage.adapter.binance.BinanceOrder.{toOrderStatus, toOrderType, toTradeSide}
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.{BinanceBaseRestEndpoint, GetBinanceTradePairs}
@@ -32,11 +31,13 @@ object BinanceAccountDataChannel {
   case class QueryAccountInformation()
 
   def props(config: ExchangeConfig,
-            exchangePublicDataInquirer: ActorRef): Props =
-    Props(new BinanceAccountDataChannel(config, exchangePublicDataInquirer))
+            exchangeAccountDataManager: ActorRef,
+            publicDataInquirer: ActorRef): Props =
+    Props(new BinanceAccountDataChannel(config, exchangeAccountDataManager, publicDataInquirer))
 }
 
 class BinanceAccountDataChannel(config: ExchangeConfig,
+                                accountDataManager: ActorRef,
                                 exchangePublicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BinanceAccountDataChannel])
 
@@ -61,60 +62,46 @@ class BinanceAccountDataChannel(config: ExchangeConfig,
   var listenKey: String = _
   var binanceTradePairs: Set[BinanceTradePair] = _
 
-  val restSource: (SourceQueueWithComplete[Seq[IncomingBinanceAccountJson]], Source[Seq[IncomingBinanceAccountJson], NotUsed]) =
-    Source.queue[Seq[IncomingBinanceAccountJson]](10, OverflowStrategy.backpressure).preMaterialize()
-
   import BinanceAccountDataJsonProtocoll._
 
-  val wsFlow: Flow[Message, Seq[IncomingBinanceAccountJson], NotUsed] = Flow.fromFunction {
 
-    case msg: TextMessage =>
-      val f: Future[Seq[IncomingBinanceAccountJson]] = {
-        msg.toStrict(Config.httpTimeout)
-          .map(_.getStrictText)
-          .map(s => JsonParser(s).asJsObject())
-          .map {
-            case j: JsObject if j.fields.contains("result") =>
-              if (log.isTraceEnabled) log.trace(s"received $j")
-              Nil // ignoring stream subscribe responses
-            case j: JsObject if j.fields.contains("e") =>
-              if (log.isTraceEnabled) log.trace(s"received $j")
-              j.fields("e").convertTo[String] match {
-                case OutboundAccountPositionStreamName => List(j.convertTo[OutboundAccountPositionJson])
-                case BalanceUpdateStreamName => List(j.convertTo[BalanceUpdateJson])
-                case OrderExecutionReportStreamName => List(j.convertTo[OrderExecutionReportJson])
-                case name: String =>
-                  log.error(s"Unknown data stream '$name' received: $j")
-                  Nil
-              }
-            case j: JsObject =>
-              log.warn(s"Unknown json object received: $j")
-              Nil
-          }
-      }
-      try {
-        Await.result(f, Config.httpTimeout.plus(1000.millis))
-      } catch {
-        case e: Exception => throw new RuntimeException(s"While decoding WebSocket stream event: $msg", e)
-      }
-
-    case _ =>
-      log.warn(s"Received non TextMessage")
-      Nil
+  def exchangeDataMapping(in: Seq[IncomingBinanceAccountJson]): Seq[ExchangeAccountStreamData] = in.map {
+    // @formatter:off
+    case a: AccountInformationJson      => a.toWalletAssetUpdate
+    case a: OutboundAccountPositionJson => a.toWalletAssetUpdate
+    case b: BalanceUpdateJson           => b.toWalletBalanceUpdate
+    case o: OrderExecutionReportJson    => o.toOrderOrOrderUpdate(config.exchangeName, symbol => binanceTradePairs.find(_.symbol == symbol).get) // expecting, that we have all relevant trade pairs
+    case o: OpenOrderJson               => o.toOrder(config.exchangeName, symbol => binanceTradePairs.find(_.symbol == symbol).get)
+    case x                              => log.debug(s"$x"); throw new NotImplementedError
+    // @formatter:on
   }
 
-  val downStreamFlow: Flow[Seq[IncomingBinanceAccountJson], Seq[ExchangeAccountStreamData], NotUsed] = Flow.fromFunction {
-    data: Seq[IncomingBinanceAccountJson] =>
-      data.map {
-        // @formatter:off
-        case a: AccountInformationJson      => a.toWalletAssetUpdate
-        case a: OutboundAccountPositionJson => a.toWalletAssetUpdate
-        case b: BalanceUpdateJson           => b.toWalletBalanceUpdate
-        case o: OrderExecutionReportJson    => o.toOrderOrOrderUpdate(config.exchangeName, symbol => binanceTradePairs.find(_.symbol == symbol).get) // expecting, that we have all relevant trade pairs
-        case o: OpenOrderJson               => o.toOrder(config.exchangeName, symbol => binanceTradePairs.find(_.symbol == symbol).get)
-        case x                              => log.debug(s"$x"); throw new NotImplementedError
-        // @formatter:on
-      }
+  def decodeMessage(message: Message): Future[Seq[IncomingBinanceAccountJson]] = message match {
+    case msg: TextMessage =>
+      msg.toStrict(Config.httpTimeout)
+        .map(_.getStrictText)
+        .map(s => JsonParser(s).asJsObject())
+        .map {
+          case j: JsObject if j.fields.contains("result") =>
+            if (log.isTraceEnabled) log.trace(s"received $j")
+            Nil // ignoring stream subscribe responses
+          case j: JsObject if j.fields.contains("e") =>
+            if (log.isTraceEnabled) log.trace(s"received $j")
+            j.fields("e").convertTo[String] match {
+              case OutboundAccountPositionStreamName => List(j.convertTo[OutboundAccountPositionJson])
+              case BalanceUpdateStreamName => List(j.convertTo[BalanceUpdateJson])
+              case OrderExecutionReportStreamName => List(j.convertTo[OrderExecutionReportJson])
+              case name: String =>
+                log.error(s"Unknown data stream '$name' received: $j")
+                Nil
+            }
+          case j: JsObject =>
+            log.warn(s"Unknown json object received: $j")
+            Nil
+        }
+    case _ =>
+      log.warn(s"Received non TextMessage")
+      Future.successful(Nil)
   }
 
   val SubscribeMessages: List[AccountStreamSubscribeRequestJson] = List(
@@ -123,12 +110,14 @@ class BinanceAccountDataChannel(config: ExchangeConfig,
     AccountStreamSubscribeRequestJson(params = Seq(OrderExecutionReportStreamName), id = IdOrderExecutionResportStream)
   )
 
-  def createFlowTo(sink: Sink[Seq[ExchangeAccountStreamData], Future[Done]]): Flow[Message, Message, Promise[Option[Message]]] = {
+  val wsFlow: Flow[Message, Message, Promise[Option[Message]]] = {
     Flow.fromSinkAndSourceCoupledMat(
-      wsFlow
-        .mergePreferred(restSource._2, priority = true, eagerComplete = false)
-        .via(downStreamFlow)
-        .toMat(sink)(Keep.right),
+      Sink.foreach[Message](message =>
+        decodeMessage(message)
+          .map(exchangeDataMapping)
+          .map(IncomingData)
+          .pipeTo(accountDataManager)
+      ),
       Source(
         SubscribeMessages.map(msg => TextMessage(msg.toJson.compactPrint))
       ).concatMat(Source.maybe[Message])(Keep.right))(Keep.right)
@@ -148,19 +137,21 @@ class BinanceAccountDataChannel(config: ExchangeConfig,
       }
     }
 
-  def queryAccountInformation(): AccountInformationJson = {
+  def deliverAccountInformation(): Unit = {
     import BinanceAccountDataJsonProtocoll._
-    Await.result(
-      httpRequestJsonBinanceAccount[AccountInformationJson](HttpMethods.GET, s"$BinanceBaseRestEndpoint/api/v3/account", None, config.secrets, sign = true),
-      Config.httpTimeout.plus(500.millis))
+    httpRequestJsonBinanceAccount[AccountInformationJson](HttpMethods.GET, s"$BinanceBaseRestEndpoint/api/v3/account", None, config.secrets, sign = true)
+      .map(e => Seq(e))
+      .map(exchangeDataMapping)
+      .map(IncomingData)
+      .pipeTo(accountDataManager)
   }
 
-  def queryOpenOrders(): List[OpenOrderJson] = {
+  def deliverOpenOrders(): Unit = {
     import BinanceAccountDataJsonProtocoll._
-    Await.result(
-      httpRequestJsonBinanceAccount[List[OpenOrderJson]](HttpMethods.GET, s"$BinanceBaseRestEndpoint/api/v3/openOrders", None, config.secrets, sign = true),
-      Config.httpTimeout.plus(500.millis)
-    )
+    httpRequestJsonBinanceAccount[List[OpenOrderJson]](HttpMethods.GET, s"$BinanceBaseRestEndpoint/api/v3/openOrders", None, config.secrets, sign = true)
+      .map(exchangeDataMapping)
+      .map(IncomingData)
+      .pipeTo(accountDataManager)
   }
 
   def pingUserStream(): Unit = {
@@ -242,25 +233,23 @@ class BinanceAccountDataChannel(config: ExchangeConfig,
     try {
       createListenKey()
       pullBinanceTradePairs()
+
+      log.trace("starting WebSocket stream")
+      ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow)
+      connected = createConnected
+
+      deliverAccountInformation()
+      deliverOpenOrders()
+      accountDataManager ! Initialized()
     } catch {
-      case e:Exception => log.error("preStart failed", e)
+      case e: Exception => log.error("preStart failed", e)
     }
   }
 
   override def receive: Receive = {
-    case StartStreamRequest(sink) =>
-      log.trace("starting WebSocket stream")
-      ws = Http().singleWebSocketRequest(
-        WebSocketRequest(WebSocketEndpoint),
-        createFlowTo(sink))
-      connected = createConnected
-
-      restSource._1.offer(List(queryAccountInformation()))
-      restSource._1.offer(queryOpenOrders())
-      sender() ! Initialized()
 
     case QueryAccountInformation() => // do the REST call to get a fresh snapshot. balance changes done via the web interface do not seem to be tracked by the streams
-      restSource._1.offer(List(queryAccountInformation()))
+      deliverAccountInformation()
 
     case SendPing() => pingUserStream()
 

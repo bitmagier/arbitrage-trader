@@ -23,8 +23,8 @@ object Exchange {
   case class RemoveTradePair(tradePair: TradePair)
 
   type ExchangePublicDataInquirerInit = Function1[ExchangeConfig, Props]
-  type ExchangePublicDataChannelInit = Function2[ExchangeConfig, ActorRef, Props]
-  type ExchangeAccountDataChannelInit = Function2[ExchangeConfig, ActorRef, Props]
+  type ExchangePublicDataChannelInit = Function3[ExchangeConfig, ActorRef, ActorRef, Props]
+  type ExchangeAccountDataChannelInit = Function3[ExchangeConfig, ActorRef, ActorRef, Props]
 
   def props(exchangeName: String,
             config: ExchangeConfig,
@@ -51,6 +51,7 @@ case class Exchange(exchangeName: String,
   implicit val system: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = system.dispatcher
 
+  var shutdownInitiated: Boolean = false
   val tradeSimulationMode: Boolean = Config.tradeRoom.tradeSimulation
 
   var publicDataInquirer: ActorRef = _
@@ -137,9 +138,9 @@ case class Exchange(exchangeName: String,
       tradePairs = Await.result(
         (publicDataInquirer ? GetTradePairs()).mapTo[TradePairs].map(_.value),
         timeout.duration.plus(500.millis))
-        .filter(e => config.tradeAssets.contains(e.baseAsset) && config.tradeAssets.contains(e.quoteAsset))
 
       log.info(s"$exchangeName: ${tradePairs.size} TradePairs: ${tradePairs.toSeq.sortBy(e => e.toString)}")
+
     } catch {
       case e:Exception => log.error(s"$exchangeName: preStart failed", e)
     }
@@ -155,9 +156,11 @@ case class Exchange(exchangeName: String,
       else accountDataManager.forward(c)
 
     case o: NewLimitOrder =>
-      checkValidity(o.o)
-      if (tradeSimulationMode) tradeSimulator.get.forward(o)
-      else accountDataManager.forward(o)
+      if (!shutdownInitiated) {
+        checkValidity(o.o)
+        if (tradeSimulationMode) tradeSimulator.get.forward(o)
+        else accountDataManager.forward(o)
+      }
 
     case l: LiquidityRequest => liquidityManager.forward(l)
     case c: LiquidityLockClearance => liquidityManager.forward(c)
@@ -170,10 +173,12 @@ case class Exchange(exchangeName: String,
       sender() ! true
 
     case StartStreaming() =>
-      initPublicDataManager()
-      if (config.secrets.apiKey.isEmpty || config.secrets.apiSecretKey.isEmpty)
-        log.warn(s"Will NOT start AccountDataManager for exchange ${config.exchangeName} because API-Key is not set")
-      else initAccountDataManager()
+      if (!shutdownInitiated) {
+        initPublicDataManager()
+        if (config.secrets.apiKey.isEmpty || config.secrets.apiSecretKey.isEmpty)
+          log.warn(s"Will NOT start AccountDataManager for exchange ${config.exchangeName} because API-Key is not set")
+        else initAccountDataManager()
+      }
 
     // Messages from TradePairDataManager
 
@@ -191,6 +196,10 @@ case class Exchange(exchangeName: String,
       log.info(s"$exchangeName pioneer transaction succeeded")
       pioneerTransactionCompleted = true
       towardsFinalInitialization()
+
+    case s: TradeRoom.Stop =>
+      shutdownInitiated = true
+      liquidityManager ! s
 
     case Status.Failure(cause) =>
       log.error("received failure", cause)

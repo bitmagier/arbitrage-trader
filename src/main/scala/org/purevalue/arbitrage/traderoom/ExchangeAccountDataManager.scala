@@ -2,9 +2,7 @@ package org.purevalue.arbitrage.traderoom
 
 import java.util.UUID
 
-import akka.Done
 import akka.actor.{Actor, ActorRef, Props}
-import akka.stream.scaladsl.Sink
 import org.purevalue.arbitrage.traderoom.Exchange.ExchangeAccountDataChannelInit
 import org.purevalue.arbitrage.traderoom.ExchangeAccountDataManager._
 import org.purevalue.arbitrage.traderoom.TradeRoom.{OrderRef, OrderUpdateTrigger, WalletUpdateTrigger}
@@ -13,11 +11,10 @@ import org.purevalue.arbitrage.{Config, ExchangeConfig}
 import org.slf4j.LoggerFactory
 
 import scala.collection._
-import scala.concurrent.Future
 
 
 object ExchangeAccountDataManager {
-  case class StartStreamRequest(sink: Sink[Seq[ExchangeAccountStreamData], Future[Done]])
+  case class IncomingData(data: Seq[ExchangeAccountStreamData])
   case class Initialized()
   case class CancelOrder(tradePair: TradePair, externalOrderId: String)
   case class CancelOrderResult(tradePair: TradePair, externalOrderId: String, success: Boolean)
@@ -44,15 +41,11 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
   private val log = LoggerFactory.getLogger(classOf[ExchangeAccountDataManager])
   var accountDataChannel: ActorRef = _
 
-  val sink: Sink[Seq[ExchangeAccountStreamData], Future[Done]] = Sink.foreach[Seq[ExchangeAccountStreamData]] { data =>
-    data.foreach(applyData)
-  }
+  private def applyData(data: ExchangeAccountStreamData): Unit = {
 
-  private def applyData(dataset: ExchangeAccountStreamData): Unit = {
+    if (log.isTraceEnabled) log.trace(s"applying incoming $data")
 
-    if (log.isTraceEnabled) log.trace(s"applying incoming $dataset")
-
-    dataset match {
+    data match {
 
       case w: WalletAssetUpdate =>
         accountData.wallet.balance = accountData.wallet.balance -- w.balance.keys ++ w.balance
@@ -86,11 +79,12 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
   }
 
   override def preStart(): Unit = {
-    accountDataChannel = context.actorOf(exchangeAccountDataChannelInit(config, exchangePublicDataInquirer), s"${config.exchangeName}.AccountDataChannel")
-    accountDataChannel ! StartStreamRequest(sink)
+    accountDataChannel = context.actorOf(exchangeAccountDataChannelInit(config, self, exchangePublicDataInquirer), s"${config.exchangeName}.AccountDataChannel")
   }
 
   override def receive: Receive = {
+    case IncomingData(data) => data.foreach(applyData)
+
     case i: Initialized => exchange.forward(i)
     case c: CancelOrder => accountDataChannel.forward(c)
     case o: NewLimitOrder => accountDataChannel.forward(o)

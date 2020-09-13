@@ -2,9 +2,7 @@ package org.purevalue.arbitrage.traderoom
 
 import java.time.{Duration, Instant}
 
-import akka.Done
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, Props, Status}
-import akka.stream.scaladsl.Sink
 import org.purevalue.arbitrage.traderoom.Exchange.ExchangePublicDataChannelInit
 import org.purevalue.arbitrage.traderoom.ExchangePublicDataManager._
 import org.purevalue.arbitrage.util.Util.formatDecimal
@@ -12,8 +10,8 @@ import org.purevalue.arbitrage.{Config, ExchangeConfig, Main}
 import org.slf4j.LoggerFactory
 
 import scala.collection._
+import scala.concurrent.ExecutionContextExecutor
 import scala.concurrent.duration.DurationInt
-import scala.concurrent.{ExecutionContextExecutor, Future}
 
 trait ExchangePublicStreamData
 case class Heartbeat(ts: Instant) extends ExchangePublicStreamData
@@ -70,9 +68,9 @@ case class ExchangePublicData(ticker: concurrent.Map[TradePair, Ticker],
 case class ExchangePublicDataReadonly(ticker: collection.Map[TradePair, Ticker])
 
 object ExchangePublicDataManager {
-  case class InitCheck()
+  case class InitTimeoutCheck()
   case class Initialized()
-  case class StartStreamRequest(sink: Sink[Seq[ExchangePublicStreamData], Future[Done]])
+  case class IncomingData(data: Seq[ExchangePublicStreamData])
 
   def props(config: ExchangeConfig,
             tradePairs: Set[TradePair],
@@ -101,15 +99,15 @@ case class ExchangePublicDataManager(config: ExchangeConfig,
   private var initializedMsgSend = false
   private var initTimestamp: Instant = _
 
-  val initCheckSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(1.seconds, 1.seconds, self, InitCheck())
+  val initCheckSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(1.seconds, 1.seconds, self, InitTimeoutCheck())
 
   def initialized: Boolean = {
     tradePairs.subsetOf(publicData.ticker.keySet)
   }
 
-  val sink: Sink[Seq[ExchangePublicStreamData], Future[Done]] = Sink.foreach[Seq[ExchangePublicStreamData]] {
-    applyDataset
-  }
+  //  def sink: Sink[Seq[ExchangePublicStreamData], Future[Done]] = Sink.foreach[Seq[ExchangePublicStreamData]] {
+  //    applyDataset
+  //  }
 
   private def applyDataset(data: Seq[ExchangePublicStreamData]): Unit = {
     data.foreach {
@@ -120,7 +118,9 @@ case class ExchangePublicDataManager(config: ExchangeConfig,
         publicData.ticker += t.tradePair -> t
         publicData.age.tickerTS = Instant.now
 
-      case _ => throw new NotImplementedError
+      case other =>
+        log.error(s"Not implemended: $other")
+        throw new NotImplementedError
     }
     eventuallyInitialized()
   }
@@ -134,22 +134,25 @@ case class ExchangePublicDataManager(config: ExchangeConfig,
 
   override def preStart(): Unit = {
     initTimestamp = Instant.now()
-    publicDataChannel = context.actorOf(
-      exchangePublicDataChannelProps.apply(config, exchangePublicDataInquirer), s"${config.exchangeName}-PublicDataChannel")
+    publicDataChannel = context.actorOf(exchangePublicDataChannelProps.apply(config, self, exchangePublicDataInquirer),
+      s"${config.exchangeName}-PublicDataChannel")
+  }
 
-    publicDataChannel ! StartStreamRequest(sink)
+  def initTimeoutCheck(): Unit = {
+    if (initialized) initCheckSchedule.cancel()
+    else {
+      if (Duration.between(initTimestamp, Instant.now()).compareTo(Config.dataManagerInitTimeout) > 0) {
+        log.info(s"Killing ${config.exchangeName}-PublicDataManager")
+        self ! Kill
+      }
+    }
   }
 
   def receive: Receive = {
 
-    case InitCheck() =>
-      if (initialized) initCheckSchedule.cancel()
-      else {
-        if (Duration.between(initTimestamp, Instant.now()).compareTo(Config.dataManagerInitTimeout) > 0) {
-          log.info(s"Killing ${config.exchangeName}-PublicDataManager")
-          self ! Kill
-        }
-      }
+    case IncomingData(data) => applyDataset(data)
+
+    case InitTimeoutCheck() => initTimeoutCheck()
 
     case Status.Failure(cause) =>
       log.error("received failure", cause)

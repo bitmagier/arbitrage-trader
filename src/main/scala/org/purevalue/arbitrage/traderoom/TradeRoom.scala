@@ -4,6 +4,7 @@ import java.time.{Duration, Instant}
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
+import akka.Done
 import akka.actor.SupervisorStrategy.Restart
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, OneForOneStrategy, PoisonPill, Props, Status}
 import akka.pattern.ask
@@ -67,6 +68,7 @@ object TradeRoom {
   case class OrderManagementSupervisor()
   case class LogStats()
   case class DeathWatch()
+  case class Stop(timeout: Duration)
   // from/to Exchange
   case class RunPioneerTransaction(exchange: String)
   case class PioneerTransactionCompleted()
@@ -93,6 +95,7 @@ class TradeRoom(config: TradeRoomConfig,
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
+  private var shutdownInitiated: Boolean = false
   private var exchanges: Map[String, ActorRef] = Map()
   private var initializedExchanges: Set[String] = Set()
   private var traders: Map[String, ActorRef] = Map()
@@ -174,6 +177,7 @@ class TradeRoom(config: TradeRoomConfig,
   }
 
   def placeLiquidityTransformationOrder(request: OrderRequest): Unit = {
+    if (shutdownInitiated) return
     if (doNotTouchAssets(request.exchange).intersect(request.tradePair.involvedAssets).nonEmpty) throw new IllegalArgumentException
 
     // this should not occur - but here is a last guard
@@ -203,6 +207,8 @@ class TradeRoom(config: TradeRoomConfig,
   }
 
   def tryToPlaceOrderBundle(bundle: OrderRequestBundle): Unit = {
+    if (shutdownInitiated) return
+
     if (bundle.orderRequests.exists(e =>
       doNotTouchAssets(e.exchange).intersect(e.tradePair.involvedAssets).nonEmpty)) {
       log.debug(s"ignoring $bundle containing a DO-NOT-TOUCH asset")
@@ -334,6 +340,8 @@ class TradeRoom(config: TradeRoomConfig,
   }
 
   def startTraders(): Unit = {
+    if (shutdownInitiated) return
+
     traders += "FooTrader" -> context.actorOf(
       FooTrader.props(Config.trader("foo-trader"), self, tradeContext),
       "FooTrader")
@@ -360,9 +368,7 @@ class TradeRoom(config: TradeRoomConfig,
       e => {
         val lastSeen: Instant = (dataAge(e).heartbeatTS.toSeq ++ Seq(dataAge(e).tickerTS)).max
         if (Duration.between(lastSeen, Instant.now).compareTo(config.restartWhenAnExchangeDataStreamIsOlderThan) > 0) {
-          log.info(s"${
-            Emoji.Robot
-          }  Killing TradeRoom actor because of outdated ticker data from $e")
+          log.warn(s"${Emoji.Robot}  Killing TradeRoom actor because of outdated ticker data from $e")
           self ! Kill
         }
       }
@@ -435,7 +441,7 @@ class TradeRoom(config: TradeRoomConfig,
       val lastHourSumUSDT: Double = lastHourArbitrageSumUSDT + lastHourLiquidityTxSumUSDT
       log.info(s"${Emoji.Robot}  Last 1h: cumulated gain: ${formatDecimal(lastHourSumUSDT, 2)} USDT " +
         s"(arbitrage orders: ${formatDecimal(lastHourArbitrageSumUSDT, 2)} USDT, " +
-        s"liquidity tx: ${formatDecimal(lastHourLiquidityTxSumUSDT)} USDT) ")
+        s"liquidity tx: ${formatDecimal(lastHourLiquidityTxSumUSDT, 2)} USDT) ")
 
       val totalArbitrageSumUSDT: Double =
         OrderBill.aggregateValues(
@@ -552,16 +558,16 @@ class TradeRoom(config: TradeRoomConfig,
     val orders: Seq[Order] = orderBundle.ordersRefs.flatMap(ref => activeOrder(ref))
     orders match {
       case order: Seq[Order] if order.isEmpty =>
-        log.error(s"No order present for $orderBundle -> cleaning up")
+        log.error(s"No order present for ${orderBundle.shortDesc} -> cleaning up")
         cleanupOrderBundle(orderBundleId)
       case order: Seq[Order] if order.forall(_.orderStatus == OrderStatus.FILLED) =>
-        if (log.isTraceEnabled) log.trace(s"All orders of $orderBundle FILLED -> finishing it")
+        if (log.isTraceEnabled) log.trace(s"All orders of ${orderBundle.shortDesc} FILLED -> finishing it")
         cleanupOrderBundle(orderBundleId)
-        log.info(s"${Emoji.Robot}  OrderBundle $orderBundleId successfully finished")
+        log.info(s"${Emoji.Robot}  OrderBundle ${orderBundle.shortDesc} successfully finished")
       case order: Seq[Order] if order.forall(_.orderStatus.isFinal) =>
-        log.debug(s"${Emoji.Robot}  All orders of $orderBundle have a final state (${order.map(_.orderStatus).mkString(",")}) -> finished otherwise")
+        log.debug(s"${Emoji.Robot}  All orders of ${orderBundle.shortDesc} have a final state (${order.map(_.orderStatus).mkString(",")}) -> not ideal")
         cleanupOrderBundle(orderBundleId)
-        log.warn(s"${Emoji.Robot}  Finished OrderBundle $orderBundleId, but NOT all order are FILLED: $orders")
+        log.warn(s"${Emoji.Robot}  Finished OrderBundle ${orderBundle.shortDesc}, but NOT all orders are FILLED: $orders")
       case order: Seq[Order] => // order bundle still active: nothing to do
         if (log.isTraceEnabled) log.trace(s"Watching minor order update for $orderBundle: $order")
     }
@@ -570,7 +576,7 @@ class TradeRoom(config: TradeRoomConfig,
   def cleanupPossiblyFinishedLiquidityTxOrder(tx: LiquidityTx): Unit = {
     activeOrder(tx.orderRef) match {
       case Some(order) if order.orderStatus == OrderStatus.FILLED =>
-        log.info(s"${Emoji.Robot}  Liquidity tx ${tx.orderRef} FILLED")
+        log.info(s"${Emoji.Robot}  Liquidity tx ${tx.orderRequest.tradeDesc} FILLED")
         cleanupLiquidityTxOrder(tx)
       case Some(order) if order.orderStatus.isFinal =>
         log.warn(s"${Emoji.NoSupport}  Liquidity tx ${tx.orderRef} finished with state ${order.orderStatus}")
@@ -605,9 +611,12 @@ class TradeRoom(config: TradeRoomConfig,
 
     for (o: Order <- orderToCancel) {
       val source: String = activeLiquidityTx.values.find(_.orderRef.externalOrderId == o.externalId) match {
-        case Some(liquidityTx) => liquidityTx.orderRequest.shortDesc
+        case Some(liquidityTx) => s"liquidity-tx: ${liquidityTx.orderRequest.shortDesc}"
         case None => activeOrderBundles.values.find(_.ordersRefs.exists(_.externalOrderId == o.externalId)) match {
-          case Some(orderBundle) => orderBundle.shortDesc
+          case Some(orderBundle) => s"order-bundle: ${orderBundle.shortDesc}"
+          case None =>
+            log.error(s"active $o not in our active-liquidity-tx or active-order-bundle list")
+            "unknown source"
         }
       }
 
@@ -659,6 +668,8 @@ class TradeRoom(config: TradeRoomConfig,
 
   // run a validated pioneer transaction before the exchange gets available for further orders
   def runPioneerTransaction(exchange: String): Unit = {
+    if (shutdownInitiated) return
+
     log.debug(s"running pioneer tx for $exchange")
     val tradePair = TradePair(Bitcoin, USDT)
     val limit = tickers(exchange)(tradePair).priceEstimate
@@ -668,9 +679,25 @@ class TradeRoom(config: TradeRoomConfig,
     executionContext.execute(() => watchPioneerTransaction(exchange, orderRequest))
   }
 
+  def waitUntilOpenTxFinished(timeout: Duration): Unit = {
+    val deadLine = Instant.now.plus(timeout)
+    var openOrders: Iterable[Order] = null
+    do {
+      openOrders = activeOrders.values.flatten.map(_._2)
+      if (openOrders.nonEmpty) {
+        log.info(s"""${Emoji.Robot}  Waiting for ${openOrders.size} open orders: [${openOrders.map(_.shortDesc).mkString(", ")}]""")
+        Thread.sleep(1000)
+      }
+    } while (Instant.now.isBefore(deadLine) && openOrders.nonEmpty)
+    if (openOrders.nonEmpty) {
+      log.warn(s"${Emoji.NoSupport}  These orders did not finish: [${openOrders.map(_.shortDesc).mkString(", ")}]")
+    }
+  }
+
   def receive: Receive = {
 
-    case RunPioneerTransaction(exchange) => runPioneerTransaction(exchange)
+    case RunPioneerTransaction(exchange) =>
+      runPioneerTransaction(exchange)
 
     // messages from Exchanges
     case Exchange.Initialized(exchange) =>
@@ -700,12 +727,22 @@ class TradeRoom(config: TradeRoomConfig,
       houseKeeping()
 
     case LogStats() =>
-      if (exchangesInitialized)
+      if (exchangesInitialized && !shutdownInitiated)
         logStats()
 
+    // TODO do in housekeeping
     case DeathWatch() =>
       if (exchangesInitialized)
         deathWatch()
+
+    case Stop(timeout) =>
+      log.info("shutdown initiated")
+      shutdownInitiated = true
+      exchanges.values.foreach {
+        _ ! Stop(timeout.minusSeconds(2))
+      }
+      waitUntilOpenTxFinished(timeout)
+      sender() ! Done
 
     case Status.Failure(cause) =>
       log.error("received failure", cause)

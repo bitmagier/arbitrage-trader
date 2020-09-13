@@ -66,12 +66,12 @@ class BitfinexPublicDataInquirer(config: ExchangeConfig) extends Actor {
       .toSet
     if (log.isTraceEnabled) log.trace(s"bitfinexAssets: $bitfinexAssets")
 
-    val tradePairs: List[String] =
+    val rawTradePairs: List[String] =
       Await.result(httpGetJson[List[List[String]]](s"$BaseRestEndpointPublic/v2/conf/pub:list:pair:exchange"), Config.httpTimeout)
         .head
-    if (log.isTraceEnabled) log.trace(s"tradepairs: $tradePairs")
+    if (log.isTraceEnabled) log.trace(s"tradepairs: $rawTradePairs")
 
-    bitfinexTradePairs = tradePairs
+    bitfinexTradePairs = rawTradePairs
       .filter(_.length == 6)
       .map(e => (e.substring(0, 3), e.substring(3, 6), e)) // currency1-apiSymbol, currency2-apiSymbol, tradePair
       .map(e =>
@@ -84,6 +84,7 @@ class BitfinexPublicDataInquirer(config: ExchangeConfig) extends Actor {
         bitfinexAssets.exists(_.asset.officialSymbol == e._1)
           && bitfinexAssets.exists(_.asset.officialSymbol == e._2)) // crosscheck with bitfinex (configured) assets
       .map(e => BitfinexTradePair(Asset(e._1), Asset(e._2), e._3))
+      .filter(e => config.tradeAssets.contains(e.baseAsset) && config.tradeAssets.contains(e.quoteAsset))
       .toSet
     if (log.isTraceEnabled) log.trace(s"bitfinexTradePairs: $bitfinexTradePairs")
   }

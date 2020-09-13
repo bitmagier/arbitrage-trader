@@ -1,8 +1,15 @@
 package org.purevalue.arbitrage
 
+import java.time.Duration
+
+import akka.Done
 import akka.actor.SupervisorStrategy.Restart
-import akka.actor.{Actor, ActorSystem, OneForOneStrategy, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, CoordinatedShutdown, OneForOneStrategy, Props, Status}
+import akka.pattern.ask
+import akka.util.Timeout
+import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.traderoom.TradeRoom
+import org.purevalue.arbitrage.traderoom.TradeRoom.Stop
 import org.slf4j.{Logger, LoggerFactory}
 
 import scala.concurrent.duration.DurationInt
@@ -20,11 +27,18 @@ class RootGuardian extends Actor {
     }
   }
 
-  private val tradeRoom = context.actorOf (TradeRoom.props (Config.tradeRoom, Config.exchanges, Config.liquidityManager), "TradeRoom")
+  val tradeRoom: ActorRef = context.actorOf (TradeRoom.props (Config.tradeRoom, Config.exchanges, Config.liquidityManager), "TradeRoom")
 
   override def receive: Receive = {
     case Status.Failure(cause) =>
       log.error("received failure", cause)
+  }
+
+  CoordinatedShutdown(actorSystem).addTask(CoordinatedShutdown.PhaseBeforeServiceUnbind, "shutdown traderoom") { () =>
+    val shutdownTimeout: Duration = Config.gracefulShutdownTimeout
+    implicit val askTimeout: Timeout = Timeout.create(shutdownTimeout)
+    log.info("initiating graceful shutdown")
+    tradeRoom.ask(Stop(shutdownTimeout.minusSeconds(1))).mapTo[Done]
   }
 }
 

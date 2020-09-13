@@ -95,6 +95,7 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
   private val log = LoggerFactory.getLogger(classOf[ExchangeLiquidityManager])
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
+  var shutdownInitiated: Boolean = false
   val houseKeepingSchedule: Cancellable = actorSystem.scheduler.scheduleWithFixedDelay(3.minute, 30.seconds, self, HouseKeeping())
 
   /**
@@ -520,12 +521,12 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
     log.trace(s"Re-balance (unsquashed) tx orders:\n${liquidityTransactions.mkString("\n")}\n Remaining sinks: $liquiditySinkBuckets")
     // merge possible splitted orders towards primary reserve asset
     liquidityTransactions = liquidityTransactions
-        .groupBy(e => (e.tradePair, e.tradeSide))
-        .map { e =>
-          val f = e._2.head
-          val amount = e._2.map(_.amountBaseAsset).sum
-          OrderRequest(f.id, f.orderBundleId, f.exchange, f.tradePair, f.tradeSide, f.fee, amount, f.limit)
-        }.toList
+      .groupBy(e => (e.tradePair, e.tradeSide))
+      .map { e =>
+        val f = e._2.head
+        val amount = e._2.map(_.amountBaseAsset).sum
+        OrderRequest(f.id, f.orderBundleId, f.exchange, f.tradePair, f.tradeSide, f.fee, amount, f.limit)
+      }.toList
 
     if (liquidityTransactions.nonEmpty) {
       log.debug(s"${exchangeConfig.exchangeName}: re-balance reserve assets: $virtualReserveAssetsAggregated " +
@@ -536,6 +537,8 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
 
   // Management takes care, that we follow the liquidity providing & back-converting strategy (described above)
   def houseKeeping(): Unit = {
+    if (shutdownInitiated) return
+
     clearObsoleteLocks()
     clearObsoleteDemands()
     val demanded: List[CryptoValue] = provideDemandedLiquidity()
@@ -550,13 +553,20 @@ class ExchangeLiquidityManager(val config: LiquidityManagerConfig,
   override def receive: Receive = {
     // messages from TradeRoom/Exchange
     case r: LiquidityRequest =>
-      checkValidity(r)
-      sender() ! lockLiquidity(r)
-      houseKeeping()
+      if (shutdownInitiated) sender ! None
+      else {
+        checkValidity(r)
+        sender() ! lockLiquidity(r)
+        houseKeeping()
+      }
 
     case LiquidityLockClearance(id) =>
       clearLock(id)
       houseKeeping()
+
+    case TradeRoom.Stop(_) =>
+      shutdownInitiated = true
+      houseKeepingSchedule.cancel()
 
     // messages from ExchangeAccountDataManager
     case _: WalletUpdateTrigger =>

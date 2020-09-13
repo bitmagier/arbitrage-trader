@@ -2,6 +2,7 @@ package org.purevalue.arbitrage.adapter.bitfinex
 
 import java.time.Instant
 
+import akka.Done
 import akka.actor.{Actor, ActorRef, ActorSystem, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
@@ -9,7 +10,6 @@ import akka.http.scaladsl.model.{HttpMethods, StatusCodes, Uri}
 import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
-import akka.{Done, NotUsed}
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexOrderUpdateJson.{toOrderStatus, toOrderType}
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.{GetBitfinexAssets, GetBitfinexTradePairs}
 import org.purevalue.arbitrage.traderoom.ExchangeAccountDataManager._
@@ -27,7 +27,7 @@ import scala.concurrent.{Await, ExecutionContextExecutor, Future, Promise}
 
 trait IncomingBitfinexAccountJson
 
-case class BitfinexAuthMessage(apiKey: String, authSig: String, authNonce: String, authPayload: String, filter:Array[String], event: String = "auth")
+case class BitfinexAuthMessage(apiKey: String, authSig: String, authNonce: String, authPayload: String, filter: Array[String], event: String = "auth")
 case class BitfinexOrderUpdateJson(streamType: String, // "os" = order snapshot, "on" = order new, "ou" = order update, "oc" = order cancel
                                    orderId: Long,
                                    groupId: Long,
@@ -269,10 +269,13 @@ object BitfinexAccountDataJsonProtocoll extends DefaultJsonProtocol {
 
 
 object BitfinexAccountDataChannel {
-  def props(config: ExchangeConfig,exchangePublicDataInquirer: ActorRef): Props =
-    Props(new BitfinexAccountDataChannel(config, exchangePublicDataInquirer))
+  def props(config: ExchangeConfig,
+            exchangeAccountDataManager: ActorRef,
+            publicDataInquirer: ActorRef): Props =
+    Props(new BitfinexAccountDataChannel(config, exchangeAccountDataManager, publicDataInquirer))
 }
 class BitfinexAccountDataChannel(config: ExchangeConfig,
+                                 exchangeAccountDataManager: ActorRef,
                                  exchangePublicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BitfinexAccountDataChannel])
 
@@ -290,7 +293,7 @@ class BitfinexAccountDataChannel(config: ExchangeConfig,
     case None => throw new IllegalArgumentException(s"unable to find bitfinex tradepair: $tp. Available are: $bitfinexTradePairs")
   }
 
-  def symbolToAsset(symbol:String): Asset = bitfinexAssets.find(_.apiSymbol == symbol) match {
+  def symbolToAsset(symbol: String): Asset = bitfinexAssets.find(_.apiSymbol == symbol) match {
     case Some(bitfinexAsset) => bitfinexAsset.asset
     case None => StaticConfig.AllAssets.find(_._1 == symbol) match {
       case Some(globalAsset) => globalAsset._2
@@ -300,16 +303,14 @@ class BitfinexAccountDataChannel(config: ExchangeConfig,
 
   import BitfinexAccountDataJsonProtocoll._
 
-  val downStreamFlow: Flow[Seq[IncomingBitfinexAccountJson], Seq[ExchangeAccountStreamData], NotUsed] = Flow.fromFunction {
-    data: Seq[IncomingBitfinexAccountJson] =>
-      data.map {
-        // @formatter:off
-        case o: BitfinexOrderUpdateJson   => o.toOrderOrOrderUpdate(config.exchangeName, symbol => bitfinexTradePairs.find(_.apiSymbol == symbol).get)
-        case t: BitfinexTradeExecutedJson => t.toOrderUpdate(config.exchangeName, symbol => bitfinexTradePairs.find(_.apiSymbol == symbol).get)
-        case w: BitfinexWalletUpdateJson  => w.toWalletAssetUpdate(symbol => symbolToAsset(symbol))
-        case x                            => log.debug(s"$x"); throw new NotImplementedError
-        // @formatter:on
-      }
+
+  def exchangeDataMapping(in: Seq[IncomingBitfinexAccountJson]): Seq[ExchangeAccountStreamData] = in.map {
+    // @formatter:off
+    case o: BitfinexOrderUpdateJson   => o.toOrderOrOrderUpdate(config.exchangeName, symbol => bitfinexTradePairs.find(_.apiSymbol == symbol).get)
+    case t: BitfinexTradeExecutedJson => t.toOrderUpdate(config.exchangeName, symbol => bitfinexTradePairs.find(_.apiSymbol == symbol).get)
+    case w: BitfinexWalletUpdateJson  => w.toWalletAssetUpdate(symbol => symbolToAsset(symbol))
+    case x                            => log.debug(s"$x"); throw new NotImplementedError
+    // @formatter:on
   }
 
   def decodeJsonObject(s: String): Unit = {
@@ -371,25 +372,18 @@ class BitfinexAccountDataChannel(config: ExchangeConfig,
     }
   }
 
-  val wsFlow: Flow[Message, Seq[IncomingBitfinexAccountJson], NotUsed] = Flow.fromFunction {
+  def decodeMessage(message: Message): Future[Seq[IncomingBitfinexAccountJson]] = message match {
     case msg: TextMessage =>
-      val f: Future[Seq[IncomingBitfinexAccountJson]] = {
-        msg.toStrict(Config.httpTimeout)
-          .map(_.getStrictText)
-          .map {
-            case s: String if s.startsWith("{") => decodeJsonObject(s); Nil
-            case s: String if s.startsWith("[") => decodeDataArray(s)
-            case x => throw new RuntimeException(s"unidentified response: $x")
-          }
-      }
-      try {
-        Await.result(f, Config.httpTimeout.plus(1000.millis))
-      } catch {
-        case e: Exception => throw new RuntimeException(s"While decoding WebSocket stream event: $msg", e)
-      }
+      msg.toStrict(Config.httpTimeout)
+        .map(_.getStrictText)
+        .map {
+          case s: String if s.startsWith("{") => decodeJsonObject(s); Nil
+          case s: String if s.startsWith("[") => decodeDataArray(s)
+          case x => throw new RuntimeException(s"unidentified response: $x")
+        }
     case _ =>
       log.warn(s"Received non TextMessage")
-      Nil
+      Future.successful(Nil)
   }
 
   def authMessage: BitfinexAuthMessage = {
@@ -400,15 +394,18 @@ class BitfinexAccountDataChannel(config: ExchangeConfig,
       HttpUtil.hmacSha384Signature(authPayload, config.secrets.apiSecretKey),
       authNonce,
       authPayload,
-      filter = Array("trading","trading-tBTCUSD","wallet","wallet-exchange-BTC","balance","notify")
+      filter = Array("trading", "trading-tBTCUSD", "wallet", "wallet-exchange-BTC", "balance", "notify")
     )
   }
 
-  def createFlowTo(sink: Sink[Seq[ExchangeAccountStreamData], Future[Done]]): Flow[Message, Message, Promise[Option[Message]]] = {
+  val wsFlow: Flow[Message, Message, Promise[Option[Message]]] = {
     Flow.fromSinkAndSourceCoupledMat(
-      wsFlow
-        .via(downStreamFlow)
-        .toMat(sink)(Keep.right),
+      Sink.foreach[Message](message =>
+        decodeMessage(message)
+          .map(exchangeDataMapping)
+          .map(IncomingData)
+          .pipeTo(exchangeAccountDataManager)
+      ),
       Source(List(
         TextMessage(authMessage.toJson.compactPrint)
       )).concatMat(Source.maybe[Message])(Keep.right))(Keep.right)
@@ -444,18 +441,9 @@ class BitfinexAccountDataChannel(config: ExchangeConfig,
     )
   }
 
-  override def preStart(): Unit = {
-    try {
-      pullBitfinexTradePairs()
-      pullBitfinexAssets()
-    } catch {
-      case e: Exception => log.error("preStart failed", e)
-    }
-  }
-
-  def connect(sink: Sink[Seq[ExchangeAccountStreamData], Future[Done]]): Unit = {
+  def connect(): Unit = {
     if (log.isTraceEnabled) log.trace("starting WebSocket stream")
-    ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), createFlowTo(sink))
+    ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow)
     connected = createConnected
   }
 
@@ -501,10 +489,19 @@ class BitfinexAccountDataChannel(config: ExchangeConfig,
     }
   }
 
+
+  override def preStart(): Unit = {
+    try {
+      pullBitfinexTradePairs()
+      pullBitfinexAssets()
+      connect()
+      exchangeAccountDataManager ! Initialized()
+    } catch {
+      case e: Exception => log.error("preStart failed", e)
+    }
+  }
+
   override def receive: Receive = {
-    case StartStreamRequest(sink) =>
-      connect(sink)
-      sender() ! Initialized()
     // Messages from ExchangeAccountDataManager (forwarded from TradeRoom-LiquidityManager or TradeRoom-OrderExecutionManager)
     case CancelOrder(tradePair, externalOrderId) => cancelOrder(tradePair, externalOrderId.toLong).pipeTo(sender())
     case NewLimitOrder(o) => newLimitOrder(o).pipeTo(sender())

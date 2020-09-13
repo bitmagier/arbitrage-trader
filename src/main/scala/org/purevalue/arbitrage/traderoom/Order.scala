@@ -32,7 +32,9 @@ case class Order(externalId: String,
       case TradeSide.Buy => "<-"
       case TradeSide.Sell => "->"
     }
-    s"[$side $cumulativeFilledQuantity ${tradePair.baseAsset.officialSymbol} $direction ${tradePair.quoteAsset.officialSymbol}]"
+    s"[$side ${formatDecimal(cumulativeFilledQuantity, tradePair.baseAsset.visibleAmountFractionDigits)} " +
+      s"${tradePair.baseAsset.officialSymbol}$direction${tradePair.quoteAsset.officialSymbol} " +
+      s"${formatDecimal(cumulativeFilledQuantity * priceAverage, tradePair.quoteAsset.visibleAmountFractionDigits)}]"
   }
 
 
@@ -150,7 +152,8 @@ case class OrderRequest(id: UUID,
       case TradeSide.Buy => s"${tradePair.baseAsset.officialSymbol}<-${tradePair.quoteAsset.officialSymbol}"
       case TradeSide.Sell => s"${tradePair.baseAsset.officialSymbol}->${tradePair.quoteAsset.officialSymbol}"
     }
-    s"($exchange: ${formatDecimal(amountBaseAsset, tradePair.baseAsset.visibleAmountFractionDigits)} $orderDesc)"
+    s"($exchange: ${formatDecimal(amountBaseAsset, tradePair.baseAsset.visibleAmountFractionDigits)} " +
+      s"$orderDesc ${formatDecimal(amountBaseAsset * limit, tradePair.quoteAsset.visibleAmountFractionDigits)})"
   }
   def shortDesc: String = s"OrderRequest($exchange: $tradeDesc)"
 
