@@ -145,6 +145,15 @@ case class OrderRequest(id: UUID,
                         fee: Fee,
                         amountBaseAsset: Double,
                         limit: Double) {
+  def tradeDesc: String = {
+    val orderDesc = tradeSide match {
+      case TradeSide.Buy => s"${tradePair.baseAsset.officialSymbol}<-${tradePair.quoteAsset.officialSymbol}"
+      case TradeSide.Sell => s"${tradePair.baseAsset.officialSymbol}->${tradePair.quoteAsset.officialSymbol}"
+    }
+    s"($exchange: ${formatDecimal(amountBaseAsset, tradePair.baseAsset.visibleAmountFractionDigits)} $orderDesc)"
+  }
+  def shortDesc: String = s"OrderRequest($exchange: $tradeDesc)"
+
 
   override def toString: String = s"OrderRequest($id, orderBundleId:$orderBundleId, $exchange, $tradePair, $tradeSide, $fee, " +
     s"amountBaseAsset:${formatDecimal(amountBaseAsset)}, limit:${formatDecimal(limit)})"
@@ -222,6 +231,7 @@ case class OrderRequestBundle(id: UUID,
                               creationTime: LocalDateTime,
                               orderRequests: List[OrderRequest],
                               bill: OrderBill) {
+  def tradeDesc: String = s"""[${orderRequests.map(_.tradeDesc).mkString(" & ")}]"""
 
   def involvedReserveAssets: Set[Asset] = orderRequests.flatMap(e => Seq(e.tradePair.baseAsset, e.tradePair.quoteAsset)).toSet
 

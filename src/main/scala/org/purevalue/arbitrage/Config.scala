@@ -57,19 +57,21 @@ case class OrderBundleSafetyGuardConfig(maximumReasonableWinPerOrderBundleUSDT: 
 case class TradeRoomConfig(oneTradeOnlyTestMode: Boolean,
                            tradeSimulation: Boolean,
                            referenceTickerExchange: String,
-                           stats: TradeRoomStatsConfig,
+                           maxOrderLifetime: Duration,
                            restartWhenAnExchangeDataStreamIsOlderThan: Duration,
+                           stats: TradeRoomStatsConfig,
                            orderBundleSafetyGuard: OrderBundleSafetyGuardConfig)
 object TradeRoomConfig {
   def apply(c: com.typesafe.config.Config): TradeRoomConfig = TradeRoomConfig(
     c.getBoolean("one-trade-only-test-mode"),
     c.getBoolean("trade-simulation"),
     c.getString("reference-ticker-exchange"),
+    c.getDuration("max-order-lifetime"),
+    c.getDuration("restart-when-an-exchange-data-stream-is-older-than"),
     TradeRoomStatsConfig(
       c.getDuration("stats.report-interval"),
       Asset(c.getString("stats.aggregated-liquidity-report-asset"))
     ),
-    c.getDuration("restart-when-an-exchange-data-stream-is-older-than"),
     c.getConfig("order-bundle-safety-guard") match {
       case c: com.typesafe.config.Config => OrderBundleSafetyGuardConfig(
         c.getDouble("max-reasonable-win-per-order-bundle-usdt"),

@@ -129,7 +129,7 @@ class BitfinexPublicDataChannel(config: ExchangeConfig, bitfinexPublicDataInquir
   //  }
 
   // handles one partition of incoming data
-  class FlowPart() {
+  class StreamPartition() {
     var tickerSymbolsByChannelId: Map[Int, String] = Map()
 
     def tickerChannelIdToTradePair(channelId: Int): TradePair = bitfinexTradePairBySymbol(tickerSymbolsByChannelId(channelId))
@@ -304,7 +304,7 @@ class BitfinexPublicDataChannel(config: ExchangeConfig, bitfinexPublicDataInquir
       bitfinexTradePairBySymbol.values.sliding(MaximumNumberOfChannelsPerConnection).foreach { group =>
         if (log.isTraceEnabled) log.trace("starting a WebSocket stream partition")
         val subscribeMessages: List[SubscribeRequestJson] = group.map(e => subscribeMessage(e)).toList
-        val flowPart = new FlowPart()
+        val flowPart = new StreamPartition()
         val sink: Sink[IncomingPublicBitfinexJson, NotUsed] = flowPart.createSinkTo(downstreamSink)
         val ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), createWSFlowTo(flowPart.wsFlow, sink, subscribeMessages))
         wsList = ws :: wsList

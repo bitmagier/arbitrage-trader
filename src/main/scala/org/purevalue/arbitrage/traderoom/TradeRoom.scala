@@ -12,7 +12,7 @@ import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.trader.FooTrader
 import org.purevalue.arbitrage.traderoom.Asset.{Bitcoin, USDT}
 import org.purevalue.arbitrage.traderoom.Exchange.{GetTradePairs, RemoveTradePair, StartStreaming}
-import org.purevalue.arbitrage.traderoom.ExchangeAccountDataManager.{NewLimitOrder, NewOrderAck}
+import org.purevalue.arbitrage.traderoom.ExchangeAccountDataManager.{CancelOrder, NewLimitOrder, NewOrderAck}
 import org.purevalue.arbitrage.traderoom.ExchangeLiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityRequest}
 import org.purevalue.arbitrage.traderoom.OrderSetPlacer.NewOrderSet
 import org.purevalue.arbitrage.traderoom.TradeRoom._
@@ -46,7 +46,9 @@ object TradeRoom {
 
   case class OrderBundle(orderRequestBundle: OrderRequestBundle,
                          lockedLiquidity: Seq[LiquidityLock],
-                         ordersRefs: Seq[OrderRef])
+                         ordersRefs: Seq[OrderRef]) {
+    def shortDesc: String = s"OrderBundle(${orderRequestBundle.id}, ${orderRequestBundle.tradeDesc})"
+  }
   case class FinishedOrderBundle(bundle: OrderBundle,
                                  finishedOrders: Seq[Order],
                                  finishTime: Instant,
@@ -108,8 +110,8 @@ class TradeRoom(config: TradeRoomConfig,
   private val activeOrders: ConcurrentMap[String, ConcurrentMap[OrderRef, Order]] = TrieMap()
 
   // housekeeping of our requests: OrderBundles + LiquidityTx
-  private val openOrderBundles: ConcurrentMap[UUID, OrderBundle] = TrieMap() // Map(order-bundle-id -> OrderBundle) maintained by TradeRoom
-  private val openLiquidityTx: ConcurrentMap[OrderRef, LiquidityTx] = TrieMap() // maintained by TradeRoom
+  private val activeOrderBundles: ConcurrentMap[UUID, OrderBundle] = TrieMap() // Map(order-bundle-id -> OrderBundle) maintained by TradeRoom
+  private val activeLiquidityTx: ConcurrentMap[OrderRef, LiquidityTx] = TrieMap() // maintained by TradeRoom
   private var finishedOrderBundles: List[FinishedOrderBundle] = List()
   private var finishedLiquidityTxs: List[FinishedLiquidityTx] = List()
 
@@ -121,9 +123,9 @@ class TradeRoom(config: TradeRoomConfig,
 
   private val tradeContext: TradeContext = TradeContext(tickers, wallets, fees, doNotTouchAssets)
 
-  private val orderBundleSafetyGuard = new OrderBundleSafetyGuard(config.orderBundleSafetyGuard, exchangesConfig, tradeContext, dataAge, openOrderBundles)
+  private val orderBundleSafetyGuard = new OrderBundleSafetyGuard(config.orderBundleSafetyGuard, exchangesConfig, tradeContext, dataAge, activeOrderBundles)
 
-  val orderManagementSupervisorSchedule: Cancellable = actorSystem.scheduler.scheduleWithFixedDelay(0.seconds, 1.second, self, OrderManagementSupervisor())
+  val orderManagementSupervisorSchedule: Cancellable = actorSystem.scheduler.scheduleWithFixedDelay(0.seconds, 3.second, self, OrderManagementSupervisor())
   val logScheduleRate: FiniteDuration = FiniteDuration(config.stats.reportInterval.toNanos, TimeUnit.NANOSECONDS)
   val logSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(3.minutes, logScheduleRate, self, LogStats())
   val deathWatchSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(3.minutes, 1.minute, self, DeathWatch())
@@ -175,12 +177,12 @@ class TradeRoom(config: TradeRoomConfig,
     if (doNotTouchAssets(request.exchange).intersect(request.tradePair.involvedAssets).nonEmpty) throw new IllegalArgumentException
 
     // this should not occur - but here is a last guard
-    if (openLiquidityTx.keys.exists(ref => ref.exchange == request.exchange && ref.tradePair == request.tradePair)) {
+    if (activeLiquidityTx.keys.exists(ref => ref.exchange == request.exchange && ref.tradePair == request.tradePair)) {
       log.warn(s"Ignoring liquidity tx because a similar one (same trade pair on same exchange) is still in place: $request")
       return
     }
 
-    if (config.oneTradeOnlyTestMode && (finishedLiquidityTxs.nonEmpty || openLiquidityTx.nonEmpty)) {
+    if (config.oneTradeOnlyTestMode && (finishedLiquidityTxs.nonEmpty || activeLiquidityTx.nonEmpty)) {
       log.debug("Ignoring further liquidity tx, because we are NOT in production mode")
       return
     }
@@ -190,14 +192,14 @@ class TradeRoom(config: TradeRoomConfig,
       case Success(ack) =>
         if (log.isTraceEnabled) log.trace(s"successfully placed liquidity tx order $ack")
         val ref = ack.toOrderRef
-        openLiquidityTx.update(ref, LiquidityTx(request, ref, Instant.now))
+        activeLiquidityTx.update(ref, LiquidityTx(request, ref, Instant.now))
       case Failure(e) =>
         log.error("placing liquidity order failed", e)
     }
   }
 
   def registerOrderBundle(b: OrderRequestBundle, lockedLiquidity: Seq[LiquidityLock], orders: Seq[OrderRef]) {
-    openOrderBundles.update(b.id, OrderBundle(b, lockedLiquidity, orders))
+    activeOrderBundles.update(b.id, OrderBundle(b, lockedLiquidity, orders))
   }
 
   def tryToPlaceOrderBundle(bundle: OrderRequestBundle): Unit = {
@@ -205,7 +207,7 @@ class TradeRoom(config: TradeRoomConfig,
       doNotTouchAssets(e.exchange).intersect(e.tradePair.involvedAssets).nonEmpty)) {
       log.debug(s"ignoring $bundle containing a DO-NOT-TOUCH asset")
     }
-    if (config.oneTradeOnlyTestMode && (finishedOrderBundles.nonEmpty || openOrderBundles.nonEmpty)) {
+    if (config.oneTradeOnlyTestMode && (finishedOrderBundles.nonEmpty || activeOrderBundles.nonEmpty)) {
       log.debug("Ignoring further order request bundle, because we are NOT in production mode")
       return
     }
@@ -321,7 +323,7 @@ class TradeRoom(config: TradeRoomConfig,
           activeOrders(exchangeName)
         ),
         () => referenceTicker,
-        () => openLiquidityTx.filter(_._1.exchange == exchangeName).values
+        () => activeLiquidityTx.filter(_._1.exchange == exchangeName).values
       ), "Exchange-" + camelName))
   }
 
@@ -372,8 +374,8 @@ class TradeRoom(config: TradeRoomConfig,
       log.info(
         s"""${Emoji.Robot}  Shutting down TradeRoom after first finished order bundle, as configured  (trade-room.production-mode)
            |activeOrders: $activeOrders
-           |openOrderBundles: $openOrderBundles
-           |openLiquidityTx: $openLiquidityTx
+           |openOrderBundles: $activeOrderBundles
+           |openLiquidityTx: $activeLiquidityTx
            |finishedOrderBundles: $finishedOrderBundles
            |finishedLiquidityTx: $finishedLiquidityTxs""".mkString("\n"))
       self ! PoisonPill
@@ -381,6 +383,15 @@ class TradeRoom(config: TradeRoomConfig,
   }
 
   def logStats(): Unit = {
+    val now = Instant.now
+
+    def logWalletOverview(): Unit = {
+      for (w <- wallets.values) {
+        val walletOverview: String = w.toOverviewString(config.stats.aggregatedliquidityReportAsset, tickers(w.exchange))
+        log.info(s"${Emoji.Robot}  $walletOverview")
+      }
+    }
+
     def toEntriesPerExchange[T](m: collection.Map[String, collection.Map[TradePair, T]]): String = {
       m.map(e => (e._1, e._2.values.size))
         .toSeq
@@ -389,60 +400,80 @@ class TradeRoom(config: TradeRoomConfig,
         .mkString(", ")
     }
 
-    for (w <- wallets.values) {
-      val walletOverview: String = w.toOverviewString(config.stats.aggregatedliquidityReportAsset, tickers(w.exchange))
-      log.info(s"${Emoji.Robot}  $walletOverview")
+
+    def logTickerStats(): Unit = {
+      val freshestTicker = dataAge.maxBy(_._2.tickerTS.toEpochMilli)
+      val oldestTicker = dataAge.minBy(_._2.tickerTS.toEpochMilli)
+      log.info(s"${Emoji.Robot}  TradeRoom stats: [general] " +
+        s"ticker:[${toEntriesPerExchange(tickers)}]" +
+        s" (oldest: ${oldestTicker._1} ${Duration.between(oldestTicker._2.tickerTS, Instant.now).toMillis} ms," +
+        s" freshest: ${freshestTicker._1} ${Duration.between(freshestTicker._2.tickerTS, Instant.now).toMillis} ms)")
     }
 
-    val freshestTicker = dataAge.maxBy(_._2.tickerTS.toEpochMilli)
-    val oldestTicker = dataAge.minBy(_._2.tickerTS.toEpochMilli)
-    log.info(s"${Emoji.Robot}  TradeRoom stats: [general] " +
-      s"ticker:[${toEntriesPerExchange(tickers)}]" +
-      s" (oldest: ${oldestTicker._1} ${Duration.between(oldestTicker._2.tickerTS, Instant.now).toMillis} ms," +
-      s" freshest: ${freshestTicker._1} ${Duration.between(freshestTicker._2.tickerTS, Instant.now).toMillis} ms)")
 
-    log.info(s"${Emoji.Robot}  OrderBundleSafetyGuard decision stats: [${orderBundleSafetyGuard.unsafeStats.mkString("|")}]")
+    def logOrderBundleSafetyGuardStats(): Unit = {
+      log.info(s"${Emoji.Robot}  OrderBundleSafetyGuard decision stats: [${orderBundleSafetyGuard.unsafeStats.mkString("|")}]")
+    }
 
-    val now = Instant.now
+    def logOrderGainStats(): Unit = {
+      val lastHourArbitrageSumUSDT: Double =
+        OrderBill.aggregateValues(
+          finishedOrderBundles
+            .filter(b => Duration.between(b.finishTime, now).toHours < 1)
+            .flatMap(_.bill.balanceSheet),
+          USDT,
+          tickers)
+      val lastHourLiquidityTxSumUSDT: Double =
+        OrderBill.aggregateValues(
+          finishedLiquidityTxs
+            .filter(b => Duration.between(b.finishTime, now).toHours < 1)
+            .flatMap(_.bill.balanceSheet),
+          USDT,
+          tickers)
 
+      // TODO log a info message with aggregation on currency level
+      val lastHourSumUSDT: Double = lastHourArbitrageSumUSDT + lastHourLiquidityTxSumUSDT
+      log.info(s"${Emoji.Robot}  Last 1h: cumulated gain: ${formatDecimal(lastHourSumUSDT, 2)} USDT " +
+        s"(arbitrage orders: ${formatDecimal(lastHourArbitrageSumUSDT, 2)} USDT, " +
+        s"liquidity tx: ${formatDecimal(lastHourLiquidityTxSumUSDT)} USDT) ")
 
-    val lastHourArbitrageSumUSDT: Double =
-      OrderBill.aggregateValues(
-        finishedOrderBundles
-          .filter(b => Duration.between(b.finishTime, now).toHours < 1)
-          .flatMap(_.bill.balanceSheet),
-        USDT,
-        tickers)
-    val lastHourLiquidityTxSumUSDT: Double =
-      OrderBill.aggregateValues(
-        finishedLiquidityTxs
-          .filter(b => Duration.between(b.finishTime, now).toHours < 1)
-          .flatMap(_.bill.balanceSheet),
-        USDT,
-        tickers)
+      val totalArbitrageSumUSDT: Double =
+        OrderBill.aggregateValues(
+          finishedOrderBundles
+            .flatMap(_.bill.balanceSheet),
+          USDT,
+          tickers)
+      val totalLiquidityTxSumUSDT: Double =
+        OrderBill.aggregateValues(
+          finishedLiquidityTxs
+            .flatMap(_.bill.balanceSheet),
+          USDT,
+          tickers)
+      val totalSumUSDT: Double = totalArbitrageSumUSDT + totalLiquidityTxSumUSDT
+      log.info(s"${Emoji.Robot}  Total cumulated gain: ${formatDecimal(totalSumUSDT, 2)} USDT " +
+        s"(arbitrage orders: ${formatDecimal(totalArbitrageSumUSDT, 2)} USDT, liquidity tx: " +
+        s"${formatDecimal(totalLiquidityTxSumUSDT, 2)} USDT) ")
+    }
 
-    // TODO log a info message with aggregation on currency level
-    val lastHourSumUSDT: Double = lastHourArbitrageSumUSDT + lastHourLiquidityTxSumUSDT
-    log.info(s"${Emoji.Robot}  Last 1h: cumulated gain: ${formatDecimal(lastHourSumUSDT, 2)} USDT " +
-      s"(arbitrage orders: ${formatDecimal(lastHourArbitrageSumUSDT, 2)} USDT, " +
-      s"liquidity tx: ${formatDecimal(lastHourLiquidityTxSumUSDT)} USDT) ")
+    def logFinalOrderStateStats(): Unit = {
+      def orderStateStats(orders: Iterable[Order]): Map[OrderStatus, Int] =
+        orders
+          .groupBy(_.orderStatus)
+          .map(e => (e._1, e._2.size))
 
-    val totalArbitrageSumUSDT: Double =
-      OrderBill.aggregateValues(
-        finishedOrderBundles
-          .flatMap(_.bill.balanceSheet),
-        USDT,
-        tickers)
-    val totalLiquidityTxSumUSDT: Double =
-      OrderBill.aggregateValues(
-        finishedLiquidityTxs
-          .flatMap(_.bill.balanceSheet),
-        USDT,
-        tickers)
-    val totalSumUSDT: Double = totalArbitrageSumUSDT + totalLiquidityTxSumUSDT
-    log.info(s"${Emoji.Robot}  Total cumulated gain: ${formatDecimal(totalSumUSDT, 2)} USDT " +
-      s"(arbitrage orders: ${formatDecimal(totalArbitrageSumUSDT, 2)} USDT, liquidity tx: " +
-      s"${formatDecimal(totalLiquidityTxSumUSDT, 2)} USDT) ")
+      val liquidityTxOrders1h = finishedLiquidityTxs.map(_.finishedOrder)
+      val orderBundleOrders1h = finishedOrderBundles.flatMap(_.finishedOrders)
+
+      log.info(
+        s"""${Emoji.Robot}  Last 1h final order status: trader tx:[${orderStateStats(orderBundleOrders1h).mkString(",")}],
+           |liquidity tx: [${orderStateStats(liquidityTxOrders1h).mkString(",")}]""".stripMargin)
+    }
+
+    logWalletOverview()
+    logTickerStats()
+    logOrderBundleSafetyGuardStats()
+    logFinalOrderStateStats()
+    logOrderGainStats()
   }
 
 
@@ -480,7 +511,7 @@ class TradeRoom(config: TradeRoomConfig,
 
   // cleanup completed order bundle, which is still in the "active" list
   def cleanupOrderBundle(orderBundleId: UUID): Unit = {
-    val bundle: OrderBundle = openOrderBundles(orderBundleId)
+    val bundle: OrderBundle = activeOrderBundles(orderBundleId)
     val orders: Seq[Order] = bundle.ordersRefs.flatMap(activeOrder)
     val finishTime = orders.map(_.lastUpdateTime).max
 
@@ -489,7 +520,7 @@ class TradeRoom(config: TradeRoomConfig,
     this.synchronized {
       finishedOrderBundles = finishedOrderBundle :: finishedOrderBundles
     }
-    openOrderBundles.remove(orderBundleId)
+    activeOrderBundles.remove(orderBundleId)
     bundle.ordersRefs.foreach {
       e => activeOrders(e.exchange).remove(e)
     }
@@ -512,7 +543,7 @@ class TradeRoom(config: TradeRoomConfig,
     this.synchronized {
       finishedLiquidityTxs = finishedLiquidityTx :: finishedLiquidityTxs
     }
-    openLiquidityTx.remove(tx.orderRef)
+    activeLiquidityTx.remove(tx.orderRef)
     activeOrders(tx.orderRef.exchange).remove(tx.orderRef)
   }
 
@@ -542,7 +573,7 @@ class TradeRoom(config: TradeRoomConfig,
         log.info(s"${Emoji.Robot}  Liquidity tx ${tx.orderRef} FILLED")
         cleanupLiquidityTxOrder(tx)
       case Some(order) if order.orderStatus.isFinal =>
-        log.info(s"${Emoji.Robot}  Liquidity tx ${tx.orderRef} has final state ${order.orderStatus} - ")
+        log.warn(s"${Emoji.NoSupport}  Liquidity tx ${tx.orderRef} finished with state ${order.orderStatus}")
         cleanupLiquidityTxOrder(tx)
       case Some(order) => // order still active: nothing to do
         if (log.isTraceEnabled) log.trace(s"Watching liquidity tx minor order update: $order")
@@ -551,21 +582,43 @@ class TradeRoom(config: TradeRoomConfig,
   }
 
   def onOrderUpdate(ref: OrderRef): Unit = {
-    openOrderBundles.values.find(e => e.ordersRefs.contains(ref)) match {
+    activeOrderBundles.values.find(e => e.ordersRefs.contains(ref)) match {
       case Some(orderBundle) =>
         cleanupFinishedOrderBundle(orderBundle)
         return
       case None => // proceed to next statement
     }
 
-    openLiquidityTx.get(ref) match {
+    activeLiquidityTx.get(ref) match {
       case Some(liquidityTx) => cleanupPossiblyFinishedLiquidityTxOrder(liquidityTx)
       case None => log.error(s"Got order-update (${ref.exchange}: ${ref.externalOrderId}) but cannot find active order bundle or liquidity tx with that id")
     }
   }
 
-  // TODO schedule job
+  def cancelAgedActiveOrders(): Unit = {
+    val limit: Instant = Instant.now.minus(config.maxOrderLifetime)
+
+    val orderToCancel: Iterable[Order] =
+      activeOrders.values.flatten
+        .filter(_._2.creationTime.isBefore(limit))
+        .map(_._2)
+
+    for (o: Order <- orderToCancel) {
+      val source: String = activeLiquidityTx.values.find(_.orderRef.externalOrderId == o.externalId) match {
+        case Some(liquidityTx) => liquidityTx.orderRequest.shortDesc
+        case None => activeOrderBundles.values.find(_.ordersRefs.exists(_.externalOrderId == o.externalId)) match {
+          case Some(orderBundle) => orderBundle.shortDesc
+        }
+      }
+
+      log.warn(s"${Emoji.Judgemental}  Canceling aged order from $source")
+      exchanges(o.exchange) ! CancelOrder(o.tradePair, o.externalId)
+    }
+  }
+
   def houseKeeping(): Unit = {
+    cancelAgedActiveOrders()
+
     // TODO report entries in openOrders, which are not referenced by activeOrderBundle or activeLiquidityTx
     // TODO report apparently dead entries in openOrderBundle
     // TODO report apparently dead entries in openLiquidityTx
@@ -633,16 +686,18 @@ class TradeRoom(config: TradeRoomConfig,
     // messages from ExchangeLiquidityManager
     case LiquidityTransformationOrder(orderRequest) => placeLiquidityTransformationOrder(orderRequest)
 
-    // messages from outself
-    case OrderManagementSupervisor() =>
-      shutdownAfterFirstOrderInNonProductionMode()
-    // TODO handleNotWorkingAgedOrderBundles()
-
+    // from ExchangeAccountDataManager
     case OrderUpdateTrigger(orderRef) =>
       onOrderUpdate(orderRef)
 
     case t: WalletUpdateTrigger =>
       exchanges(t.exchange).forward(t)
+
+
+    // messages from outself
+    case OrderManagementSupervisor() =>
+      shutdownAfterFirstOrderInNonProductionMode()
+      houseKeeping()
 
     case LogStats() =>
       if (exchangesInitialized)
