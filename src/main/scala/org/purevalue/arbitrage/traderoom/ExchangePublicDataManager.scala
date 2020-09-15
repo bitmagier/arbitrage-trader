@@ -6,7 +6,7 @@ import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, Props, Statu
 import org.purevalue.arbitrage.traderoom.Exchange.ExchangePublicDataChannelInit
 import org.purevalue.arbitrage.traderoom.ExchangePublicDataManager._
 import org.purevalue.arbitrage.util.Util.formatDecimal
-import org.purevalue.arbitrage.{Config, ExchangeConfig, Main}
+import org.purevalue.arbitrage.{Config, ExchangeConfig, Main, TradeRoomConfig}
 import org.slf4j.LoggerFactory
 
 import scala.collection._
@@ -73,18 +73,20 @@ object ExchangePublicDataManager {
   case class IncomingData(data: Seq[ExchangePublicStreamData])
 
   def props(config: ExchangeConfig,
+            tradeRoomConfig: TradeRoomConfig,
             tradePairs: Set[TradePair],
             exchangePublicDataInquirer: ActorRef,
             exchange: ActorRef,
             publicDataChannelProps: ExchangePublicDataChannelInit,
             publicData: ExchangePublicData): Props =
-    Props(new ExchangePublicDataManager(config, tradePairs, exchangePublicDataInquirer, exchange, publicDataChannelProps, publicData))
+    Props(new ExchangePublicDataManager(config, tradeRoomConfig, tradePairs, exchangePublicDataInquirer, exchange, publicDataChannelProps, publicData))
 }
 
 /**
  * Manages all sorts of public data streams at one exchange
  */
 case class ExchangePublicDataManager(config: ExchangeConfig,
+                                     tradeRoomConfig: TradeRoomConfig,
                                      tradePairs: Set[TradePair],
                                      exchangePublicDataInquirer: ActorRef,
                                      exchange: ActorRef,
@@ -141,7 +143,7 @@ case class ExchangePublicDataManager(config: ExchangeConfig,
   def initTimeoutCheck(): Unit = {
     if (initialized) initCheckSchedule.cancel()
     else {
-      if (Duration.between(initTimestamp, Instant.now()).compareTo(Config.dataManagerInitTimeout) > 0) {
+      if (Duration.between(initTimestamp, Instant.now()).compareTo(tradeRoomConfig.dataManagerInitTimeout) > 0) {
         log.info(s"Killing ${config.exchangeName}-PublicDataManager")
         self ! Kill
       }

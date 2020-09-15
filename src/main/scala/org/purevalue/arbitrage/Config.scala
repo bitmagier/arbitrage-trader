@@ -40,7 +40,7 @@ object ExchangeConfig {
       c.getDouble("fee.maker"),
       c.getDouble("fee.taker"),
       doNotTouchTheseAssets,
-      if (c.hasPath("ref-code")) Some(c.getString("ref-code")) else None
+      if (c.hasPath("ref-code")) Some(c.getString("ref-code")) else None,
     )
   }
 
@@ -54,15 +54,26 @@ case class OrderBundleSafetyGuardConfig(maximumReasonableWinPerOrderBundleUSDT: 
                                         maxOrderLimitTickerVariance: Double,
                                         maxTickerAge: Duration,
                                         minTotalGainInUSDT: Double)
+object OrderBundleSafetyGuardConfig {
+  def apply(c: com.typesafe.config.Config): OrderBundleSafetyGuardConfig = OrderBundleSafetyGuardConfig(
+    c.getDouble("max-reasonable-win-per-order-bundle-usdt"),
+    c.getDouble("max-order-limit-ticker-variance"),
+    c.getDuration("max-ticker-age"),
+    c.getDouble("min-total-gain-in-usdt")
+  )
+}
 case class TradeRoomConfig(oneTradeOnlyTestMode: Boolean,
                            tradeSimulation: Boolean,
                            referenceTickerExchange: String,
                            maxOrderLifetime: Duration,
                            restartWhenAnExchangeDataStreamIsOlderThan: Duration,
-                           pioneerTransactionUsdt: Double,
+                           pioneerTransactionUSDT: Double,
+                           dataManagerInitTimeout: Duration,
                            stats: TradeRoomStatsConfig,
-                           orderBundleSafetyGuard: OrderBundleSafetyGuardConfig) {
-  if (pioneerTransactionUsdt > 100.0) throw new IllegalArgumentException("pioneer transaction value is unnecessary big")
+                           orderBundleSafetyGuard: OrderBundleSafetyGuardConfig,
+                           liquidityManagerConfig: LiquidityManagerConfig,
+                           exchanges: Map[String, ExchangeConfig]) {
+  if (pioneerTransactionUSDT > 100.0) throw new IllegalArgumentException("pioneer transaction value is unnecessary big")
 }
 object TradeRoomConfig {
   def apply(c: com.typesafe.config.Config): TradeRoomConfig = TradeRoomConfig(
@@ -72,18 +83,15 @@ object TradeRoomConfig {
     c.getDuration("max-order-lifetime"),
     c.getDuration("restart-when-an-exchange-data-stream-is-older-than"),
     c.getDouble("pioneer-transaction-usdt"),
+    c.getDuration("data-manager-init-timeout"),
     TradeRoomStatsConfig(
       c.getDuration("stats.report-interval"),
       Asset(c.getString("stats.aggregated-liquidity-report-asset"))
     ),
-    c.getConfig("order-bundle-safety-guard") match {
-      case c: com.typesafe.config.Config => OrderBundleSafetyGuardConfig(
-        c.getDouble("max-reasonable-win-per-order-bundle-usdt"),
-        c.getDouble("max-order-limit-ticker-variance"),
-        c.getDuration("max-ticker-age"),
-        c.getDouble("min-total-gain-in-usdt")
-      )
-    })
+    OrderBundleSafetyGuardConfig(c.getConfig("order-bundle-safety-guard")),
+    LiquidityManagerConfig(c.getConfig("liquidity-manager")),
+    c.getStringList("active-exchanges").asScala.map(e => e -> ExchangeConfig(e, c.getConfig(s"exchange.$e"))).toMap
+  )
 }
 
 case class TradeRoomStatsConfig(reportInterval: Duration,
@@ -119,15 +127,6 @@ object Config {
   val gracefulShutdownTimeout: Duration = c.getDuration("graceful-shutdown-timeout")
 
   val tradeRoom: TradeRoomConfig = TradeRoomConfig(c.getConfig("trade-room"))
-
-  private val exchangesConfig = c.getConfig("trade-room.exchange")
-  val activeExchanges: Seq[String] = exchangesConfig.getStringList("active").asScala
-  val dataManagerInitTimeout: Duration = exchangesConfig.getDuration("data-manager-init-timeout")
-
-  private def _exchange(name: String): ExchangeConfig = ExchangeConfig(name, exchangesConfig.getConfig(name))
-
-  val exchanges: Map[String, ExchangeConfig] = activeExchanges.map(e => (e, _exchange(e))).toMap
-  val liquidityManager: LiquidityManagerConfig = LiquidityManagerConfig(c.getConfig("liquidity-manager"))
 
   def trader(name: String): com.typesafe.config.Config = c.getConfig(s"trader.$name")
 }

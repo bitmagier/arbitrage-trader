@@ -65,9 +65,8 @@ object TradeRoom {
                                  bill: OrderBill)
 
   // communication with ourself
-  case class OrderManagementSupervisor()
   case class LogStats()
-  case class DeathWatch()
+  case class HouseKeeping()
   case class Stop(timeout: Duration)
   // from/to Exchange
   case class RunPioneerTransaction(exchange: String)
@@ -78,8 +77,8 @@ object TradeRoom {
   // from liquidity managers
   case class LiquidityTransformationOrder(orderRequest: OrderRequest)
 
-  def props(config: TradeRoomConfig, exchangesConfig: Map[String, ExchangeConfig], liquidityManagerConfig: LiquidityManagerConfig): Props =
-    Props(new TradeRoom(config, exchangesConfig, liquidityManagerConfig))
+  def props(config: TradeRoomConfig): Props =
+    Props(new TradeRoom(config))
 }
 
 /**
@@ -88,9 +87,7 @@ object TradeRoom {
  *  - provides higher level (aggregated per order bundle) interface to traders
  *  - manages trade history
  */
-class TradeRoom(config: TradeRoomConfig,
-                exchangesConfig: Map[String, ExchangeConfig],
-                liquidityManagerConfig: LiquidityManagerConfig) extends Actor {
+class TradeRoom(config: TradeRoomConfig) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[TradeRoom])
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
@@ -119,19 +116,18 @@ class TradeRoom(config: TradeRoomConfig,
   private var finishedLiquidityTxs: List[FinishedLiquidityTx] = List()
 
   private val fees: Map[String, Fee] =
-    exchangesConfig.values.map(e => (e.exchangeName, e.fee)).toMap // TODO query from exchange
+    config.exchanges.values.map(e => (e.exchangeName, e.fee)).toMap // TODO query from exchange
 
   private val doNotTouchAssets: Map[String, Seq[Asset]] =
-    exchangesConfig.values.map(e => (e.exchangeName, e.doNotTouchTheseAssets)).toMap
+    config.exchanges.values.map(e => (e.exchangeName, e.doNotTouchTheseAssets)).toMap
 
   private val tradeContext: TradeContext = TradeContext(tickers, wallets, fees, doNotTouchAssets)
 
-  private val orderBundleSafetyGuard = new OrderBundleSafetyGuard(config.orderBundleSafetyGuard, exchangesConfig, tradeContext, dataAge, activeOrderBundles)
+  private val orderBundleSafetyGuard = new OrderBundleSafetyGuard(config.orderBundleSafetyGuard, config.exchanges, tradeContext, dataAge, activeOrderBundles)
 
-  val orderManagementSupervisorSchedule: Cancellable = actorSystem.scheduler.scheduleWithFixedDelay(0.seconds, 3.second, self, OrderManagementSupervisor())
+  val houseKeepingSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(5.seconds, 3.seconds, self, HouseKeeping())
   val logScheduleRate: FiniteDuration = FiniteDuration(config.stats.reportInterval.toNanos, TimeUnit.NANOSECONDS)
   val logSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(3.minutes, logScheduleRate, self, LogStats())
-  val deathWatchSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(3.minutes, 1.minute, self, DeathWatch())
 
   /**
    * Lock liquidity
@@ -283,7 +279,7 @@ class TradeRoom(config: TradeRoomConfig,
     }
     val assetsToRemove: Set[Asset] = eTradePairs
       .map(_._2.baseAsset) // set of candidate assets
-      .filterNot(e => exchangesConfig.values.exists(_.reserveAssets.contains(e))) // don't select reserve assets
+      .filterNot(e => config.exchanges.values.exists(_.reserveAssets.contains(e))) // don't select reserve assets
       .filterNot(a =>
         eTradePairs
           .filter(_._2.baseAsset == a) // all connected tradepairs X -> ...
@@ -310,14 +306,15 @@ class TradeRoom(config: TradeRoomConfig,
     val camelName = exchangeName.substring(0, 1).toUpperCase + exchangeName.substring(1)
     tickers += exchangeName -> TrieMap[TradePair, Ticker]()
     dataAge += exchangeName -> PublicDataTimestamps(None, Instant.MIN)
-    wallets += exchangeName -> Wallet(exchangeName, Map(), exchangesConfig(exchangeName))
+    wallets += exchangeName -> Wallet(exchangeName, Map(), config.exchanges(exchangeName))
     activeOrders += exchangeName -> TrieMap()
 
     exchanges = exchanges + (exchangeName -> context.actorOf(
       Exchange.props(
         exchangeName,
-        exchangesConfig(exchangeName),
-        liquidityManagerConfig,
+        config.exchanges(exchangeName),
+        config.liquidityManagerConfig,
+        config,
         self,
         exchangeInit,
         ExchangePublicData(
@@ -334,7 +331,7 @@ class TradeRoom(config: TradeRoomConfig,
   }
 
   def startExchanges(): Unit = {
-    for (name: String <- Config.activeExchanges) {
+    for (name: String <- config.exchanges.keys) {
       runExchange(name, StaticConfig.AllExchanges(name))
     }
   }
@@ -359,34 +356,6 @@ class TradeRoom(config: TradeRoomConfig,
   }
 
   def exchangesInitialized: Boolean = exchanges.keySet == initializedExchanges
-
-  /**
-   * Will trigger a restart of the TradeRoom if stale data is found
-   */
-  def deathWatch(): Unit = {
-    dataAge.keys.foreach {
-      e => {
-        val lastSeen: Instant = (dataAge(e).heartbeatTS.toSeq ++ Seq(dataAge(e).tickerTS)).max
-        if (Duration.between(lastSeen, Instant.now).compareTo(config.restartWhenAnExchangeDataStreamIsOlderThan) > 0) {
-          log.warn(s"${Emoji.Robot}  Killing TradeRoom actor because of outdated ticker data from $e")
-          self ! Kill
-        }
-      }
-    }
-  }
-
-  def shutdownAfterFirstOrderInNonProductionMode(): Unit = {
-    if (config.oneTradeOnlyTestMode && finishedOrderBundles.nonEmpty) {
-      log.info(
-        s"""${Emoji.Robot}  Shutting down TradeRoom after first finished order bundle, as configured  (trade-room.production-mode)
-           |activeOrders: $activeOrders
-           |openOrderBundles: $activeOrderBundles
-           |openLiquidityTx: $activeLiquidityTx
-           |finishedOrderBundles: $finishedOrderBundles
-           |finishedLiquidityTx: $finishedLiquidityTxs""".mkString("\n"))
-      self ! PoisonPill
-    }
-  }
 
   def logStats(): Unit = {
     val now = Instant.now
@@ -481,23 +450,6 @@ class TradeRoom(config: TradeRoomConfig,
   }
 
 
-  override val supervisorStrategy: OneForOneStrategy =
-    OneForOneStrategy(maxNrOfRetries = 3, withinTimeRange = 90.minutes, loggingEnabled = true) {
-      case _ => Restart
-    }
-
-  override def preStart(): Unit = {
-    if (config.oneTradeOnlyTestMode || config.tradeSimulation) {
-      log.info(s"Starting with oneTradeOnlyTestMode=${config.oneTradeOnlyTestMode} and tradeSimulation=${config.tradeSimulation}")
-    } else {
-      log.info(s"${Emoji.DoYouEvenLiftBro}  Starting in production mode")
-    }
-
-    startExchanges()
-    cleanupTradePairs()
-    startStreaming()
-  }
-
   def activeOrder(ref: OrderRef): Option[Order] = {
     activeOrders(ref.exchange).get(ref) match {
       case o: Some[Order] => o
@@ -519,7 +471,7 @@ class TradeRoom(config: TradeRoomConfig,
     val orders: Seq[Order] = bundle.ordersRefs.flatMap(activeOrder)
     val finishTime = orders.map(_.lastUpdateTime).max
 
-    val bill: OrderBill = OrderBill.calc(orders, tickers, exchangesConfig.map(e => (e._1, e._2.fee)))
+    val bill: OrderBill = OrderBill.calc(orders, tickers, config.exchanges.map(e => (e._1, e._2.fee)))
     val finishedOrderBundle = FinishedOrderBundle(bundle, orders, finishTime, bill)
     this.synchronized {
       finishedOrderBundles = finishedOrderBundle :: finishedOrderBundles
@@ -542,7 +494,7 @@ class TradeRoom(config: TradeRoomConfig,
 
   def cleanupLiquidityTxOrder(tx: LiquidityTx): Unit = {
     val order: Order = activeOrder(tx.orderRef).get // must exist
-    val bill: OrderBill = OrderBill.calc(Seq(order), tickers, exchangesConfig.map(e => (e._1, e._2.fee)))
+    val bill: OrderBill = OrderBill.calc(Seq(order), tickers, fees)
     val finishedLiquidityTx = FinishedLiquidityTx(tx, order, order.lastUpdateTime, bill)
     this.synchronized {
       finishedLiquidityTxs = finishedLiquidityTx :: finishedLiquidityTxs
@@ -599,6 +551,34 @@ class TradeRoom(config: TradeRoomConfig,
     }
   }
 
+  def shutdownAfterFirstOrderInNonProductionMode(): Unit = {
+    if (config.oneTradeOnlyTestMode && finishedOrderBundles.nonEmpty) {
+      log.info(
+        s"""${Emoji.Robot}  Shutting down TradeRoom after first finished order bundle, as configured  (trade-room.production-mode)
+           |activeOrders: $activeOrders
+           |openOrderBundles: $activeOrderBundles
+           |openLiquidityTx: $activeLiquidityTx
+           |finishedOrderBundles: $finishedOrderBundles
+           |finishedLiquidityTx: $finishedLiquidityTxs""".mkString("\n"))
+      self ! PoisonPill
+    }
+  }
+
+  /**
+   * Will trigger a restart of the TradeRoom if stale data is found
+   */
+  def staleDataWatch(): Unit = {
+    dataAge.keys.foreach {
+      e => {
+        val lastSeen: Instant = (dataAge(e).heartbeatTS.toSeq ++ Seq(dataAge(e).tickerTS)).max
+        if (Duration.between(lastSeen, Instant.now).compareTo(config.restartWhenAnExchangeDataStreamIsOlderThan) > 0) {
+          log.warn(s"${Emoji.Robot}  Killing TradeRoom actor because of outdated ticker data from $e")
+          self ! Kill
+        }
+      }
+    }
+  }
+
   def cancelAgedActiveOrders(): Unit = {
     val limit: Instant = Instant.now.minus(config.maxOrderLifetime)
 
@@ -623,7 +603,10 @@ class TradeRoom(config: TradeRoomConfig,
     }
   }
 
+
   def houseKeeping(): Unit = {
+    shutdownAfterFirstOrderInNonProductionMode()
+    staleDataWatch()
     cancelAgedActiveOrders()
 
     // TODO report entries in openOrders, which are not referenced by activeOrderBundle or activeLiquidityTx
@@ -649,8 +632,7 @@ class TradeRoom(config: TradeRoomConfig,
   }
 
   def watchPioneerTransaction(exchange: String, orderRequest: OrderRequest): Unit = {
-    val maxWaitTime = 5.minutes // the order may need some time go get filled ...
-    val startTime = Instant.now
+    val deadline = Instant.now.plusSeconds(60 * 5)
     var finished = false
     do {
       Thread.sleep(500)
@@ -661,20 +643,24 @@ class TradeRoom(config: TradeRoomConfig,
           finished = true
         case None => // nop
       }
-    } while (!finished && Duration.between(startTime, Instant.now).toMillis < maxWaitTime.toMillis)
+    } while (!finished && Instant.now.isBefore(deadline))
+    if (!finished) {
+      log.error("Timeout while waiting for pioneer transaction to complete") // should not happen because of housekkeping should cancel it when it stays too long
+      self ! PoisonPill
+    }
   }
 
   // run a validated pioneer transaction before the exchange gets available for further orders
   // we buy BTC from USDT (configured amount)
-  // TODO add another order, which we cancel gain
+  // TODO add another order, to check if cancel-ordewr works
   def runPioneerTransaction(exchange: String): Unit = {
     if (shutdownInitiated) return
 
-    log.debug(s"running pioneer tx for $exchange")
+    log.info(s"running pioneer tx for $exchange")
     val tradePair = TradePair(Bitcoin, USDT)
     val limit = tickers(exchange)(tradePair).priceEstimate
-    val amountBitcoin = CryptoValue(USDT, config.pioneerTransactionUsdt).convertTo(Bitcoin, tickers(exchange)).amount
-    val orderRequest = OrderRequest(UUID.randomUUID(), None, exchange, tradePair, TradeSide.Buy, exchangesConfig(exchange).fee, amountBitcoin, limit)
+    val amountBitcoin = CryptoValue(USDT, config.pioneerTransactionUSDT).convertTo(Bitcoin, tickers(exchange)).amount
+    val orderRequest = OrderRequest(UUID.randomUUID(), None, exchange, tradePair, TradeSide.Buy, fees(exchange), amountBitcoin, limit)
     self ! LiquidityTransformationOrder(orderRequest)
     executionContext.execute(() => watchPioneerTransaction(exchange, orderRequest))
   }
@@ -693,6 +679,25 @@ class TradeRoom(config: TradeRoomConfig,
       log.warn(s"${Emoji.NoSupport}  These orders did not finish: [${openOrders.map(_.shortDesc).mkString(", ")}]")
     }
   }
+
+
+  override val supervisorStrategy: OneForOneStrategy =
+    OneForOneStrategy(maxNrOfRetries = 3, withinTimeRange = 90.minutes, loggingEnabled = true) {
+      case _ => Restart
+    }
+
+  override def preStart(): Unit = {
+    if (config.oneTradeOnlyTestMode || config.tradeSimulation) {
+      log.info(s"Starting with oneTradeOnlyTestMode=${config.oneTradeOnlyTestMode} and tradeSimulation=${config.tradeSimulation}")
+    } else {
+      log.info(s"${Emoji.DoYouEvenLiftBro}  Starting in production mode")
+    }
+
+    startExchanges()
+    cleanupTradePairs()
+    startStreaming()
+  }
+
 
   def receive: Receive = {
 
@@ -714,26 +719,17 @@ class TradeRoom(config: TradeRoomConfig,
     case LiquidityTransformationOrder(orderRequest) => placeLiquidityTransformationOrder(orderRequest)
 
     // from ExchangeAccountDataManager
-    case OrderUpdateTrigger(orderRef) =>
-      onOrderUpdate(orderRef)
+    case OrderUpdateTrigger(orderRef) => onOrderUpdate(orderRef)
 
-    case t: WalletUpdateTrigger =>
-      exchanges(t.exchange).forward(t)
-
-
-    // messages from outself
-    case OrderManagementSupervisor() =>
-      shutdownAfterFirstOrderInNonProductionMode()
-      houseKeeping()
+    case t: WalletUpdateTrigger => exchanges(t.exchange).forward(t)
 
     case LogStats() =>
       if (exchangesInitialized && !shutdownInitiated)
         logStats()
 
-    // TODO do in housekeeping
-    case DeathWatch() =>
+    case HouseKeeping() =>
       if (exchangesInitialized)
-        deathWatch()
+        houseKeeping()
 
     case Stop(timeout) =>
       log.info("shutdown initiated")

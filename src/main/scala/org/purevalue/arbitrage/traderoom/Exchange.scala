@@ -1,10 +1,13 @@
 package org.purevalue.arbitrage.traderoom
 
+import java.time.Instant
+
 import akka.actor.SupervisorStrategy.Restart
-import akka.actor.{Actor, ActorRef, ActorSystem, OneForOneStrategy, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, OneForOneStrategy, PoisonPill, Props, Status}
 import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage._
+import org.purevalue.arbitrage.traderoom.Asset.USDT
 import org.purevalue.arbitrage.traderoom.Exchange.{GetTradePairs, RemoveTradePair, StartStreaming, TradePairs}
 import org.purevalue.arbitrage.traderoom.ExchangeAccountDataManager.{CancelOrder, NewLimitOrder}
 import org.purevalue.arbitrage.traderoom.ExchangeLiquidityManager.{LiquidityLockClearance, LiquidityRequest}
@@ -29,18 +32,20 @@ object Exchange {
   def props(exchangeName: String,
             config: ExchangeConfig,
             liquidityManagerConfig: LiquidityManagerConfig,
+            tradeRoomConfig: TradeRoomConfig,
             tradeRoom: ActorRef,
             initStuff: ExchangeInitStuff,
             publicData: ExchangePublicData,
             accountData: ExchangeAccountData,
             referenceTicker: () => collection.Map[TradePair, Ticker],
             openLiquidityTx: () => Iterable[LiquidityTx]): Props =
-    Props(new Exchange(exchangeName, config, liquidityManagerConfig, tradeRoom, initStuff, publicData, accountData, referenceTicker, openLiquidityTx))
+    Props(new Exchange(exchangeName, config, liquidityManagerConfig, tradeRoomConfig, tradeRoom, initStuff, publicData, accountData, referenceTicker, openLiquidityTx))
 }
 
 case class Exchange(exchangeName: String,
                     config: ExchangeConfig,
                     liquidityManagerConfig: LiquidityManagerConfig,
+                    tradeRoomConfig: TradeRoomConfig,
                     tradeRoom: ActorRef,
                     initStuff: ExchangeInitStuff,
                     publicData: ExchangePublicData,
@@ -52,7 +57,7 @@ case class Exchange(exchangeName: String,
   implicit val executionContext: ExecutionContextExecutor = system.dispatcher
 
   var shutdownInitiated: Boolean = false
-  val tradeSimulationMode: Boolean = Config.tradeRoom.tradeSimulation
+  val tradeSimulationMode: Boolean = tradeRoomConfig.tradeSimulation
 
   var publicDataInquirer: ActorRef = _
   var liquidityManager: ActorRef = _
@@ -73,7 +78,7 @@ case class Exchange(exchangeName: String,
 
   def initPublicDataManager(): Unit = {
     publicDataManager = context.actorOf(
-      ExchangePublicDataManager.props(config, tradePairs, publicDataInquirer, self, initStuff.exchangePublicDataChannelProps, publicData),
+      ExchangePublicDataManager.props(config, tradeRoomConfig, tradePairs, publicDataInquirer, self, initStuff.exchangePublicDataChannelProps, publicData),
       s"$exchangeName-PublicDataManager")
   }
 
@@ -109,8 +114,34 @@ case class Exchange(exchangeName: String,
         liquidityManagerConfig, config, tradeRoom, publicData.readonly, accountData.wallet, referenceTicker, openLiquidityTx))
   }
 
+  def checkIfBalanceIsSufficientForTrading(): Unit = {
+    def isBalanceSufficient: Boolean = {
+      accountData.wallet.balance.contains(USDT) &&
+        accountData.wallet.balance(USDT).amountAvailable >= tradeRoomConfig.pioneerTransactionUSDT &&
+        accountData.wallet.liquidCryptoValueSum(USDT, publicData.ticker).amount >= tradeRoomConfig.liquidityManagerConfig.minimumKeepReserveLiquidityPerAssetInUSDT
+    }
+
+    // wait maximal 3 seconds until all wallet entries arrive
+    val timeout: Instant = Instant.now.plusSeconds(3)
+    val minRequiredBalance: Double = tradeRoomConfig.liquidityManagerConfig.minimumKeepReserveLiquidityPerAssetInUSDT
+    do {
+      if (isBalanceSufficient) return
+      Thread.sleep(250)
+    } while (Instant.now.isBefore(timeout))
+
+    log.error(s"Insufficient balance for trading on $exchangeName. " +
+      s"Expectation is to have at least ${tradeRoomConfig.pioneerTransactionUSDT} USDT for the pioneer transaction " +
+      s"and a cumulated amount of at least $minRequiredBalance USDT available for trading. " +
+      s"Wallet:\n${accountData.wallet.balance.mkString("\n")}")
+
+    shutdownInitiated = true
+    self ! PoisonPill
+  }
+
   def towardsFinalInitialization(): Unit = {
-    if (publicDataManagerInitialized && accountDataManagerInitialized)
+    if (publicDataManagerInitialized && accountDataManagerInitialized) {
+      checkIfBalanceIsSufficientForTrading()
+      if (shutdownInitiated) return // TODO improve style
       if (!pioneerTransactionStarted) {
         tradeRoom ! RunPioneerTransaction(exchangeName)
         pioneerTransactionStarted = true
@@ -120,6 +151,7 @@ case class Exchange(exchangeName: String,
         log.info(s"${Emoji.Robot}  [$exchangeName]: completely initialized and running")
         tradeRoom ! Exchange.Initialized(exchangeName)
       }
+    }
   }
 
   override val supervisorStrategy: OneForOneStrategy =
@@ -142,7 +174,7 @@ case class Exchange(exchangeName: String,
       log.info(s"$exchangeName: ${tradePairs.size} TradePairs: ${tradePairs.toSeq.sortBy(e => e.toString)}")
 
     } catch {
-      case e:Exception => log.error(s"$exchangeName: preStart failed", e)
+      case e: Exception => log.error(s"$exchangeName: preStart failed", e)
     }
   }
 

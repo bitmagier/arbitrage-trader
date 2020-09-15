@@ -12,6 +12,7 @@
 
     <logger name="org.purevalue.arbitrage" level="INFO"/>
     <logger name="org.purevalue.arbitrage.adapter" level="DEBUG"/>
+    <logger name="org.purevalue.arbitrage.traderoom.TradeRoom" level="DEBUG"/>
 
     <root level="INFO">
         <appender-ref ref="STDOUT"/>
