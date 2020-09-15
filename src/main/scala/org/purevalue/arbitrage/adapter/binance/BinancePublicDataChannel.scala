@@ -44,7 +44,7 @@ class BinancePublicDataChannel(config: ExchangeConfig, publicDataManager: ActorR
   import WebSocketJsonProtocoll._
 
   val resolveTradePairSymbol: String => TradePair =
-    symbol => binanceTradePairBySymbol(symbol).asInstanceOf[TradePair]
+    symbol => binanceTradePairBySymbol(symbol).toTradePair
 
   def exchangeDataMapping(in: Seq[IncomingPublicBinanceJson]): Seq[ExchangePublicStreamData] = in.map {
     // @formatter:off

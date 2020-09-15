@@ -13,7 +13,10 @@ import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor}
 
 case class BitfinexSymbol(asset: Asset, apiSymbol: String)
-case class BitfinexTradePair(baseAsset: Asset, quoteAsset: Asset, apiSymbol: String) extends TradePair
+case class BitfinexTradePair(baseAsset: Asset, quoteAsset: Asset, apiSymbol: String) {
+  def toTradePair: TradePair = TradePair(baseAsset, quoteAsset)
+}
+
 
 object BitfinexPublicDataInquirer {
   case class GetBitfinexTradePairs()
@@ -35,7 +38,7 @@ class BitfinexPublicDataInquirer(config: ExchangeConfig) extends Actor {
   var bitfinexAssets: Set[BitfinexSymbol] = _
   var bitfinexTradePairs: Set[BitfinexTradePair] = _
 
-  def tradePairs: Set[TradePair] = bitfinexTradePairs.asInstanceOf[Set[TradePair]]
+  def tradePairs: Set[TradePair] = bitfinexTradePairs.map(_.toTradePair)
 
   def initTradePairs(): Unit = {
     import DefaultJsonProtocol._

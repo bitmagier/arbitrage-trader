@@ -125,7 +125,7 @@ class BitfinexPublicDataChannel(config: ExchangeConfig,
 
   def exchangeDataMapping(in: Seq[IncomingPublicBitfinexJson]): Seq[ExchangePublicStreamData] = in.map {
     // @formatter:off
-    case t: RawTickerJson => t.value.toTicker(config.exchangeName, bitfinexTradePairBySymbol(tickerSymbolsByChannelId(t.channelId)))
+    case t: RawTickerJson => t.value.toTicker(config.exchangeName, bitfinexTradePairBySymbol(tickerSymbolsByChannelId(t.channelId)).toTradePair)
     case RawHeartbeat()   => Heartbeat(Instant.now)
     case other            => log.error(s"unhandled object: $other"); throw new NotImplementedError()
     // @formatter:on

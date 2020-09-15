@@ -470,9 +470,7 @@ class TradeRoom(config: TradeRoomConfig,
       val liquidityTxOrders1h = finishedLiquidityTxs.map(_.finishedOrder)
       val orderBundleOrders1h = finishedOrderBundles.flatMap(_.finishedOrders)
 
-      log.info(
-        s"""${Emoji.Robot}  Last 1h final order status: trader tx:[${orderStateStats(orderBundleOrders1h).mkString(",")}],
-           |liquidity tx: [${orderStateStats(liquidityTxOrders1h).mkString(",")}]""".stripMargin)
+      log.info(s"""${Emoji.Robot}  Last 1h final order status: trader tx:[${orderStateStats(orderBundleOrders1h).mkString(",")}], liquidity tx: [${orderStateStats(liquidityTxOrders1h).mkString(",")}]""")
     }
 
     logWalletOverview()
@@ -535,9 +533,9 @@ class TradeRoom(config: TradeRoomConfig,
 
     if (bill.sumUSDTAtCalcTime >= 0) {
       val emoji = if (bill.sumUSDTAtCalcTime >= 1.0) Emoji.Opera else Emoji.Winning
-      log.info(s"$emoji  ${finishedOrderBundle.shortDesc} completed with a win of ${bill.sumUSDTAtCalcTime}")
+      log.info(s"$emoji  ${finishedOrderBundle.shortDesc} completed with a win of ${formatDecimal(bill.sumUSDTAtCalcTime, 2)} USDT")
     } else {
-      log.warn(s"${Emoji.SadFace}  ${finishedOrderBundle.shortDesc} completed with a loss of ${bill.sumUSDTAtCalcTime} ${Emoji.LookingDown}: $finishedOrderBundle")
+      log.warn(s"${Emoji.SadFace}  ${finishedOrderBundle.shortDesc} completed with a loss of ${formatDecimal(bill.sumUSDTAtCalcTime, 2)} USDT ${Emoji.LookingDown}:\n $finishedOrderBundle")
     }
   }
 
@@ -667,13 +665,15 @@ class TradeRoom(config: TradeRoomConfig,
   }
 
   // run a validated pioneer transaction before the exchange gets available for further orders
+  // we buy BTC from USDT (configured amount)
+  // TODO add another order, which we cancel gain
   def runPioneerTransaction(exchange: String): Unit = {
     if (shutdownInitiated) return
 
     log.debug(s"running pioneer tx for $exchange")
     val tradePair = TradePair(Bitcoin, USDT)
     val limit = tickers(exchange)(tradePair).priceEstimate
-    val amountBitcoin = CryptoValue(USDT, 5.0).convertTo(Bitcoin, tickers(exchange)).amount
+    val amountBitcoin = CryptoValue(USDT, config.pioneerTransactionUsdt).convertTo(Bitcoin, tickers(exchange)).amount
     val orderRequest = OrderRequest(UUID.randomUUID(), None, exchange, tradePair, TradeSide.Buy, exchangesConfig(exchange).fee, amountBitcoin, limit)
     self ! LiquidityTransformationOrder(orderRequest)
     executionContext.execute(() => watchPioneerTransaction(exchange, orderRequest))

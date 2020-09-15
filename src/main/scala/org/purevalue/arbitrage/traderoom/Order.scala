@@ -5,6 +5,7 @@ import java.util.UUID
 
 import akka.actor.ActorRef
 import org.purevalue.arbitrage.traderoom.Asset.USDT
+import org.purevalue.arbitrage.traderoom.OrderStatus.{CANCELED, EXPIRED, FILLED, REJECTED}
 import org.purevalue.arbitrage.traderoom.TradeRoom.{OrderRef, TickersReadonly}
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.slf4j.LoggerFactory
@@ -32,9 +33,9 @@ case class Order(externalId: String,
       case TradeSide.Buy => "<-"
       case TradeSide.Sell => "->"
     }
-    s"[$side ${formatDecimal(cumulativeFilledQuantity, tradePair.baseAsset.visibleAmountFractionDigits)} " +
+    s"[$side ${formatDecimal(cumulativeFilledQuantity, tradePair.baseAsset.defaultPrecision)} " +
       s"${tradePair.baseAsset.officialSymbol}$direction${tradePair.quoteAsset.officialSymbol} " +
-      s"${formatDecimal(cumulativeFilledQuantity * priceAverage, tradePair.quoteAsset.visibleAmountFractionDigits)}]"
+      s"${formatDecimal(cumulativeFilledQuantity * priceAverage, tradePair.quoteAsset.defaultPrecision)}]"
   }
 
 
@@ -59,7 +60,7 @@ case class Order(externalId: String,
   private val log = LoggerFactory.getLogger(classOf[Order])
 
   def applyUpdate(u: OrderUpdate): Unit = {
-    if (u.externalOrderId != externalId || u.tradePair != tradePair || u.side != side || u.orderType != orderType) throw new IllegalArgumentException()
+    if (u.exchange != exchange || u.externalOrderId != externalId || u.tradePair != tradePair || u.side != side || u.orderType != orderType) throw new IllegalArgumentException()
     if (u.updateTime.isBefore(lastUpdateTime)) {
       log.warn(s"Ignoring $u, because updateTime is not after order's lastUpdateTime: $this")
     } else {
@@ -90,21 +91,30 @@ object OrderType {
   // bitfinex extras: TRAILING_STOP, EXCHANGE_MARKET, EXCHANGE_LIMIT, EXCHANGE_STOP, EXCHANGE_STOP_LIMIT, EXCHANGE TRAILING STOP, FOK, EXCHANGE FOK, IOC, EXCHANGE IOC
 }
 
-sealed case class OrderStatus(isFinal: Boolean)
+sealed trait OrderStatus {
+  def isFinal: Boolean
+}
+sealed trait IntermediateOrderStatus extends OrderStatus {
+  override def isFinal: Boolean = false
+}
+sealed trait FinalOrderStatus extends OrderStatus {
+  override def isFinal: Boolean = true
+}
 object OrderStatus {
-  object NEW extends OrderStatus(false)
-  object PARTIALLY_FILLED extends OrderStatus(false)
-  object FILLED extends OrderStatus(true)
-  object CANCELED extends OrderStatus(true) // cancelled by user
-  object EXPIRED extends OrderStatus(true) // order was canceled acording to order type's rules
-  object REJECTED extends OrderStatus(true)
-  object PAUSE extends OrderStatus(false)
+  case object NEW extends IntermediateOrderStatus
+  case object PARTIALLY_FILLED extends IntermediateOrderStatus
+  case object FILLED extends FinalOrderStatus
+  case object CANCELED extends FinalOrderStatus // cancelled by user
+  case object EXPIRED extends FinalOrderStatus // order was canceled acording to order type's rules
+  case object REJECTED extends FinalOrderStatus
+  case object PAUSE extends IntermediateOrderStatus
 }
 
 /**
  * Order update coming from exchange data flow
  */
 case class OrderUpdate(externalOrderId: String,
+                       exchange:String,
                        tradePair: TradePair,
                        side: TradeSide,
                        orderType: OrderType,
@@ -116,7 +126,7 @@ case class OrderUpdate(externalOrderId: String,
                        cumulativeFilledQuantity: Double,
                        priceAverage: Double,
                        updateTime: Instant) extends ExchangeAccountStreamData {
-  def toOrder(exchange: String): Order = Order(
+  def toOrder: Order = Order(
     externalOrderId,
     exchange,
     tradePair,
@@ -152,8 +162,8 @@ case class OrderRequest(id: UUID,
       case TradeSide.Buy => s"${tradePair.baseAsset.officialSymbol}<-${tradePair.quoteAsset.officialSymbol}"
       case TradeSide.Sell => s"${tradePair.baseAsset.officialSymbol}->${tradePair.quoteAsset.officialSymbol}"
     }
-    s"($exchange: ${formatDecimal(amountBaseAsset, tradePair.baseAsset.visibleAmountFractionDigits)} " +
-      s"$orderDesc ${formatDecimal(amountBaseAsset * limit, tradePair.quoteAsset.visibleAmountFractionDigits)})"
+    s"($exchange: ${formatDecimal(amountBaseAsset, tradePair.baseAsset.defaultPrecision)} " +
+      s"$orderDesc ${formatDecimal(amountBaseAsset * limit, tradePair.quoteAsset.defaultPrecision)})"
   }
   def shortDesc: String = s"OrderRequest($exchange: $tradeDesc)"
 

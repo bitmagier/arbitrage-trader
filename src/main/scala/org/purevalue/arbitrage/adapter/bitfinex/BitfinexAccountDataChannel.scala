@@ -18,7 +18,7 @@ import org.purevalue.arbitrage.util.HttpUtil
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.{traderoom, _}
 import org.slf4j.LoggerFactory
-import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
+import spray.json.{DefaultJsonProtocol, JsObject, JsString, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
 import scala.collection.Seq
 import scala.concurrent.duration.DurationInt
@@ -76,6 +76,7 @@ case class BitfinexOrderUpdateJson(streamType: String, // "os" = order snapshot,
 
   def toOrderUpdate(exchange: String, resolveTradePair: String => TradePair): OrderUpdate = OrderUpdate(
     orderId.toString,
+    exchange,
     resolveTradePair(symbol),
     if (amount >= 0.0) TradeSide.Buy else TradeSide.Sell,
     toOrderType(orderType),
@@ -158,8 +159,9 @@ case class BitfinexTradeExecutedJson(tradeId: Long,
                                      maker: Int, // 1 if true, -1 if false
                                      fee: Double, // "tu" only
                                      feeCurrency: String) extends IncomingBitfinexAccountJson {
-  def toOrderUpdate(exchangeName: String, resolveTradePair: String => BitfinexTradePair): OrderUpdate = traderoom.OrderUpdate(
+  def toOrderUpdate(exchange: String, resolveTradePair: String => TradePair): OrderUpdate = OrderUpdate(
     orderId.toString,
+    exchange,
     resolveTradePair(symbol),
     if (execAmount >= 0.0) TradeSide.Buy else TradeSide.Sell,
     toOrderType(orderType),
@@ -224,7 +226,7 @@ object BitfinexWalletUpdateJson {
       v(5).convertTo[Option[String]])
 }
 
-case class SubmitLimitOrderJson(`type`: String, symbol: String, price: String, amount: String, meta: String)
+case class SubmitLimitOrderJson(`type`: String, symbol: String, price: String, amount: String, meta: JsObject)
 
 case class SingleOrderResponseJson(id: Long,
                                    gid: Long,
@@ -306,8 +308,8 @@ class BitfinexAccountDataChannel(config: ExchangeConfig,
 
   def exchangeDataMapping(in: Seq[IncomingBitfinexAccountJson]): Seq[ExchangeAccountStreamData] = in.map {
     // @formatter:off
-    case o: BitfinexOrderUpdateJson   => o.toOrderOrOrderUpdate(config.exchangeName, symbol => bitfinexTradePairs.find(_.apiSymbol == symbol).get)
-    case t: BitfinexTradeExecutedJson => t.toOrderUpdate(config.exchangeName, symbol => bitfinexTradePairs.find(_.apiSymbol == symbol).get)
+    case o: BitfinexOrderUpdateJson   => o.toOrderOrOrderUpdate(config.exchangeName, symbol => bitfinexTradePairs.find(_.apiSymbol == symbol).get.toTradePair)
+    case t: BitfinexTradeExecutedJson => t.toOrderUpdate(config.exchangeName, symbol => bitfinexTradePairs.find(_.apiSymbol == symbol).get.toTradePair)
     case w: BitfinexWalletUpdateJson  => w.toWalletAssetUpdate(symbol => symbolToAsset(symbol))
     case x                            => log.debug(s"$x"); throw new NotImplementedError
     // @formatter:on
@@ -451,24 +453,32 @@ class BitfinexAccountDataChannel(config: ExchangeConfig,
     SubmitLimitOrderJson(
       "LIMIT",
       resolveSymbol.apply(o.tradePair),
-      formatDecimal(o.limit),
-      formatDecimal(o.amountBaseAsset),
-      affiliateCode.map(code => s"""{aff_code: "$code"}""").getOrElse("{}")
+      formatDecimal(o.limit, o.tradePair.quoteAsset.defaultPrecision),
+      formatDecimal(o.amountBaseAsset, o.tradePair.baseAsset.defaultPrecision),
+      affiliateCode match {
+        case Some(code) => JsObject(Map("aff_code" -> JsString(code)))
+        case None => JsObject()
+      }
     )
 
   def newLimitOrder(o: OrderRequest): Future[NewOrderAck] = {
     import BitfinexAccountDataJsonProtocoll._
 
+    val requestBody = toSubmitLimitOrderJson(o, tp => tradePairToApiSymbol(tp), config.refCode).toJson.compactPrint
     HttpUtil.httpRequestJsonBitfinexAccount[OrderResponseJson](
       HttpMethods.POST,
       s"$BaseRestEndpoint/v2/auth/w/order/submit",
-      Some(toSubmitLimitOrderJson(o, tp => tradePairToApiSymbol(tp), config.refCode).toJson.compactPrint),
+      Some(requestBody),
       config.secrets
     ).map {
       case r: OrderResponseJson if r.status == "SUCCESS" && r.orders.length == 1 =>
         NewOrderAck(config.exchangeName, o.tradePair, r.orders.head.id.toString, o.id)
       case r: OrderResponseJson =>
-        throw new RuntimeException(s"Something went wrong with placing our limit-order: $r")
+        throw new RuntimeException(s"Something went wrong while placing a limit-order. Response is: $r")
+    } recover {
+      case e: Exception =>
+        log.error(s"NewLimitOrder failed. Request body:\n$requestBody", e)
+        throw e;
     }
   }
 

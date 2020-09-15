@@ -59,8 +59,11 @@ case class TradeRoomConfig(oneTradeOnlyTestMode: Boolean,
                            referenceTickerExchange: String,
                            maxOrderLifetime: Duration,
                            restartWhenAnExchangeDataStreamIsOlderThan: Duration,
+                           pioneerTransactionUsdt: Double,
                            stats: TradeRoomStatsConfig,
-                           orderBundleSafetyGuard: OrderBundleSafetyGuardConfig)
+                           orderBundleSafetyGuard: OrderBundleSafetyGuardConfig) {
+  if (pioneerTransactionUsdt > 100.0) throw new IllegalArgumentException("pioneer transaction value is unnecessary big")
+}
 object TradeRoomConfig {
   def apply(c: com.typesafe.config.Config): TradeRoomConfig = TradeRoomConfig(
     c.getBoolean("one-trade-only-test-mode"),
@@ -68,6 +71,7 @@ object TradeRoomConfig {
     c.getString("reference-ticker-exchange"),
     c.getDuration("max-order-lifetime"),
     c.getDuration("restart-when-an-exchange-data-stream-is-older-than"),
+    c.getDouble("pioneer-transaction-usdt"),
     TradeRoomStatsConfig(
       c.getDuration("stats.report-interval"),
       Asset(c.getString("stats.aggregated-liquidity-report-asset"))

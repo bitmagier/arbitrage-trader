@@ -70,7 +70,7 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
         if (accountData.activeOrders.contains(ref))
           accountData.activeOrders(ref).applyUpdate(o)
         else
-          accountData.activeOrders.update(ref, o.toOrder(config.exchangeName)) // covers a restart-scenario (tradeRoom / arbitrage-trader)
+          accountData.activeOrders.update(ref, o.toOrder) // covers a restart-scenario (tradeRoom / arbitrage-trader)
 
         tradeRoom ! OrderUpdateTrigger(ref)
 
@@ -101,8 +101,8 @@ trait ExchangeAccountStreamData
 
 case class Balance(asset: Asset, amountAvailable: Double, amountLocked: Double) {
   override def toString: String = s"Balance(${asset.officialSymbol}: " +
-    s"available:${formatDecimal(amountAvailable, asset.visibleAmountFractionDigits)}, " +
-    s"locked: ${formatDecimal(amountLocked, asset.visibleAmountFractionDigits)})"
+    s"available:${formatDecimal(amountAvailable, asset.defaultPrecision)}, " +
+    s"locked: ${formatDecimal(amountLocked, asset.defaultPrecision)})"
 }
 // we use a [var immutable map] instead of mutable one here, to be able to update the whole map at once without a race condition
 case class Wallet(exchange: String, var balance: Map[Asset, Balance], exchangeConfig: ExchangeConfig) {

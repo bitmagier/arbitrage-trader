@@ -75,8 +75,11 @@ object HttpUtil {
   def httpRequestBitfinexHmacSha384(method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig)
                                    (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[HttpEntity.Strict] = {
     val nonce = Instant.now.toEpochMilli.toString
-    val apiPath = Uri(uri).withScheme("").withHost("") // "/v2/auth/..."
-    val contentToSign = s"/api$apiPath$nonce${requestBody.getOrElse("")}}"
+    val apiPath = Uri(uri).toRelative.toString() match {
+      case s:String if s.startsWith("/") => s.substring(1)  // "v2/auth/..."
+      case _ => throw WrongPrecondition("relative url starts with /")
+    }
+    val contentToSign = s"/api/$apiPath$nonce${requestBody.getOrElse("")}}"
     val signature = hmacSha384Signature(contentToSign, apiKeys.apiSecretKey)
 
     Http().singleRequest(

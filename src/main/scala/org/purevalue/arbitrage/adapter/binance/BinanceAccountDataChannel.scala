@@ -16,8 +16,9 @@ import org.purevalue.arbitrage.adapter.binance.BinanceOrder.{toOrderStatus, toOr
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.{BinanceBaseRestEndpoint, GetBinanceTradePairs}
 import org.purevalue.arbitrage.traderoom.ExchangeAccountDataManager._
 import org.purevalue.arbitrage.traderoom._
+import org.purevalue.arbitrage.util.BadCalculationError
 import org.purevalue.arbitrage.util.HttpUtil.{httpRequestJsonBinanceAccount, httpRequestPureJsonBinanceAccount}
-import org.purevalue.arbitrage.util.Util.formatDecimal
+import org.purevalue.arbitrage.util.Util.{formatDecimal, formatDecimalWithPrecision}
 import org.purevalue.arbitrage.{Config, ExchangeConfig, Main, StaticConfig}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
@@ -60,7 +61,8 @@ class BinanceAccountDataChannel(config: ExchangeConfig,
   }
 
   var listenKey: String = _
-  var binanceTradePairs: Set[BinanceTradePair] = _
+  var binanceTradePairsBySymbol: Map[String, BinanceTradePair] = _
+  var binanceTradePairsByTradePair: Map[TradePair, BinanceTradePair] = _
 
   import BinanceAccountDataJsonProtocoll._
 
@@ -70,8 +72,8 @@ class BinanceAccountDataChannel(config: ExchangeConfig,
     case a: AccountInformationJson      => a.toWalletAssetUpdate
     case a: OutboundAccountPositionJson => a.toWalletAssetUpdate
     case b: BalanceUpdateJson           => b.toWalletBalanceUpdate
-    case o: OrderExecutionReportJson    => o.toOrderOrOrderUpdate(config.exchangeName, symbol => binanceTradePairs.find(_.symbol == symbol).get) // expecting, that we have all relevant trade pairs
-    case o: OpenOrderJson               => o.toOrder(config.exchangeName, symbol => binanceTradePairs.find(_.symbol == symbol).get)
+    case o: OrderExecutionReportJson    => o.toOrderOrOrderUpdate(config.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair) // expecting, that we have all relevant trade pairs
+    case o: OpenOrderJson               => o.toOrder(config.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair)
     case x                              => log.debug(s"$x"); throw new NotImplementedError
     // @formatter:on
   }
@@ -160,13 +162,16 @@ class BinanceAccountDataChannel(config: ExchangeConfig,
       s"$BinanceBaseRestEndpoint/api/v3/userDataStream?listenKey=$listenKey", None, config.secrets, sign = false)
   }
 
-  def resolveSymbol(tp: TradePair): String = binanceTradePairs.find(e => e.baseAsset == tp.baseAsset && e.quoteAsset == tp.quoteAsset).map(_.symbol).get
-
   // fire and forget - error logging in case of failure
   def cancelOrder(tradePair: TradePair, externalOrderId: Long): Future[CancelOrderResult] = {
-    val symbol = resolveSymbol(tradePair)
-    httpRequestPureJsonBinanceAccount(HttpMethods.DELETE,
-      s"$BinanceBaseRestEndpoint/api/v3/order?symbol=$symbol&orderId=$externalOrderId", None, config.secrets, signed = true) map {
+    val symbol = binanceTradePairsByTradePair(tradePair)
+    httpRequestPureJsonBinanceAccount(
+      HttpMethods.DELETE,
+      s"$BinanceBaseRestEndpoint/api/v3/order?symbol=$symbol&orderId=$externalOrderId",
+      None,
+      config.secrets,
+      signed = true
+    ).map {
       response: JsValue =>
         val r: JsObject = response.asJsObject
         if (r.fields.contains("status") && r.fields("status").convertTo[String] == "CANCELED"
@@ -185,6 +190,7 @@ class BinanceAccountDataChannel(config: ExchangeConfig,
   }
 
   def newLimitOrder(o: OrderRequest): Future[NewOrderAck] = {
+
     def toNewOrderAck(j: JsValue): NewOrderAck = {
       j.asJsObject match {
         case j: JsObject if j.fields.contains("orderId") && j.fields.contains("clientOrderId") =>
@@ -198,20 +204,54 @@ class BinanceAccountDataChannel(config: ExchangeConfig,
       }
     }
 
-    val requestBody: String =
-      s"""symbol=${resolveSymbol(o.tradePair)}
-         |side=${BinanceOrder.toString(o.tradeSide)}
-         |type=${BinanceOrder.toString(OrderType.LIMIT)}
-         |timeInForce=GTC
-         |quantity=${formatDecimal(o.amountBaseAsset, o.tradePair.baseAsset.visibleAmountFractionDigits)}
-         |price=${formatDecimal(o.limit, 8)}
-         |newClientOrderId=${o.id.toString}
-         |newOrderRespType=ACK
-         |""".stripMargin
-    httpRequestPureJsonBinanceAccount(HttpMethods.POST, s"$BinanceBaseRestEndpoint/api/v3/order", Some(requestBody), config.secrets, signed = true)
-      .map(toNewOrderAck)
-  }
+    def alignToStepSize(amount: Double, stepSize:Double): Double = {
+      stepSize * (amount / stepSize).ceil
+    }
 
+    def alignToTickSize(price:Double, tickSize:Double): Double = {
+      if (tickSize == 0.0) price
+      else tickSize * (price / tickSize).round
+    }
+
+    val binanceTradePair = binanceTradePairsByTradePair(o.tradePair)
+    val price: Double = alignToTickSize(o.limit, binanceTradePair.tickSize)
+    val quantity: Double = alignToStepSize(o.amountBaseAsset, binanceTradePair.lotSize.stepSize) match {
+      case q:Double if price * q < binanceTradePair.minNotional =>
+        val newQuantity = alignToStepSize(binanceTradePair.minNotional / price, binanceTradePair.lotSize.stepSize)
+        log.info(s"binance: ${o.shortDesc} increasing quantity from ${o.amountBaseAsset} to ${formatDecimal(newQuantity)} to match min_notional filter")
+        newQuantity
+      case q:Double => q
+    }
+    // saftey check
+    if (quantity > o.amountBaseAsset * 2)
+      throw BadCalculationError(s"Trade amount was much to small: ${o.shortDesc}. Required min-notional is " +
+        s"${formatDecimal(binanceTradePair.minNotional)}, so for that limit we need a minimum quantity of ${formatDecimal(quantity)} (next time)!")
+    if (price > o.limit * 1.05)
+      throw BadCalculationError(s"resulting price ${formatDecimal(price)} is > 105% of original limit ${formatDecimal(o.limit)}")
+
+    val requestBody: String =
+      s"symbol=${binanceTradePair.symbol}" +
+        s"&side=${BinanceOrder.toString(o.tradeSide)}" +
+        s"&type=${BinanceOrder.toString(OrderType.LIMIT)}" +
+        s"&timeInForce=GTC" +
+        s"&quantity=${formatDecimalWithPrecision(quantity, binanceTradePair.baseAssetPrecision)}" +
+        s"&price=${formatDecimalWithPrecision(price, binanceTradePair.quotePrecision)}" +
+        s"&newClientOrderId=${o.id.toString}" +
+        s"&newOrderRespType=ACK"
+
+    httpRequestPureJsonBinanceAccount(
+      HttpMethods.POST,
+      s"$BinanceBaseRestEndpoint/api/v3/order",
+      Some(requestBody),
+      config.secrets,
+      signed = true
+    ).map(toNewOrderAck)
+      .recover {
+        case e: Exception =>
+          log.error(s"NewLimitOrder failed. Request body:\n$requestBody\nbinanceTradePair:$binanceTradePair\n", e)
+          throw e
+      }
+  }
 
   def createListenKey(): Unit = {
     import BinanceAccountDataJsonProtocoll._
@@ -223,10 +263,12 @@ class BinanceAccountDataChannel(config: ExchangeConfig,
 
   def pullBinanceTradePairs(): Unit = {
     implicit val timeout: Timeout = Config.internalCommunicationTimeoutDuringInit
-    binanceTradePairs = Await.result(
+    val binanceTradePairs: Set[BinanceTradePair] = Await.result(
       (exchangePublicDataInquirer ? GetBinanceTradePairs()).mapTo[Set[BinanceTradePair]],
-      timeout.duration.plus(500.millis)
-    )
+      timeout.duration.plus(500.millis))
+
+    binanceTradePairsBySymbol = binanceTradePairs.map(e => e.symbol -> e).toMap
+    binanceTradePairsByTradePair = binanceTradePairs.map(e => e.toTradePair -> e).toMap
   }
 
   override def preStart(): Unit = {
@@ -420,11 +462,12 @@ case class OrderExecutionReportJson(e: String, // Event type
 
   def toOrderOrOrderUpdate(exchange: String, resolveTradePair: String => TradePair): ExchangeAccountStreamData =
     if (X == "NEW") toOrder(exchange, resolveTradePair)
-    else toOrderUpdate(resolveTradePair)
+    else toOrderUpdate(exchange, resolveTradePair)
 
   // creationTime, orderPrice, stopPrice, originalQuantity
-  def toOrderUpdate(resolveTradePair: String => TradePair): OrderUpdate = OrderUpdate(
+  def toOrderUpdate(exchange:String, resolveTradePair: String => TradePair): OrderUpdate = OrderUpdate(
     i.toString,
+    exchange,
     resolveTradePair(s),
     toTradeSide(S),
     toOrderType(o),

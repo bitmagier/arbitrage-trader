@@ -8,7 +8,7 @@ import org.purevalue.arbitrage.util.Util.formatDecimal
 
 // Crypto asset / coin.
 // It should NOT be created somewhere else. The way to get it is via Asset(officialSymbol)
-case class Asset(officialSymbol: String, name: String, visibleAmountFractionDigits: Int = 4, isFiat: Boolean = false) {
+case class Asset(officialSymbol: String, name: String, defaultPrecision:Int = 5, isFiat: Boolean = false) {
 
   private def canConvertIndirectly(targetAsset: Asset, intermediateAsset: Asset, conversionRateExists: TradePair => Boolean): Boolean = {
     canConvertDirectlyTo(intermediateAsset, conversionRateExists) &&
@@ -98,7 +98,7 @@ case class FiatMoney(asset: Asset, amount: Double) {
 case class CryptoValue(asset: Asset, amount: Double) {
   if (asset.isFiat) throw new IllegalArgumentException(s"Fiat $asset isn't a crypto asset")
 
-  override def toString: String = s"${formatDecimal(amount, asset.visibleAmountFractionDigits)} ${asset.officialSymbol}"
+  override def toString: String = s"${formatDecimal(amount, asset.defaultPrecision)} ${asset.officialSymbol}"
 
   def canConvertTo(targetAsset: Asset, ticker: collection.Map[TradePair, Ticker]): Boolean =
     this.asset.canConvertTo(targetAsset, ticker)
