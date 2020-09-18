@@ -9,6 +9,7 @@ import akka.http.scaladsl.model.headers.RawHeader
 import akka.stream.Materializer
 import org.purevalue.arbitrage.util.Util.convertBytesToLowerCaseHex
 import org.purevalue.arbitrage.{GlobalConfig, Main, SecretsConfig}
+import org.slf4j.LoggerFactory
 import spray.json.{DeserializationException, JsValue, JsonParser, JsonReader}
 
 import scala.concurrent.{ExecutionContext, Future}
@@ -75,12 +76,12 @@ object HttpUtil {
 
   def httpRequestBitfinexHmacSha384(method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig)
                                    (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[HttpEntity.Strict] = {
-    val nonce = Instant.now.toEpochMilli.toString
+    val nonce = (Instant.now.toEpochMilli * 1000).toString
     val apiPath = Uri(uri).toRelative.toString() match {
       case s:String if s.startsWith("/") => s.substring(1)  // "v2/auth/..."
       case _ => throw WrongPrecondition("relative url starts with /")
     }
-    val contentToSign = s"/api/$apiPath$nonce${requestBody.getOrElse("")}}"
+    val contentToSign = s"/api/$apiPath$nonce${requestBody.getOrElse("")}"
     val signature = hmacSha384Signature(contentToSign, apiKeys.apiSecretKey)
 
     Http().singleRequest(
@@ -94,7 +95,7 @@ object HttpUtil {
         ),
         entity = requestBody match {
           case None => HttpEntity.Empty
-          case Some(x) => HttpEntity(x)
+          case Some(x) => HttpEntity(ContentTypes.`application/json`, x)
         }
       )).flatMap(_.entity.toStrict(globalConfig.httpTimeout))
   }

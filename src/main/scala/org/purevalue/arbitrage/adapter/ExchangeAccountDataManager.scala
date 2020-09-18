@@ -2,6 +2,7 @@ package org.purevalue.arbitrage.adapter
 
 import java.util.UUID
 
+import akka.actor.Status.Failure
 import akka.actor.{Actor, ActorRef, Props}
 import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager._
 import org.purevalue.arbitrage.traderoom.TradeRoom.OrderRef
@@ -98,6 +99,7 @@ class ExchangeAccountDataManager(globalConfig: GlobalConfig,
     case c: CancelOrder         => accountDataChannel.forward(c)
     case o: NewLimitOrder       => accountDataChannel.forward(o)
     case SimulatedData(dataset) => applySimulatedData(dataset)
+    case Failure(e)             => log.error("received failure", e)
   }
   // @formatter:on
 }

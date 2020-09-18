@@ -228,7 +228,11 @@ object BitfinexWalletUpdateJson {
       v(5).convertTo[Option[String]])
 }
 
-case class SubmitLimitOrderJson(`type`: String, symbol: String, price: String, amount: String, meta: JsObject)
+case class SubmitLimitOrderJson(`type`: String,
+                                symbol: String,
+                                price: String,
+                                amount: String, // Amount of order (positive for buy, negative for sell)
+                                meta: JsObject)
 
 case class SingleOrderResponseJson(id: Long,
                                    gid: Long,
@@ -471,17 +475,21 @@ class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
     connected = createConnected
   }
 
-  def toSubmitLimitOrderJson(o: OrderRequest, resolveSymbol: TradePair => String, affiliateCode: Option[String]): SubmitLimitOrderJson =
+  def toSubmitLimitOrderJson(o: OrderRequest, resolveSymbol: TradePair => String, affiliateCode: Option[String]): SubmitLimitOrderJson = {
     SubmitLimitOrderJson(
       "LIMIT",
-      resolveSymbol.apply(o.tradePair),
+      s"t${resolveSymbol.apply(o.tradePair)}",
       formatDecimal(o.limit, o.tradePair.quoteAsset.defaultPrecision),
-      formatDecimal(o.amountBaseAsset, o.tradePair.baseAsset.defaultPrecision),
+      o.tradeSide match {
+        case TradeSide.Buy => formatDecimal(o.amountBaseAsset, o.tradePair.baseAsset.defaultPrecision)
+        case TradeSide.Sell => formatDecimal(-o.amountBaseAsset, o.tradePair.baseAsset.defaultPrecision)
+      },
       affiliateCode match {
         case Some(code) => JsObject(Map("aff_code" -> JsString(code)))
         case None => JsObject()
       }
     )
+  }
 
   def newLimitOrder(o: OrderRequest): Future[NewOrderAck] = {
     import BitfinexAccountDataJsonProtocoll._
