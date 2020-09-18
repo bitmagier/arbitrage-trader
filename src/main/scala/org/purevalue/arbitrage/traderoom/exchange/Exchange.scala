@@ -77,20 +77,20 @@ case class Exchange(exchangeName: String,
   var accountDataManager: ActorRef = _
   var pioneerOrderRunner: ActorRef = _
 
-  def initPublicDataManager(): Unit = {
+  def startPublicDataManager(): Unit = {
     publicDataManager = context.actorOf(
       ExchangePublicDataManager.props(globalConfig, exchangeConfig, tradeRoomConfig, tradePairs, publicDataInquirer, self, initStuff.exchangePublicDataChannelProps, publicData),
-      s"PublicDataManager-$exchangeName")
+      s"ExchangePublicDataManager-$exchangeName")
   }
 
   def removeTradePairBeforeInitialized(tp: TradePair): Unit = {
     tradePairs = tradePairs - tp
   }
 
-  def initLiquidityManager(): Unit = {
+  def initLiquidityManager(j: JoinTradeRoom): Unit = {
     liquidityManager = context.actorOf(
       LiquidityManager.props(
-        tradeRoomConfig.liquidityManager, exchangeConfig, publicData.readonly, accountData.wallet))
+        tradeRoomConfig.liquidityManager, exchangeConfig, publicData.readonly, accountData.wallet, tradeRoom.get, j.findOpenLiquidityTx, j.referenceTicker))
   }
 
   def checkIfBalanceIsSufficientForTrading(): Unit = {
@@ -134,7 +134,7 @@ case class Exchange(exchangeName: String,
           publicDataInquirer,
           initStuff.exchangeAccountDataChannelProps,
           accountData),
-        s"AccountDataManager-$exchangeName")
+        s"ExchangeAccountDataManager-$exchangeName")
       if (tradeSimulationMode) {
         tradeSimulator = Some(context.actorOf(TradeSimulator.props(exchangeConfig, accountDataManager), s"TradeSimulator-$exchangeName"))
       }
@@ -154,7 +154,7 @@ case class Exchange(exchangeName: String,
 
   def joinTradeRoom(j: JoinTradeRoom): Unit = {
     this.tradeRoom = Some(j.tradeRoom)
-    liquidityManager.forward(j) // async, not waiting for the replied Done (which is only needed in test)
+    initLiquidityManager(j)
     joinedTradeRoom.countDown()
   }
 
@@ -173,9 +173,8 @@ case class Exchange(exchangeName: String,
   val accountDataManagerInitialized: CountDownLatch = new CountDownLatch(1)
   val publicDataManagerInitialized: CountDownLatch = new CountDownLatch(1)
   val walletInitialized: CountDownLatch = new CountDownLatch(1)
-  val joinedTradeRoom: CountDownLatch = new CountDownLatch(1)
   val pioneerOrderSucceeded: CountDownLatch = new CountDownLatch(1)
-
+  val joinedTradeRoom: CountDownLatch = new CountDownLatch(1)
 
   def startStreaming(): Unit = {
     val sendStreamingStartedResponseTo = sender()
@@ -184,7 +183,7 @@ case class Exchange(exchangeName: String,
       log,
       List(
         InitStep("start account-data-manager", () => startAccountDataManager()),
-        InitStep("start public-data-manager", () => initPublicDataManager()),
+        InitStep("start public-data-manager", () => startPublicDataManager()),
         InitStep("wait until account-data-manager initialized", () => accountDataManagerInitialized.await(maxWaitTime.toMillis, TimeUnit.MILLISECONDS)),
         InitStep("wait until wallet data arrives", () => walletInitialized.await(maxWaitTime.toMillis, TimeUnit.MILLISECONDS)),
         InitStep("wait until public-data-manager initialized", () => publicDataManagerInitialized.await(maxWaitTime.toMillis, TimeUnit.MILLISECONDS)),
@@ -192,8 +191,7 @@ case class Exchange(exchangeName: String,
         InitStep(s"initiate pioneer order (${tradeRoomConfig.pioneerOrderValueUSDT} USDT -> Bitcoin)", () => initiatePioneerOrder()),
         InitStep("waiting for pioneer order to succeed", () => pioneerOrderSucceeded.await(maxWaitTime.toMillis, TimeUnit.MILLISECONDS)),
         InitStep("send streaming-started", () => sendStreamingStartedResponseTo ! StreamingStarted(exchangeName)),
-        InitStep("wait until joined trade-room", () => joinedTradeRoom.await(maxWaitTime.toMillis, TimeUnit.MILLISECONDS)),
-        InitStep("init liquidity manager", () => initLiquidityManager())
+        InitStep("wait until joined trade-room", () => joinedTradeRoom.await(maxWaitTime.toMillis, TimeUnit.MILLISECONDS))
       ))
 
     Future(initSequence.run()).onComplete {
@@ -284,7 +282,6 @@ case class Exchange(exchangeName: String,
     case c: LiquidityLockClearance => liquidityManager.forward(c)
     case _: WalletUpdateTrigger    => // currently unused
     case t: OrderUpdateTrigger     => tradeRoom.get.forward(t)
-
     case HouseKeeping()            => houseKeeping()
     case s: TradeRoom.Stop         => onStop(s)
     case Status.Failure(cause)     => log.error("received failure", cause)

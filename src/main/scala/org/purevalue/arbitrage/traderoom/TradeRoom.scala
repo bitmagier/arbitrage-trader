@@ -85,8 +85,7 @@ object TradeRoom {
             tickers: Map[String, ConcurrentMap[TradePair, Ticker]],
             dataAge: Map[String, PublicDataTimestamps],
             wallets: Map[String, Wallet],
-            activeOrders: Map[String, ConcurrentMap[OrderRef, Order]]
-           ): Props =
+            activeOrders: Map[String, ConcurrentMap[OrderRef, Order]]): Props =
     Props(new TradeRoom(config, exchanges, tickers, dataAge, wallets, activeOrders))
 }
 
@@ -485,23 +484,6 @@ class TradeRoom(val config: Config,
       case _ => Restart
     }
 
-  override def preStart(): Unit = {
-    if (config.tradeRoom.tradeSimulation) log.info(s"Starting in trade simulation mode")
-    else log.info(s"${Emoji.DoYouEvenLiftBro}  Starting in production mode")
-
-    implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
-    for (exchange <- exchanges.values) {
-      Await.ready(
-        exchange ?
-          JoinTradeRoom(
-            self,
-            (f: Function1[LiquidityTx, Boolean]) => activeLiquidityTx.values.find(f),
-            () => referenceTicker),
-        timeout.duration.plus(1.second)
-      )
-    }
-  }
-
   var exchangesJoined: Set[String] = Set()
 
   def startTraders(): Unit = {
@@ -513,6 +495,24 @@ class TradeRoom(val config: Config,
     if (exchangesJoined == exchanges.keySet && traders.isEmpty) {
       log.info(s"${Emoji.Satisfied}  All exchanges initialized")
       startTraders()
+    }
+  }
+
+  override def preStart(): Unit = {
+    if (config.tradeRoom.tradeSimulation) log.info(s"Starting in trade simulation mode")
+    else log.info(s"${Emoji.DoYouEvenLiftBro}  Starting in production mode")
+
+    // TODO parallelize
+    implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
+    for (exchange <- exchanges.values) {
+      Await.ready(
+        exchange ?
+          JoinTradeRoom(
+            self,
+            (f: LiquidityTx => Boolean) => activeLiquidityTx.values.find(f),
+            () => referenceTicker),
+        timeout.duration.plus(1.second)
+      )
     }
   }
 

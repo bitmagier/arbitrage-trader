@@ -5,6 +5,7 @@ import java.time.Instant
 import akka.actor.{Actor, ActorRef, PoisonPill, Props}
 import akka.pattern.ask
 import akka.util.Timeout
+import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.adapter._
 import org.purevalue.arbitrage.traderoom.Asset.{Bitcoin, USDT}
 import org.purevalue.arbitrage.traderoom.TradeRoom.{ConcurrentMap, OrderRef}
@@ -139,6 +140,13 @@ class TradeRoomInitializer(val config: Config,
     }
   }
 
+  def onInitialized(): Unit = {
+    log.debug("TradeRoom initialized")
+    val tradeRoom = context.actorOf(TradeRoom.props(config, exchanges, tickers, dataAge, wallets, activeOrders), "TradeRoom")
+    parent ! InitializedTradeRoom(tradeRoom)
+    context.watch(tradeRoom)
+  }
+
   def onStreamingStarted(exchange: String): Unit = {
     exchangesStreamingPending = exchangesStreamingPending - exchange
     if (exchangesStreamingPending.isEmpty) {
@@ -146,11 +154,6 @@ class TradeRoomInitializer(val config: Config,
     }
   }
 
-  def onInitialized(): Unit = {
-    log.debug("TradeRoom initialized")
-    parent ! InitializedTradeRoom(context.actorOf(TradeRoom.props(config, exchanges, tickers, dataAge, wallets, activeOrders), "TradeRoom"))
-    self ! PoisonPill
-  }
 
   override def preStart(): Unit = {
     startExchanges() // parallel

@@ -33,7 +33,8 @@ object PioneerOrderRunner {
             exchange: ActorRef,
             tickers: collection.Map[TradePair, Ticker],
             activeOrderLookup: OrderRef => Option[Order]
-           ): Props = Props(new PioneerOrderRunner(globalConfig, tradeRoomConfig, exchangeName, exchange, tickers, activeOrderLookup))
+           ): Props =
+    Props(new PioneerOrderRunner(globalConfig, tradeRoomConfig, exchangeName, exchange, tickers, activeOrderLookup))
 }
 class PioneerOrderRunner(globalConfig: GlobalConfig,
                          tradeRoomConfig: TradeRoomConfig,
@@ -46,7 +47,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
-  val schedule: Cancellable = actorSystem.scheduler.scheduleWithFixedDelay(0.seconds, 500.millis, self, Watch())
+  val watchSchedule: Cancellable = actorSystem.scheduler.scheduleWithFixedDelay(0.seconds, 500.millis, self, Watch())
   val deadline: Instant = Instant.now.plusMillis(globalConfig.internalCommunicationTimeoutDuringInit.duration.toMillis)
   var orderRequest: OrderRequest = _
   var orderRef: OrderRef = _
@@ -89,7 +90,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
         } catch {
           case e: Exception => exchange ! PioneerOrderFailed(e)
         }
-        self ! PoisonPill
+        stop()
 
       case None => // nop
     }
@@ -112,5 +113,10 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
 
   override def receive: Receive = {
     case Watch() => watchPioneerTransaction()
+  }
+
+  def stop(): Unit = {
+    watchSchedule.cancel()
+    self ! PoisonPill
   }
 }

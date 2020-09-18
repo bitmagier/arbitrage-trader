@@ -3,12 +3,11 @@ package org.purevalue.arbitrage.traderoom.exchange
 import java.time.Instant
 import java.util.{NoSuchElementException, UUID}
 
-import akka.Done
 import akka.actor.{Actor, ActorRef, Cancellable, Props}
 import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.adapter.{ExchangePublicDataReadonly, Ticker, Wallet}
 import org.purevalue.arbitrage.traderoom.Asset.USDT
-import org.purevalue.arbitrage.traderoom.TradeRoom.{JoinTradeRoom, LiquidityTransformationOrder, LiquidityTx}
+import org.purevalue.arbitrage.traderoom.TradeRoom.{LiquidityTransformationOrder, LiquidityTx}
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager._
 import org.purevalue.arbitrage.util.Emoji
@@ -81,43 +80,28 @@ object LiquidityManager {
   def props(config: LiquidityManagerConfig,
             exchangeConfig: ExchangeConfig,
             tpData: ExchangePublicDataReadonly,
-            wallet: Wallet): Props =
-    Props(new LiquidityManager(config, exchangeConfig, tpData, wallet))
+            wallet: Wallet,
+            tradeRoom: ActorRef,
+            findOpenLiquidityTx: (LiquidityTx => Boolean) => Option[LiquidityTx],
+            referenceTicker: () => collection.Map[TradePair, Ticker]
+           ): Props =
+    Props(new LiquidityManager(config, exchangeConfig, tpData, wallet, tradeRoom, findOpenLiquidityTx, referenceTicker))
 }
 class LiquidityManager(val config: LiquidityManagerConfig,
                        val exchangeConfig: ExchangeConfig,
                        val tpData: ExchangePublicDataReadonly,
-                       val wallet: Wallet) extends Actor {
+                       val wallet: Wallet,
+                       val tradeRoom: ActorRef,
+                       val findOpenLiquidityTx: (LiquidityTx => Boolean) => Option[LiquidityTx],
+                       val referenceTicker: () => collection.Map[TradePair, Ticker]
+                      ) extends Actor {
 
   private val log = LoggerFactory.getLogger(classOf[LiquidityManager])
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
-  // initialized via JoinTradeRoom
-  var tradeRoom: Option[ActorRef] = None
-  var findOpenLiquidityTx: Option[(LiquidityTx => Boolean) => Option[LiquidityTx]] = None
-  var referenceTicker: Option[() => collection.Map[TradePair, Ticker]] = None
-
-  var houseKeepingSchedule: Cancellable = _
+  var houseKeepingSchedule: Cancellable = actorSystem.scheduler.scheduleWithFixedDelay(2.minute, 30.seconds, self, HouseKeeping())
   var shutdownInitiated: Boolean = false
 
-
-  def joinTradeRoom(j: JoinTradeRoom): Unit = {
-    this.tradeRoom = Some(j.tradeRoom)
-    this.findOpenLiquidityTx = Some(j.findOpenLiquidityTx)
-    this.referenceTicker = Some(j.referenceTicker)
-    houseKeepingSchedule = actorSystem.scheduler.scheduleWithFixedDelay(2.minute, 30.seconds, self, HouseKeeping())
-    context.become(initializedModeReceive)
-    sender() ! Done // neeed only for unit tests
-  }
-
-  override def receive: Receive = {
-    // @formatter:off
-    case j: JoinTradeRoom  => joinTradeRoom(j)
-    case TradeRoom.Stop(_) => shutdownInitiated = true
-    // @formatter:on
-  }
-
-  //////////////
 
   /**
    * UniqueDemand
@@ -228,7 +212,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
     tradeSide match {
       case TradeSide.Sell =>
         val tickerPrice = tpData.ticker(tradePair).priceEstimate
-        val referencePrice = referenceTicker.get.apply().get(tradePair).map(_.priceEstimate)
+        val referencePrice = referenceTicker.apply().get(tradePair).map(_.priceEstimate)
         if (referencePrice.isDefined)
           tickerPrice / referencePrice.get - 1.0 // x/R - 1
         else
@@ -236,7 +220,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
 
       case TradeSide.Buy =>
         val tickerPrice = tpData.ticker(tradePair).priceEstimate
-        val referencePrice = referenceTicker.get.apply().get(tradePair).map(_.priceEstimate)
+        val referencePrice = referenceTicker.apply().get(tradePair).map(_.priceEstimate)
         if (referencePrice.isDefined)
           1.0 - tickerPrice / referencePrice.get // 1 - x/R
         else
@@ -277,7 +261,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
       val limit = guessGoodLimit(tradePair, TradeSide.Buy, orderAmount)
       val orderRequest = OrderRequest(UUID.randomUUID(), None, exchangeConfig.exchangeName, tradePair, TradeSide.Buy, exchangeConfig.fee, orderAmount, limit)
 
-      tradeRoom.get ! LiquidityTransformationOrder(orderRequest)
+      tradeRoom ! LiquidityTransformationOrder(orderRequest)
 
       Some(CryptoValue(tradePair.baseAsset, orderAmount))
     }
@@ -381,13 +365,13 @@ class LiquidityManager(val config: LiquidityManagerConfig,
       limit
     )
 
-    tradeRoom.get ! LiquidityTransformationOrder(orderRequest)
+    tradeRoom ! LiquidityTransformationOrder(orderRequest)
 
     Some(CryptoValue(destinationReserveAsset.get, limit * coins.amount))
   }
 
   def convertBackLiquidityTxActive(source: Asset): Boolean = {
-    findOpenLiquidityTx.get(e =>
+    findOpenLiquidityTx(e =>
       (e.orderRequest.tradeSide == TradeSide.Sell
         && e.orderRequest.tradePair.baseAsset == source
         && exchangeConfig.reserveAssets.contains(e.orderRequest.tradePair.quoteAsset)) ||
@@ -455,14 +439,14 @@ class LiquidityManager(val config: LiquidityManagerConfig,
     // all reserve assets, that need more value : Map(Asset -> liquidity buckets missing)
     var liquiditySinkBuckets: Map[Asset, Int] = virtualReserveAssetsAggregated
       .filter(_.canConvertTo(USDT, tpData.ticker))
-      .map(e => (e.asset, e.convertTo(USDT, referenceTicker.get.apply()).amount)) // amount in USDT
+      .map(e => (e.asset, e.convertTo(USDT, referenceTicker()).amount)) // amount in USDT
       .filter(_._2 < config.minimumKeepReserveLiquidityPerAssetInUSDT) // below min keep amount?
       .map(e => (e._1, ((config.minimumKeepReserveLiquidityPerAssetInUSDT - e._2) / config.rebalanceTxGranularityInUSDT).ceil.toInt)) // buckets needed
       .toMap
     // all reserve assets, that have extra liquidity to distribute : Map(Asset -> liquidity buckets available for distribution)
     var liquiditySourcesBuckets: Map[Asset, Int] = currentReserveAssetsBalance // we can take coin only from currently really existing balance
       .filter(_.canConvertTo(USDT, tpData.ticker))
-      .map(e => (e.asset, e.convertTo(USDT, referenceTicker.get.apply()).amount)) // amount in USDT
+      .map(e => (e.asset, e.convertTo(USDT, referenceTicker()).amount)) // amount in USDT
       .filter(_._2 >= config.minimumKeepReserveLiquidityPerAssetInUSDT + config.rebalanceTxGranularityInUSDT) // having more than the minimum limit + tx-granularity
       .map(e => (e._1, ((e._2 - config.minimumKeepReserveLiquidityPerAssetInUSDT) / config.rebalanceTxGranularityInUSDT).floor.toInt)) // buckets to provide
       .toMap
@@ -578,14 +562,12 @@ class LiquidityManager(val config: LiquidityManagerConfig,
 
     clearObsoleteLocks()
     clearObsoleteDemands()
-    if (tradeRoom.isDefined) {
-      val demanded: List[CryptoValue] = provideDemandedLiquidity()
-      val incomingReserveLiquidity = convertBackNotNeededNoneReserveAssetLiquidity()
-      val totalIncomingReserveLiquidity = incomingReserveLiquidity ::: demanded.filter(e => exchangeConfig.reserveAssets.contains(e.asset))
+    val demanded: List[CryptoValue] = provideDemandedLiquidity()
+    val incomingReserveLiquidity = convertBackNotNeededNoneReserveAssetLiquidity()
+    val totalIncomingReserveLiquidity = incomingReserveLiquidity ::: demanded.filter(e => exchangeConfig.reserveAssets.contains(e.asset))
 
-      rebalanceReserveAssetsAmountOrders(totalIncomingReserveLiquidity).foreach { o =>
-        tradeRoom.get ! LiquidityTransformationOrder(o)
-      }
+    rebalanceReserveAssetsAmountOrders(totalIncomingReserveLiquidity).foreach { o =>
+      tradeRoom ! LiquidityTransformationOrder(o)
     }
   }
 
@@ -594,7 +576,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
     houseKeepingSchedule.cancel()
   }
 
-  def initializedModeReceive: Receive = {
+  override def receive: Receive = {
     // @formatter:off
     case r: LiquidityRequest        => liquidityRequest(r)
     case LiquidityLockClearance(id) => clearLock(id)

@@ -101,7 +101,7 @@ case class ExchangePublicDataManager(globalConfig:GlobalConfig,
 
   private var publicDataChannel: ActorRef = _
 
-  private val initStartTimestamp: Instant = Instant.now
+  private val initStartDeadline: Instant = Instant.now.plus(tradeRoomConfig.dataManagerInitTimeout)
   private var tickerCompletelyInitialized: Boolean = false
 
   val initCheckSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(1.seconds, 1.seconds, self, InitTimeoutCheck())
@@ -134,8 +134,8 @@ case class ExchangePublicDataManager(globalConfig:GlobalConfig,
   def initTimeoutCheck(): Unit = {
     if (tickerCompletelyInitialized) initCheckSchedule.cancel()
     else {
-      if (Duration.between(initStartTimestamp, Instant.now()).compareTo(tradeRoomConfig.dataManagerInitTimeout) > 0) {
-        log.info(s"Killing ${exchangeConfig.exchangeName}-PublicDataManager")
+      if (Instant.now.isAfter(initStartDeadline)) {
+        log.info(s"Init timeout -> killing actor")
         self ! Kill
       }
     }
