@@ -97,7 +97,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
   }
 
   override def preStart(): Unit = {
-    log.info(s"running pioneer tx for $exchangeName")
+    log.info(s"running pioneer order for $exchangeName")
     val tradePair = TradePair(Bitcoin, USDT)
     val limit = tickers(tradePair).priceEstimate
     val amountBitcoin = CryptoValue(USDT, tradeRoomConfig.pioneerOrderValueUSDT).convertTo(Bitcoin, tickers).amount

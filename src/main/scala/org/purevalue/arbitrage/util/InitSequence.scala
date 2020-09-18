@@ -9,6 +9,7 @@ case class InitStep(name: String, method: () => Unit)
 case class InitStepFailedException(message: String, cause: Throwable) extends RuntimeException(message, cause)
 
 class InitSequence(private val parentLogger: Logger,
+                   private val instanceName: String,
                    private val sequence: List[InitStep]) {
   private implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
@@ -17,12 +18,12 @@ class InitSequence(private val parentLogger: Logger,
     for (step <- sequence) {
       position += 1
       try {
-        parentLogger.info(s"starting init step [$position/${sequence.size}] '${step.name}'")
-        step.method.apply()
+        parentLogger.info(s"[$instanceName]: starting init step [$position/${sequence.size}] '${step.name}'")
+        step.method()
       } catch {
-        case t: Throwable => throw InitStepFailedException(s"Init step [$position/${sequence.size}] '${step.name}' failed", t)
+        case t: Throwable => throw InitStepFailedException(s"[$instanceName] Init step [$position/${sequence.size}] '${step.name}' failed", t)
       }
     }
-    parentLogger.info(s"""init sequence completed""")
+    parentLogger.info(s"""[$instanceName] init sequence completed""")
   }
 }

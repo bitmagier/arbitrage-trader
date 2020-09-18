@@ -17,11 +17,11 @@ import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLockClearance, LiquidityRequest}
 import org.purevalue.arbitrage.traderoom.exchange.PioneerOrderRunner.{PioneerOrderFailed, PioneerOrderSucceeded}
-import org.purevalue.arbitrage.util.{Emoji, InitSequence, InitStep}
+import org.purevalue.arbitrage.util.{Emoji, InitSequence, InitStep, WaitingFor}
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration.DurationInt
-import scala.concurrent.{Await, ExecutionContextExecutor, Future}
+import scala.concurrent.{Await, ExecutionContextExecutor, Future, TimeoutException}
 import scala.util.{Failure, Success}
 
 object Exchange {
@@ -33,6 +33,7 @@ object Exchange {
   case class WalletUpdateTrigger()
   case class OrderUpdateTrigger(ref: OrderRef) // status of an order has changed
   case class HouseKeeping()
+  case class SwitchToInitializedMode()
 
   type ExchangePublicDataInquirerInit = Function2[GlobalConfig, ExchangeConfig, Props]
   type ExchangePublicDataChannelInit = Function4[GlobalConfig, ExchangeConfig, ActorRef, ActorRef, Props]
@@ -90,7 +91,9 @@ case class Exchange(exchangeName: String,
   def initLiquidityManager(j: JoinTradeRoom): Unit = {
     liquidityManager = context.actorOf(
       LiquidityManager.props(
-        tradeRoomConfig.liquidityManager, exchangeConfig, publicData.readonly, accountData.wallet, tradeRoom.get, j.findOpenLiquidityTx, j.referenceTicker))
+        tradeRoomConfig.liquidityManager, exchangeConfig, publicData.readonly, accountData.wallet, j.tradeRoom, j.findOpenLiquidityTx, j.referenceTicker),
+      s"LiquidityManager-$exchangeName"
+    )
   }
 
   def checkIfBalanceIsSufficientForTrading(): Unit = {
@@ -155,12 +158,12 @@ case class Exchange(exchangeName: String,
   def joinTradeRoom(j: JoinTradeRoom): Unit = {
     this.tradeRoom = Some(j.tradeRoom)
     initLiquidityManager(j)
-    joinedTradeRoom.countDown()
+    joinedTradeRoom.arrived()
   }
 
   def switchToInitializedMode(): Unit = {
-    houseKeepingSchedule = actorSystem.scheduler.scheduleAtFixedRate(20.seconds, 1.minute, self, HouseKeeping())
     context.become(initializedModeReceive)
+    houseKeepingSchedule = actorSystem.scheduler.scheduleAtFixedRate(20.seconds, 1.minute, self, HouseKeeping())
     log.info(s"${Emoji.Excited}  [$exchangeName]: completely initialized and running")
     tradeRoom.get ! TradeRoomJoined(exchangeName)
   }
@@ -170,34 +173,35 @@ case class Exchange(exchangeName: String,
       case _ => Restart
     }
 
-  val accountDataManagerInitialized: CountDownLatch = new CountDownLatch(1)
-  val publicDataManagerInitialized: CountDownLatch = new CountDownLatch(1)
-  val walletInitialized: CountDownLatch = new CountDownLatch(1)
-  val pioneerOrderSucceeded: CountDownLatch = new CountDownLatch(1)
-  val joinedTradeRoom: CountDownLatch = new CountDownLatch(1)
+  val accountDataManagerInitialized: WaitingFor = WaitingFor()
+  val publicDataManagerInitialized: WaitingFor = WaitingFor()
+  val walletInitialized: WaitingFor = WaitingFor()
+  val pioneerOrderSucceeded: WaitingFor = WaitingFor()
+  val joinedTradeRoom: WaitingFor = WaitingFor()
 
   def startStreaming(): Unit = {
     val sendStreamingStartedResponseTo = sender()
     val maxWaitTime = globalConfig.internalCommunicationTimeoutDuringInit.duration
     val initSequence = new InitSequence(
       log,
+      exchangeName,
       List(
         InitStep("start account-data-manager", () => startAccountDataManager()),
         InitStep("start public-data-manager", () => startPublicDataManager()),
-        InitStep("wait until account-data-manager initialized", () => accountDataManagerInitialized.await(maxWaitTime.toMillis, TimeUnit.MILLISECONDS)),
-        InitStep("wait until wallet data arrives", () => walletInitialized.await(maxWaitTime.toMillis, TimeUnit.MILLISECONDS)),
-        InitStep("wait until public-data-manager initialized", () => publicDataManagerInitialized.await(maxWaitTime.toMillis, TimeUnit.MILLISECONDS)),
+        InitStep("wait until account-data-manager initialized", () => accountDataManagerInitialized.await(maxWaitTime)),
+        InitStep("wait until wallet data arrives", () => {walletInitialized.await(maxWaitTime); Thread.sleep(2000)}), // wait another 2 seconds for all wallet entries to arrive (bitfinex)
+        InitStep("wait until public-data-manager initialized", () => publicDataManagerInitialized.await(maxWaitTime)),
         InitStep("check if balance is sufficient for trading", () => checkIfBalanceIsSufficientForTrading()),
         InitStep(s"initiate pioneer order (${tradeRoomConfig.pioneerOrderValueUSDT} USDT -> Bitcoin)", () => initiatePioneerOrder()),
-        InitStep("waiting for pioneer order to succeed", () => pioneerOrderSucceeded.await(maxWaitTime.toMillis, TimeUnit.MILLISECONDS)),
+        InitStep("waiting for pioneer order to succeed", () => pioneerOrderSucceeded.await(maxWaitTime)),
         InitStep("send streaming-started", () => sendStreamingStartedResponseTo ! StreamingStarted(exchangeName)),
-        InitStep("wait until joined trade-room", () => joinedTradeRoom.await(maxWaitTime.toMillis, TimeUnit.MILLISECONDS))
+        InitStep("wait until joined trade-room", () => joinedTradeRoom.await(maxWaitTime))
       ))
 
     Future(initSequence.run()).onComplete {
-      case Success(_) => switchToInitializedMode()
+      case Success(_) => self ! SwitchToInitializedMode()
       case Failure(e) =>
-        log.error("Init sequence failed", e)
+        log.error(s"[$exchangeName] Init sequence failed", e)
         self ! PoisonPill // TODO coordinated shutdown
     }
   }
@@ -220,15 +224,16 @@ case class Exchange(exchangeName: String,
     case StartStreaming()                         => startStreaming()
     case GetTradePairs()                          => sender() ! tradePairs
     case RemoveTradePair(tp)                      => removeTradePairBeforeInitialized(tp); sender() ! true
-    case ExchangePublicDataManager.Initialized()  => publicDataManagerInitialized.countDown()
-    case ExchangeAccountDataManager.Initialized() => accountDataManagerInitialized.countDown()
-    case PioneerOrderSucceeded()                  => pioneerOrderSucceeded.countDown()
-    case PioneerOrderFailed(e)                    => pioneerOrderSucceeded.countDown()
+    case ExchangePublicDataManager.Initialized()  => publicDataManagerInitialized.arrived()
+    case ExchangeAccountDataManager.Initialized() => accountDataManagerInitialized.arrived()
+    case PioneerOrderSucceeded()                  => pioneerOrderSucceeded.arrived()
+    case PioneerOrderFailed(e)                    => pioneerOrderSucceeded.arrived()
     case j: JoinTradeRoom                         => joinTradeRoom(j)
-    case WalletUpdateTrigger()                    => if (walletInitialized.getCount > 0) walletInitialized.countDown()
+    case WalletUpdateTrigger()                    => if (!walletInitialized.isArrived) walletInitialized.arrived()
     case t: OrderUpdateTrigger                    => if (tradeRoom.isDefined) tradeRoom.get.forward(t)
     case o: NewLimitOrder                         => onNewLimitOrder(o) // needed only for pioneer order runner
     case Done                                     => // ignoring Done from cascaded JoinTradeRoom
+    case SwitchToInitializedMode()                => switchToInitializedMode()
     case s: TradeRoom.Stop                        => onStop(s)
     case Status.Failure(cause)                    => log.error("received failure", cause)
   }

@@ -461,7 +461,7 @@ class TradeRoom(val config: Config,
         .filterNot(o => activeOrderBundles.values.exists(_.ordersRefs.contains(o._1)))
         .filterNot(o => activeLiquidityTx.contains(o._1))
       if (orphanOrders.nonEmpty) {
-        log.warn(s"""unreferenced order(s) on ${orphanOrders.head._1.exchange}:\n${orphanOrders.map(_._2.shortDesc).mkString(", ")}""")
+        log.warn(s"""unreferenced order(s) on ${orphanOrders.head._1.exchange}: ${orphanOrders.map(_._2.shortDesc).mkString(", ")}""")
         orphanOrders
           .filter(_._2.orderStatus.isFinal)
           .foreach { o =>
@@ -520,17 +520,8 @@ class TradeRoom(val config: Config,
     if (config.tradeRoom.tradeSimulation) log.info(s"Starting in trade simulation mode")
     else log.info(s"${Emoji.DoYouEvenLiftBro}  Starting in production mode")
 
-    // TODO parallelize
-    implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
     for (exchange <- exchanges.values) {
-      Await.ready(
-        exchange ?
-          JoinTradeRoom(
-            self,
-            (f: LiquidityTx => Boolean) => activeLiquidityTx.values.find(f),
-            () => referenceTicker),
-        timeout.duration.plus(1.second)
-      )
+      exchange ! JoinTradeRoom(self, (f: LiquidityTx => Boolean) => activeLiquidityTx.values.find(f), () => referenceTicker)
     }
   }
 
