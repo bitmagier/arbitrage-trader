@@ -1,12 +1,13 @@
-package org.purevalue.arbitrage.traderoom
+package org.purevalue.arbitrage.adapter
 
 import java.time.{Duration, Instant}
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, Props, Status}
-import org.purevalue.arbitrage.traderoom.Exchange.ExchangePublicDataChannelInit
-import org.purevalue.arbitrage.traderoom.ExchangePublicDataManager._
+import org.purevalue.arbitrage.adapter.ExchangePublicDataManager._
+import org.purevalue.arbitrage.traderoom.TradePair
+import org.purevalue.arbitrage.traderoom.exchange.Exchange.ExchangePublicDataChannelInit
 import org.purevalue.arbitrage.util.Util.formatDecimal
-import org.purevalue.arbitrage.{Config, ExchangeConfig, Main, TradeRoomConfig}
+import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig, Main, TradeRoomConfig}
 import org.slf4j.LoggerFactory
 
 import scala.collection._
@@ -72,20 +73,22 @@ object ExchangePublicDataManager {
   case class Initialized()
   case class IncomingData(data: Seq[ExchangePublicStreamData])
 
-  def props(config: ExchangeConfig,
+  def props(globalConfig:GlobalConfig,
+            exchangeConfig: ExchangeConfig,
             tradeRoomConfig: TradeRoomConfig,
             tradePairs: Set[TradePair],
             exchangePublicDataInquirer: ActorRef,
             exchange: ActorRef,
             publicDataChannelProps: ExchangePublicDataChannelInit,
             publicData: ExchangePublicData): Props =
-    Props(new ExchangePublicDataManager(config, tradeRoomConfig, tradePairs, exchangePublicDataInquirer, exchange, publicDataChannelProps, publicData))
+    Props(new ExchangePublicDataManager(globalConfig, exchangeConfig, tradeRoomConfig, tradePairs, exchangePublicDataInquirer, exchange, publicDataChannelProps, publicData))
 }
 
 /**
  * Manages all sorts of public data streams at one exchange
  */
-case class ExchangePublicDataManager(config: ExchangeConfig,
+case class ExchangePublicDataManager(globalConfig:GlobalConfig,
+                                     exchangeConfig: ExchangeConfig,
                                      tradeRoomConfig: TradeRoomConfig,
                                      tradePairs: Set[TradePair],
                                      exchangePublicDataInquirer: ActorRef,
@@ -98,18 +101,19 @@ case class ExchangePublicDataManager(config: ExchangeConfig,
 
   private var publicDataChannel: ActorRef = _
 
-  private var initializedMsgSend = false
-  private var initTimestamp: Instant = _
+  private val initStartTimestamp: Instant = Instant.now
+  private var tickerCompletelyInitialized: Boolean = false
 
   val initCheckSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(1.seconds, 1.seconds, self, InitTimeoutCheck())
 
-  def initialized: Boolean = {
-    tradePairs.subsetOf(publicData.ticker.keySet)
+  def onTickerUpdate(): Unit = {
+    if (!tickerCompletelyInitialized) {
+      tickerCompletelyInitialized = tradePairs.subsetOf(publicData.ticker.keySet)
+      if (tickerCompletelyInitialized) {
+        exchange ! Initialized()
+      }
+    }
   }
-
-  //  def sink: Sink[Seq[ExchangePublicStreamData], Future[Done]] = Sink.foreach[Seq[ExchangePublicStreamData]] {
-  //    applyDataset
-  //  }
 
   private def applyDataset(data: Seq[ExchangePublicStreamData]): Unit = {
     data.foreach {
@@ -119,44 +123,35 @@ case class ExchangePublicDataManager(config: ExchangeConfig,
       case t: Ticker =>
         publicData.ticker += t.tradePair -> t
         publicData.age.tickerTS = Instant.now
+        onTickerUpdate()
 
       case other =>
         log.error(s"Not implemended: $other")
         throw new NotImplementedError
     }
-    eventuallyInitialized()
-  }
-
-  def eventuallyInitialized(): Unit = {
-    if (!initializedMsgSend && initialized) {
-      exchange ! Initialized()
-      initializedMsgSend = true
-    }
   }
 
   override def preStart(): Unit = {
-    initTimestamp = Instant.now()
-    publicDataChannel = context.actorOf(exchangePublicDataChannelProps.apply(config, self, exchangePublicDataInquirer),
-      s"${config.exchangeName}-PublicDataChannel")
+    publicDataChannel = context.actorOf(exchangePublicDataChannelProps(globalConfig, exchangeConfig, self, exchangePublicDataInquirer),
+      s"${exchangeConfig.exchangeName}-PublicDataChannel")
   }
 
   def initTimeoutCheck(): Unit = {
-    if (initialized) initCheckSchedule.cancel()
+    if (tickerCompletelyInitialized) initCheckSchedule.cancel()
     else {
-      if (Duration.between(initTimestamp, Instant.now()).compareTo(tradeRoomConfig.dataManagerInitTimeout) > 0) {
-        log.info(s"Killing ${config.exchangeName}-PublicDataManager")
+      if (Duration.between(initStartTimestamp, Instant.now()).compareTo(tradeRoomConfig.dataManagerInitTimeout) > 0) {
+        log.info(s"Killing ${exchangeConfig.exchangeName}-PublicDataManager")
         self ! Kill
       }
     }
   }
 
+
   def receive: Receive = {
-
-    case IncomingData(data) => applyDataset(data)
-
-    case InitTimeoutCheck() => initTimeoutCheck()
-
-    case Status.Failure(cause) =>
-      log.error("received failure", cause)
+    // @formatter:off
+    case IncomingData(data)    => applyDataset(data)
+    case InitTimeoutCheck()    => initTimeoutCheck()
+    case Status.Failure(cause) => log.error("received failure", cause)
+    // @formatter:on
   }
 }

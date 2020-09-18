@@ -10,10 +10,11 @@ import akka.http.scaladsl.model.{StatusCodes, Uri}
 import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
-import org.purevalue.arbitrage._
+import org.purevalue.arbitrage.{adapter, _}
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.GetBitfinexTradePairs
-import org.purevalue.arbitrage.traderoom.ExchangePublicDataManager.IncomingData
-import org.purevalue.arbitrage.traderoom.{ExchangePublicStreamData, Heartbeat, Ticker, TradePair}
+import org.purevalue.arbitrage.adapter.ExchangePublicDataManager.IncomingData
+import org.purevalue.arbitrage.adapter.{ExchangePublicStreamData, Heartbeat, Ticker}
+import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.util.Emoji
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
@@ -42,7 +43,7 @@ case class RawTickerEntryJson(bid: Double, // Price of last highest bid
                               high: Double, // Daily high
                               low: Double) { // Daily low
   def toTicker(exchange: String, tradePair: TradePair): Ticker =
-    Ticker(exchange, tradePair, bid, None, ask, None, Some(lastPrice))
+    adapter.Ticker(exchange, tradePair, bid, None, ask, None, Some(lastPrice))
 }
 object RawTickerEntryJson {
   def apply(v: Array[Double]): RawTickerEntryJson =
@@ -93,18 +94,23 @@ object WebSocketJsonProtocoll extends DefaultJsonProtocol {
 }
 
 
+
+////////////////////////////////////////////////
+
 object BitfinexPublicDataChannel {
-  def props(config: ExchangeConfig,
+  def props(globalConfig: GlobalConfig,
+            exchangeConfig: ExchangeConfig,
             exchangePublicDataManager: ActorRef,
             publicDataInquirer: ActorRef): Props =
-    Props(new BitfinexPublicDataChannel(config, exchangePublicDataManager, publicDataInquirer))
+    Props(new BitfinexPublicDataChannel(globalConfig, exchangeConfig, exchangePublicDataManager, publicDataInquirer))
 }
 
 /**
  * Bitfinex public data channel
  * Converts Raw data to unified ExchangeTPStreamData
  */
-class BitfinexPublicDataChannel(config: ExchangeConfig,
+class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
+                                exchangeConfig: ExchangeConfig,
                                 exchangePublicDataManager: ActorRef,
                                 publicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BitfinexPublicDataChannel])
@@ -115,17 +121,16 @@ class BitfinexPublicDataChannel(config: ExchangeConfig,
   val MaximumNumberOfChannelsPerConnection: Int = 25
 
   var bitfinexTradePairBySymbol: Map[String, BitfinexTradePair] = _
+  val tickerSymbolsByChannelId: collection.concurrent.Map[Int, String] = TrieMap()
+
   var wsList: List[(Future[WebSocketUpgradeResponse], Promise[Option[Message]])] = List()
   var connectedList: List[Future[Done.type]] = List()
 
   import WebSocketJsonProtocoll._
 
-  val tickerSymbolsByChannelId: collection.concurrent.Map[Int, String] = TrieMap()
-
-
   def exchangeDataMapping(in: Seq[IncomingPublicBitfinexJson]): Seq[ExchangePublicStreamData] = in.map {
     // @formatter:off
-    case t: RawTickerJson => t.value.toTicker(config.exchangeName, bitfinexTradePairBySymbol(tickerSymbolsByChannelId(t.channelId)).toTradePair)
+    case t: RawTickerJson => t.value.toTicker(exchangeConfig.exchangeName, bitfinexTradePairBySymbol(tickerSymbolsByChannelId(t.channelId)).toTradePair)
     case RawHeartbeat()   => Heartbeat(Instant.now)
     case other            => log.error(s"unhandled object: $other"); throw new NotImplementedError()
     // @formatter:on
@@ -200,7 +205,7 @@ class BitfinexPublicDataChannel(config: ExchangeConfig,
 
   def decodeMessage(message: Message): Future[Seq[IncomingPublicBitfinexJson]] = message match {
     case msg: TextMessage =>
-      msg.toStrict(Config.httpTimeout)
+      msg.toStrict(globalConfig.httpTimeout)
         .map(_.getStrictText)
         .map {
           case s: String if s.startsWith("{") => decodeJsonObject(s)
@@ -265,13 +270,14 @@ class BitfinexPublicDataChannel(config: ExchangeConfig,
       if (log.isTraceEnabled) log.trace(s"""starting a WebSocket stream partition for ${partition.mkString(",")}""")
       val subscribeMessages: List[SubscribeRequestJson] = partition.map(e => subscribeMessage(e)).toList
       val ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow(subscribeMessages))
+      ws._2.future.onComplete(e => log.info(s"connection closed: ${e.get}"))
       wsList = ws :: wsList
       connectedList = createConnected(ws._1) :: connectedList
     }
   }
 
   def initBitfinexTradePairBySymbol(): Unit = {
-    implicit val timeout: Timeout = Config.internalCommunicationTimeoutDuringInit
+    implicit val timeout: Timeout = globalConfig.internalCommunicationTimeoutDuringInit
     bitfinexTradePairBySymbol = Await.result(
       (publicDataInquirer ? GetBitfinexTradePairs()).mapTo[Set[BitfinexTradePair]],
       timeout.duration.plus(500.millis))

@@ -1,6 +1,7 @@
 package org.purevalue.arbitrage.traderoom
 
 import org.purevalue.arbitrage.StaticConfig
+import org.purevalue.arbitrage.adapter.Ticker
 import org.purevalue.arbitrage.traderoom.Asset.Bitcoin
 import org.purevalue.arbitrage.traderoom.TradeRoom.TickersReadonly
 import org.purevalue.arbitrage.util.Util.formatDecimal

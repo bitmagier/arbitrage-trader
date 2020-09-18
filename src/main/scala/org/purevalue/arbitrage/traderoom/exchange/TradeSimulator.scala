@@ -1,25 +1,25 @@
-package org.purevalue.arbitrage.traderoom
+package org.purevalue.arbitrage.traderoom.exchange
 
 import java.time.Instant
 import java.util.UUID
 
 import akka.actor.{Actor, ActorRef, Props}
 import akka.pattern.pipe
-import org.purevalue.arbitrage.ExchangeConfig
 import org.purevalue.arbitrage.Main.actorSystem
-import org.purevalue.arbitrage.traderoom.ExchangeAccountDataManager._
+import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager._
+import org.purevalue.arbitrage.adapter.{ExchangePublicData, WalletBalanceUpdate}
+import org.purevalue.arbitrage.traderoom._
+import org.purevalue.arbitrage.{ExchangeConfig, adapter}
 
 import scala.concurrent.{ExecutionContextExecutor, Future}
 
 object TradeSimulator {
   def props(config: ExchangeConfig,
-            accountDataManager: ActorRef,
-            publicData: ExchangePublicData): Props =
-    Props(new TradeSimulator(config, accountDataManager, publicData))
+            accountDataManager: ActorRef): Props =
+    Props(new TradeSimulator(config, accountDataManager))
 }
 class TradeSimulator(config: ExchangeConfig,
-                     accountDataManager: ActorRef,
-                     publicData: ExchangePublicData) extends Actor {
+                     accountDataManager: ActorRef) extends Actor {
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
   def cancelOrder(tradePair: TradePair, externalOrderId: String): Future[CancelOrderResult] = {
@@ -37,7 +37,7 @@ class TradeSimulator(config: ExchangeConfig,
   def limitOrderFilled(externalOrderId: String, creationTime: Instant, o: OrderRequest): OrderUpdate =
     OrderUpdate(externalOrderId, o.exchange, o.tradePair, o.tradeSide, OrderType.LIMIT, o.limit, None, Some(o.amountBaseAsset), Some(creationTime), OrderStatus.FILLED, o.amountBaseAsset, o.limit, Instant.now)
 
-  def walletBalanceUpdate(delta: LocalCryptoValue): WalletBalanceUpdate = WalletBalanceUpdate(delta.asset, delta.amount)
+  def walletBalanceUpdate(delta: LocalCryptoValue): WalletBalanceUpdate = adapter.WalletBalanceUpdate(delta.asset, delta.amount)
 
   def simulateOrderLifetime(externalOrderId: String, o: OrderRequest): Unit = {
     Thread.sleep(100)

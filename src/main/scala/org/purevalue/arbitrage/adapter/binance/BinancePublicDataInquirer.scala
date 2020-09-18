@@ -3,9 +3,9 @@ package org.purevalue.arbitrage.adapter.binance
 import akka.actor.{Actor, ActorSystem, Props, Status}
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer._
-import org.purevalue.arbitrage.adapter.bitfinex.RawTickerEntryJson
-import org.purevalue.arbitrage.traderoom.Exchange.{GetTradePairs, TradePairs}
-import org.purevalue.arbitrage.traderoom.{Ask, Asset, Bid, TradePair}
+import org.purevalue.arbitrage.adapter.{Ask, Bid}
+import org.purevalue.arbitrage.traderoom.exchange.Exchange.{GetTradePairs, TradePairs}
+import org.purevalue.arbitrage.traderoom.{Asset, TradePair}
 import org.purevalue.arbitrage.util.HttpUtil.httpGetJson
 import org.slf4j.LoggerFactory
 import spray.json._
@@ -61,13 +61,15 @@ object BinancePublicDataInquirer {
 
   val BinanceBaseRestEndpoint = "https://api.binance.com"
 
-  def props(config: ExchangeConfig): Props = Props(new BinancePublicDataInquirer(config))
+  def props(globalConfig: GlobalConfig, exchangeConfig: ExchangeConfig): Props =
+    Props(new BinancePublicDataInquirer(globalConfig, exchangeConfig))
 }
 
 /**
  * Binance exchange - account data channel
  */
-class BinancePublicDataInquirer(config: ExchangeConfig) extends Actor {
+class BinancePublicDataInquirer(globalConfig: GlobalConfig,
+                                exchangeConfig: ExchangeConfig) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BinancePublicDataInquirer])
   implicit val system: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = system.dispatcher
@@ -83,7 +85,7 @@ class BinancePublicDataInquirer(config: ExchangeConfig) extends Actor {
     try {
       exchangeInfo = Await.result(
         httpGetJson[RawBinanceExchangeInformationJson](s"$BinanceBaseRestEndpoint/api/v3/exchangeInfo"),
-        Config.httpTimeout.plus(500.millis))
+        globalConfig.httpTimeout.plus(500.millis))
 
       binanceTradePairs = exchangeInfo.symbols
         .filter(s => s.status == "TRADING" && s.orderTypes.contains("LIMIT") /* && s.orderTypes.contains("LIMIT_MAKER")*/ && s.permissions.contains("SPOT"))
@@ -98,7 +100,7 @@ class BinancePublicDataInquirer(config: ExchangeConfig) extends Actor {
           s.filters.find(_.fields("filterType") == JsString("LOT_SIZE")).get.convertTo[LotSizeJson].toLotSize,
           s.filters.find(_.fields("filterType") == JsString("MIN_NOTIONAL")).get.fields("minNotional").convertTo[String].toDouble
         ))
-        .filter(e => config.tradeAssets.contains(e.baseAsset) && config.tradeAssets.contains(e.quoteAsset))
+        .filter(e => exchangeConfig.tradeAssets.contains(e.baseAsset) && exchangeConfig.tradeAssets.contains(e.quoteAsset))
         .toSet
 
       log.debug("received ExchangeInfo")
@@ -124,7 +126,7 @@ class BinancePublicDataInquirer(config: ExchangeConfig) extends Actor {
 // The LOT_SIZE filter defines the quantity rules for the symbol
 case class LotSize(minQty: Double,
                    maxQty: Double,
-                   stepSize: Double)  // stepSize defines the intervals that a quantity/icebergQty can be increased/decreased by
+                   stepSize: Double) // stepSize defines the intervals that a quantity/icebergQty can be increased/decreased by
 case class LotSizeJson(minQty: String,
                        maxQty: String,
                        stepSize: String) {

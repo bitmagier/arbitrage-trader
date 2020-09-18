@@ -3,7 +3,7 @@ package org.purevalue.arbitrage
 import org.purevalue.arbitrage.adapter.binance.{BinanceAccountDataChannel, BinancePublicDataChannel, BinancePublicDataInquirer}
 import org.purevalue.arbitrage.adapter.bitfinex.{BitfinexAccountDataChannel, BitfinexPublicDataChannel, BitfinexPublicDataInquirer}
 import org.purevalue.arbitrage.traderoom.Asset
-import org.purevalue.arbitrage.traderoom.Exchange.{ExchangeAccountDataChannelInit, ExchangePublicDataChannelInit, ExchangePublicDataInquirerInit}
+import org.purevalue.arbitrage.traderoom.exchange.Exchange.{ExchangeAccountDataChannelInit, ExchangePublicDataChannelInit, ExchangePublicDataInquirerInit}
 import org.slf4j.LoggerFactory
 
 case class ExchangeInitStuff(exchangePublicDataInquirerProps: ExchangePublicDataInquirerInit,

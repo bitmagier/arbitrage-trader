@@ -1,13 +1,15 @@
-package org.purevalue.arbitrage.traderoom
+package org.purevalue.arbitrage.adapter
 
 import java.util.UUID
 
+import akka.Done
 import akka.actor.{Actor, ActorRef, Props}
-import org.purevalue.arbitrage.traderoom.Exchange.ExchangeAccountDataChannelInit
-import org.purevalue.arbitrage.traderoom.ExchangeAccountDataManager._
-import org.purevalue.arbitrage.traderoom.TradeRoom.{OrderRef, OrderUpdateTrigger, WalletUpdateTrigger}
+import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager._
+import org.purevalue.arbitrage.traderoom.TradeRoom.{JoinTradeRoom, OrderRef, OrderUpdateTrigger, WalletUpdateTrigger}
+import org.purevalue.arbitrage.traderoom._
+import org.purevalue.arbitrage.traderoom.exchange.Exchange.ExchangeAccountDataChannelInit
 import org.purevalue.arbitrage.util.Util.formatDecimal
-import org.purevalue.arbitrage.{Config, ExchangeConfig}
+import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig, TradeRoomConfig}
 import org.slf4j.LoggerFactory
 
 import scala.collection._
@@ -18,38 +20,43 @@ object ExchangeAccountDataManager {
   case class Initialized()
   case class CancelOrder(tradePair: TradePair, externalOrderId: String)
   case class CancelOrderResult(tradePair: TradePair, externalOrderId: String, success: Boolean)
-  case class NewLimitOrder(o: OrderRequest) // response is NewOrderAck
+  case class NewLimitOrder(orderRequest: OrderRequest) // response is NewOrderAck
   case class NewOrderAck(exchange: String, tradePair: TradePair, externalOrderId: String, orderId: UUID) {
     def toOrderRef: OrderRef = OrderRef(exchange, tradePair, externalOrderId)
   }
   case class SimulatedData(dataset: ExchangeAccountStreamData)
 
-  def props(config: ExchangeConfig,
+  def props(globalConfig: GlobalConfig,
+            exchangeConfig: ExchangeConfig,
+            tradeRoomConfig: TradeRoomConfig,
             exchange: ActorRef,
             exchangePublicDataInquirer: ActorRef,
-            tradeRoom: ActorRef,
             exchangeAccountDataChannelInit: ExchangeAccountDataChannelInit,
             accountData: ExchangeAccountData): Props =
-    Props(new ExchangeAccountDataManager(config, exchange, exchangePublicDataInquirer, tradeRoom, exchangeAccountDataChannelInit, accountData))
+    Props(new ExchangeAccountDataManager(globalConfig, exchangeConfig, tradeRoomConfig, exchange, exchangePublicDataInquirer, exchangeAccountDataChannelInit, accountData))
 }
-class ExchangeAccountDataManager(config: ExchangeConfig,
+class ExchangeAccountDataManager(globalConfig: GlobalConfig,
+                                 exchangeConfig: ExchangeConfig,
+                                 tradeRoomConfig: TradeRoomConfig,
                                  exchange: ActorRef,
                                  exchangePublicDataInquirer: ActorRef,
-                                 tradeRoom: ActorRef,
                                  exchangeAccountDataChannelInit: ExchangeAccountDataChannelInit,
                                  accountData: ExchangeAccountData) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[ExchangeAccountDataManager])
+
+  var tradeRoom: Option[ActorRef] = None
   var accountDataChannel: ActorRef = _
 
   private def applyData(data: ExchangeAccountStreamData): Unit = {
-
     if (log.isTraceEnabled) log.trace(s"applying incoming $data")
 
     data match {
-
       case w: WalletAssetUpdate =>
         accountData.wallet.balance = accountData.wallet.balance -- w.balance.keys ++ w.balance
-        tradeRoom ! WalletUpdateTrigger(config.exchangeName)
+        tradeRoom match {
+          case Some(actor) => actor ! WalletUpdateTrigger(exchangeConfig.exchangeName)
+          case None =>
+        }
 
       case w: WalletBalanceUpdate =>
         accountData.wallet.balance = accountData.wallet.balance.map {
@@ -58,42 +65,67 @@ class ExchangeAccountDataManager(config: ExchangeConfig,
             (a, Balance(b.asset, b.amountAvailable + w.amountDelta, b.amountLocked))
           case (a: Asset, b: Balance) => (a, b)
         }
-        tradeRoom ! WalletUpdateTrigger(config.exchangeName)
+        tradeRoom match {
+          case Some(actor) => actor ! WalletUpdateTrigger(exchangeConfig.exchangeName)
+          case None =>
+        }
 
       case o: Order =>
         val ref = o.ref
         accountData.activeOrders.update(ref, o)
-        tradeRoom ! OrderUpdateTrigger(ref)
+        tradeRoom match {
+          case Some(actor) => actor ! OrderUpdateTrigger(ref)
+          case None =>
+        }
 
       case o: OrderUpdate =>
-        val ref = OrderRef(config.exchangeName, o.tradePair, o.externalOrderId)
+        val ref = OrderRef(exchangeConfig.exchangeName, o.tradePair, o.externalOrderId)
         if (accountData.activeOrders.contains(ref))
           accountData.activeOrders(ref).applyUpdate(o)
         else
           accountData.activeOrders.update(ref, o.toOrder) // covers a restart-scenario (tradeRoom / arbitrage-trader)
 
-        tradeRoom ! OrderUpdateTrigger(ref)
+        tradeRoom match {
+          case Some(actor) => actor ! OrderUpdateTrigger(ref)
+          case None =>
+        }
 
       case _ => throw new NotImplementedError
     }
   }
 
+  def applySimulatedData(dataset: ExchangeAccountStreamData): Unit = {
+    if (!tradeRoomConfig.tradeSimulation) throw new RuntimeException
+    log.trace(s"Applying simulation data ...")
+    applyData(dataset)
+  }
+
   override def preStart(): Unit = {
-    accountDataChannel = context.actorOf(exchangeAccountDataChannelInit(config, self, exchangePublicDataInquirer), s"${config.exchangeName}.AccountDataChannel")
+    accountDataChannel = context.actorOf(exchangeAccountDataChannelInit(globalConfig, exchangeConfig, self, exchangePublicDataInquirer),
+      s"${exchangeConfig.exchangeName}.AccountDataChannel")
   }
 
+  def joinTradeRoom(tradeRoom: ActorRef): Unit = {
+    this.tradeRoom = Some(tradeRoom)
+    context.become(initializedModeReceive)
+    sender() ! Done
+  }
+
+  // @formatter:off
   override def receive: Receive = {
-    case IncomingData(data) => data.foreach(applyData)
-
-    case i: Initialized => exchange.forward(i)
-    case c: CancelOrder => accountDataChannel.forward(c)
-    case o: NewLimitOrder => accountDataChannel.forward(o)
-
-    case SimulatedData(dataset) =>
-      if (!Config.tradeRoom.tradeSimulation) throw new RuntimeException
-      log.trace(s"Applying simulation data ...")
-      applyData(dataset)
+    case i: Initialized                 => exchange.forward(i) // is expected to come from exchange specific account-data-channel when initialized
+    case JoinTradeRoom(tradeRoom, _, _) => joinTradeRoom(tradeRoom) // JoinTradeRoom is expected to be send from Exchange, after we forwarded the Initialized message (see above)
   }
+  // @formatter:on
+
+  // @formatter:off
+  def initializedModeReceive: Receive = {
+    case IncomingData(data)             => data.foreach(applyData)
+    case c: CancelOrder                 => accountDataChannel.forward(c)
+    case o: NewLimitOrder               => accountDataChannel.forward(o)
+    case SimulatedData(dataset)         => applySimulatedData(dataset)
+  }
+  // @formatter:on
 }
 
 
@@ -165,4 +197,5 @@ case class Fee(exchange: String,
   def average: Double = (makerFee + takerFee) / 2
 }
 
-case class ExchangeAccountData(wallet: Wallet, activeOrders: concurrent.Map[OrderRef, Order])
+case class ExchangeAccountData(wallet: Wallet,
+                               activeOrders: concurrent.Map[OrderRef, Order])

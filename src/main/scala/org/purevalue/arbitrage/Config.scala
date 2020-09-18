@@ -5,7 +5,8 @@ import java.util.concurrent.TimeUnit
 
 import akka.util.Timeout
 import com.typesafe.config.ConfigFactory
-import org.purevalue.arbitrage.traderoom.{Asset, Fee}
+import org.purevalue.arbitrage.adapter.Fee
+import org.purevalue.arbitrage.traderoom.Asset
 
 import scala.collection.JavaConverters._
 import scala.concurrent.duration.FiniteDuration
@@ -62,27 +63,25 @@ object OrderBundleSafetyGuardConfig {
     c.getDouble("min-total-gain-in-usdt")
   )
 }
-case class TradeRoomConfig(oneTradeOnlyTestMode: Boolean,
-                           tradeSimulation: Boolean,
+case class TradeRoomConfig(tradeSimulation: Boolean,
                            referenceTickerExchange: String,
                            maxOrderLifetime: Duration,
-                           restartWhenAnExchangeDataStreamIsOlderThan: Duration,
-                           pioneerTransactionUSDT: Double,
+                           restarExchangeWhenDataStreamIsOlderThan: Duration,
+                           pioneerOrderValueUSDT: Double,
                            dataManagerInitTimeout: Duration,
                            stats: TradeRoomStatsConfig,
                            orderBundleSafetyGuard: OrderBundleSafetyGuardConfig,
-                           liquidityManagerConfig: LiquidityManagerConfig,
+                           liquidityManager: LiquidityManagerConfig,
                            exchanges: Map[String, ExchangeConfig]) {
-  if (pioneerTransactionUSDT > 100.0) throw new IllegalArgumentException("pioneer transaction value is unnecessary big")
+  if (pioneerOrderValueUSDT > 100.0) throw new IllegalArgumentException("pioneer order value is unnecessary big")
 }
 object TradeRoomConfig {
   def apply(c: com.typesafe.config.Config): TradeRoomConfig = TradeRoomConfig(
-    c.getBoolean("one-trade-only-test-mode"),
     c.getBoolean("trade-simulation"),
     c.getString("reference-ticker-exchange"),
     c.getDuration("max-order-lifetime"),
-    c.getDuration("restart-when-an-exchange-data-stream-is-older-than"),
-    c.getDouble("pioneer-transaction-usdt"),
+    c.getDuration("restart-exchange-when-data-stream-is-older-than"),
+    c.getDouble("pioneer-order-value-usdt"),
     c.getDuration("data-manager-init-timeout"),
     TradeRoomStatsConfig(
       c.getDuration("stats.report-interval"),
@@ -118,15 +117,30 @@ object LiquidityManagerConfig {
   )
 }
 
-object Config {
-  private val c = ConfigFactory.load()
+case class GlobalConfig(httpTimeout: FiniteDuration,
+                        internalCommunicationTimeout: Timeout,
+                        internalCommunicationTimeoutDuringInit: Timeout,
+                        gracefulShutdownTimeout: Duration)
+object GlobalConfig {
+  def apply(c: com.typesafe.config.Config): GlobalConfig = GlobalConfig(
+    FiniteDuration(c.getDuration("http-timeout").toMillis, TimeUnit.MILLISECONDS),
+    Timeout.create(c.getDuration("internal-communication-timeout")),
+    Timeout.create(c.getDuration("internal-communication-timeout-during-init")),
+    c.getDuration("graceful-shutdown-timeout")
+  )
+}
 
-  val httpTimeout: FiniteDuration = FiniteDuration(c.getDuration("http-timeout").toMillis, TimeUnit.MILLISECONDS)
-  val internalCommunicationTimeout: Timeout = Timeout.create(c.getDuration("internal-communication-timeout"))
-  val internalCommunicationTimeoutDuringInit: Timeout = Timeout.create(c.getDuration("internal-communication-timeout-during-init"))
-  val gracefulShutdownTimeout: Duration = c.getDuration("graceful-shutdown-timeout")
-
-  val tradeRoom: TradeRoomConfig = TradeRoomConfig(c.getConfig("trade-room"))
-
+case class Config(c: com.typesafe.config.Config,
+                  global: GlobalConfig,
+                  tradeRoom: TradeRoomConfig) {
   def trader(name: String): com.typesafe.config.Config = c.getConfig(s"trader.$name")
 }
+object Config {
+  def load(): Config = {
+    val c = ConfigFactory.load()
+    val globalConfig = GlobalConfig(c.getConfig("global"))
+    val tradeRoom = TradeRoomConfig(c.getConfig("trade-room"))
+    Config(c, globalConfig, tradeRoom)
+  }
+}
+

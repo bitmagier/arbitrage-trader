@@ -1,16 +1,18 @@
-package org.purevalue.arbitrage.traderoom
+package org.purevalue.arbitrage.traderoom.exchange
 
 import java.time.{Duration, Instant}
 import java.util.UUID
 
-import akka.actor.ActorSystem
+import akka.actor.{ActorRef, ActorSystem}
 import akka.pattern.ask
 import akka.testkit.{ImplicitSender, TestKit, TestProbe}
 import akka.util.Timeout
+import org.purevalue.arbitrage.adapter.{Balance, ExchangePublicDataReadonly, Ticker, Wallet}
 import org.purevalue.arbitrage.traderoom.Asset.{Bitcoin, Euro, USDT, USDollar}
-import org.purevalue.arbitrage.traderoom.ExchangeLiquidityManager.{HouseKeeping, LiquidityLock, LiquidityLockClearance, LiquidityRequest}
-import org.purevalue.arbitrage.traderoom.TradeRoom.{LiquidityTransformationOrder, WalletUpdateTrigger}
-import org.purevalue.arbitrage.{ExchangeConfig, LiquidityManagerConfig}
+import org.purevalue.arbitrage.traderoom.TradeRoom.{JoinTradeRoom, LiquidityTransformationOrder}
+import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityRequest}
+import org.purevalue.arbitrage.traderoom.{Asset, CryptoValue, TradePair, TradeSide}
+import org.purevalue.arbitrage.{ExchangeConfig, LiquidityManagerConfig, adapter}
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpecLike
@@ -18,15 +20,14 @@ import org.scalatest.wordspec.AnyWordSpecLike
 import scala.concurrent.Await
 import scala.concurrent.duration.DurationInt
 
-class ExchangeLiquidityManagerSpec
+class LiquidityManagerSpec
   extends TestKit(ActorSystem("ExchangeLiquidityManagerSpec"))
     with ImplicitSender
     with AnyWordSpecLike
     with Matchers
     with BeforeAndAfterAll
-//    with MockFactory
 {
-  private val Config = LiquidityManagerConfig(
+  private val liquidityManagerConfig = LiquidityManagerConfig(
       Duration.ofSeconds(5),
       Duration.ofSeconds(5),
       providingLiquidityExtra = 0.02,
@@ -84,13 +85,19 @@ class ExchangeLiquidityManagerSpec
       val tradeRoom = TestProbe()
       val wallet: Wallet = Wallet("e1", Map(
         Bitcoin -> Balance(Bitcoin, 1.0, 0.0),
-        USDT -> Balance(USDT, 0.05, 0.0),
-        Euro -> Balance(Euro, 999.0, 0.0),
-        USDollar -> Balance(USDollar, 999, 0.0)
+        USDT -> adapter.Balance(USDT, 0.05, 0.0),
+        Euro -> adapter.Balance(Euro, 999.0, 0.0),
+        USDollar -> adapter.Balance(USDollar, 999, 0.0)
       ), exchangeConfig)
-      val m = system.actorOf(ExchangeLiquidityManager.props(Config, exchangeConfig, tradeRoom.ref, tpData, wallet, () => referenceTicker, () => Seq()))
 
-      m ! HouseKeeping() // trigger housekeeping
+      val m: ActorRef = system.actorOf(LiquidityManager.props(liquidityManagerConfig, exchangeConfig, tpData, wallet))
+
+      implicit val timeout: Timeout = 1.second
+      Await.ready(
+        m ? JoinTradeRoom(tradeRoom.ref, _ => None, () => referenceTicker),
+        1.second
+      )
+      m ! LiquidityManager.HouseKeeping() // trigger housekeeping
 
       // expect:
       // BTC -> ETH [fill-up 50 USDT]
@@ -107,7 +114,7 @@ class ExchangeLiquidityManagerSpec
       val orderEthBtc = messages.find(_.orderRequest.tradePair == tpEthBtc).get.orderRequest
       orderEthBtc.tradeSide shouldBe TradeSide.Buy
       val ethInflowUSDT = orderEthBtc.calcIncomingLiquidity.convertTo(USDT, tickers).amount
-      val expectedEthInflowInUsdt = (Config.minimumKeepReserveLiquidityPerAssetInUSDT / Config.rebalanceTxGranularityInUSDT).ceil * Config.rebalanceTxGranularityInUSDT
+      val expectedEthInflowInUsdt = (liquidityManagerConfig.minimumKeepReserveLiquidityPerAssetInUSDT / liquidityManagerConfig.rebalanceTxGranularityInUSDT).ceil * liquidityManagerConfig.rebalanceTxGranularityInUSDT
       ethInflowUSDT shouldEqual expectedEthInflowInUsdt +- CheckSpread
 
 
@@ -116,8 +123,8 @@ class ExchangeLiquidityManagerSpec
 
       orderEthBtc.calcOutgoingLiquidity.asset shouldBe Bitcoin
       val alreadyReducedBTCAmountUSDT = orderEthBtc.calcOutgoingLiquidity.amount * BitcoinPriceUSD
-      val expectedBtcOutflowUSDT: Double = ((1.0 * BitcoinPriceUSD - alreadyReducedBTCAmountUSDT - Config.minimumKeepReserveLiquidityPerAssetInUSDT) /
-        Config.rebalanceTxGranularityInUSDT).floor * Config.rebalanceTxGranularityInUSDT
+      val expectedBtcOutflowUSDT: Double = ((1.0 * BitcoinPriceUSD - alreadyReducedBTCAmountUSDT - liquidityManagerConfig.minimumKeepReserveLiquidityPerAssetInUSDT) /
+        liquidityManagerConfig.rebalanceTxGranularityInUSDT).floor * liquidityManagerConfig.rebalanceTxGranularityInUSDT
       orderBtcUsdt.calcOutgoingLiquidity.asset shouldBe Bitcoin
       (orderBtcUsdt.calcOutgoingLiquidity.amount * BitcoinPriceUSD) shouldEqual expectedBtcOutflowUSDT +- 1.0 // diff is around 0.5 here, must be the exchange rate
     }
@@ -125,17 +132,22 @@ class ExchangeLiquidityManagerSpec
     "provide demanded coins and transfer back not demanded liquidity" in {
       val tradeRoom = TestProbe()
       val wallet: Wallet = Wallet("e1", Map(
-        Bitcoin -> Balance(Bitcoin, 1.0, 0.0),
-        USDT -> Balance(USDT, 7.0, 0.0),
-        Asset("ETH") -> Balance(Asset("ETH"), 20.0, 0.0),
-        Asset("ADA") -> Balance(Asset("ADA"), 100.0, 0.0),
-        Asset("ALGO") -> Balance(Asset("ALGO"), 500.0, 0.0),
-        Asset("OMG") -> Balance(Asset("OMG"), 1000.0, 0.0) // staked (in do-not-touch list)
+        Bitcoin -> adapter.Balance(Bitcoin, 1.0, 0.0),
+        USDT -> adapter.Balance(USDT, 7.0, 0.0),
+        Asset("ETH") -> adapter.Balance(Asset("ETH"), 20.0, 0.0),
+        Asset("ADA") -> adapter.Balance(Asset("ADA"), 100.0, 0.0),
+        Asset("ALGO") -> adapter.Balance(Asset("ALGO"), 500.0, 0.0),
+        Asset("OMG") -> adapter.Balance(Asset("OMG"), 1000.0, 0.0) // staked (in do-not-touch list)
       ), exchangeConfig)
-      val m = system.actorOf(ExchangeLiquidityManager.props(Config, exchangeConfig, tradeRoom.ref, tpData, wallet, () => referenceTicker, () => Seq()))
+
+      val m: ActorRef = system.actorOf(LiquidityManager.props(liquidityManagerConfig, exchangeConfig, tpData, wallet))
+      implicit val timeout: Timeout = 1.second
+      Await.ready(
+        m ? JoinTradeRoom(tradeRoom.ref, _ => None, () => referenceTicker),
+        1.second
+      )
 
       val requestedLiquidity = Seq(CryptoValue(Asset("ADA"), 100.0), CryptoValue(Asset("LINK"), 25.0))
-      implicit val timeout: Timeout = 1.second
       val lock = Await.result(
         (m ? LiquidityRequest(UUID.randomUUID(), Instant.now, "e1", "foo", requestedLiquidity, Set(Bitcoin))).mapTo[Option[LiquidityLock]],
         2.second)
@@ -171,30 +183,35 @@ class ExchangeLiquidityManagerSpec
       assert(ethToLinkOrder.isDefined)
       ethToLinkOrder.get.tradeSide shouldBe TradeSide.Buy
       ethToLinkOrder.get.calcIncomingLiquidity.asset shouldBe Asset("LINK")
-      ethToLinkOrder.get.calcIncomingLiquidity.amount shouldBe (25.0 * (1.0 + Config.providingLiquidityExtra)) +- CheckSpread
+      ethToLinkOrder.get.calcIncomingLiquidity.amount shouldBe (25.0 * (1.0 + liquidityManagerConfig.providingLiquidityExtra)) +- CheckSpread
 
       assert(ethToUsdtOrder.isDefined)
       ethToUsdtOrder.get.tradeSide shouldBe TradeSide.Sell
       ethToUsdtOrder.get.calcOutgoingLiquidity.asset shouldBe Asset("ETH")
       ethToUsdtOrder.get.calcIncomingLiquidity.amount shouldBe
-        ((20.0 * EthPriceUSD - 50.0) / Config.rebalanceTxGranularityInUSDT).floor * Config.rebalanceTxGranularityInUSDT +- CheckSpread
+        ((20.0 * EthPriceUSD - 50.0) / liquidityManagerConfig.rebalanceTxGranularityInUSDT).floor * liquidityManagerConfig.rebalanceTxGranularityInUSDT +- CheckSpread
 
       assert(btcToUsdtOrder.isDefined)
       btcToUsdtOrder.get.tradeSide shouldBe TradeSide.Sell
       btcToUsdtOrder.get.calcIncomingLiquidity.asset shouldBe USDT
       btcToUsdtOrder.get.calcIncomingLiquidity.amount shouldBe
-        ((1.0 * BitcoinPriceUSD - 50.0) / Config.rebalanceTxGranularityInUSDT).floor * Config.rebalanceTxGranularityInUSDT +- CheckSpread
+        ((1.0 * BitcoinPriceUSD - 50.0) / liquidityManagerConfig.rebalanceTxGranularityInUSDT).floor * liquidityManagerConfig.rebalanceTxGranularityInUSDT +- CheckSpread
     }
 
     "liquidity lock works and remains respected until cleared" in {
       val tradeRoom = TestProbe()
       val wallet = Wallet("e1", Map(
-        Asset("ALGO") -> Balance(Asset("ALGO"), 1000.0, 0.0),
-        Euro -> Balance(Euro, 1000.0, 0.0)
+        Asset("ALGO") -> adapter.Balance(Asset("ALGO"), 1000.0, 0.0),
+        Euro -> adapter.Balance(Euro, 1000.0, 0.0)
       ), exchangeConfig)
 
-      val m = system.actorOf(ExchangeLiquidityManager.props(Config, exchangeConfig, tradeRoom.ref, tpData, wallet, () => referenceTicker, () => Seq()))
-      implicit val timeout: Timeout = 2.second
+      val m = system.actorOf(LiquidityManager.props(liquidityManagerConfig, exchangeConfig, tpData, wallet))
+      implicit val timeout: Timeout = 2.seconds
+      Await.ready(
+        m ? JoinTradeRoom(tradeRoom.ref, _ => None, () => referenceTicker),
+        1.second
+      )
+
       val lock = Await.result(
         (m ? LiquidityRequest(
           UUID.randomUUID(),
@@ -226,8 +243,7 @@ class ExchangeLiquidityManagerSpec
       // now we clear the lock and watch the locked 400 ALOG's going back to USDT
 
       // Manual Wallet update
-      wallet.balance = wallet.balance + (Asset("ALGO") -> Balance(Asset("ALGO"), 800.0, 0.0))
-      m ! WalletUpdateTrigger("e1")
+      wallet.balance = wallet.balance + (Asset("ALGO") -> adapter.Balance(Asset("ALGO"), 800.0, 0.0))
       m ! LiquidityLockClearance(lock.get.liquidityRequestId)
       val message2: LiquidityTransformationOrder = tradeRoom.expectMsgClass(2.seconds, classOf[LiquidityTransformationOrder])
       tradeRoom.expectNoMessage(1.second)
@@ -238,11 +254,11 @@ class ExchangeLiquidityManagerSpec
       message2.orderRequest.calcOutgoingLiquidity.amount shouldBe 400.0 +- CheckSpread
 
       // Manual Wallet update
-      wallet.balance = wallet.balance + (Asset("ALGO") -> Balance(Asset("ALGO"), 400.0, 0.0))
+      wallet.balance = wallet.balance + (Asset("ALGO") -> adapter.Balance(Asset("ALGO"), 400.0, 0.0))
 
       // remaining 400 ALGO demand should go back to USDT also after liquidityDemandActiveTime + houseKeeping
-      Thread.sleep(Config.liquidityDemandActiveTime.toMillis + 500)
-      m ! HouseKeeping() // trigger houseKeeping
+      Thread.sleep(liquidityManagerConfig.liquidityDemandActiveTime.toMillis + 500)
+      m ! LiquidityManager.HouseKeeping() // trigger houseKeeping
       Thread.sleep(500)
 
       val message3: LiquidityTransformationOrder = tradeRoom.expectMsgClass(2.seconds, classOf[LiquidityTransformationOrder])

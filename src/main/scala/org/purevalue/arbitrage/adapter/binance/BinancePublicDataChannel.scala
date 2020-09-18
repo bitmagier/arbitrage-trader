@@ -8,10 +8,11 @@ import akka.http.scaladsl.model.{StatusCodes, Uri}
 import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
-import org.purevalue.arbitrage._
+import org.purevalue.arbitrage.{adapter, _}
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.GetBinanceTradePairs
-import org.purevalue.arbitrage.traderoom.ExchangePublicDataManager.IncomingData
-import org.purevalue.arbitrage.traderoom.{ExchangePublicStreamData, Ticker, TradePair}
+import org.purevalue.arbitrage.adapter.ExchangePublicDataManager.IncomingData
+import org.purevalue.arbitrage.adapter.{ExchangePublicStreamData, Ticker}
+import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.util.Emoji
 import org.purevalue.arbitrage.util.HttpUtil.httpGetJson
 import org.slf4j.LoggerFactory
@@ -22,22 +23,29 @@ import scala.concurrent.{Await, ExecutionContextExecutor, Future, Promise}
 import scala.util.{Failure, Success}
 
 object BinancePublicDataChannel {
-  def props(config: ExchangeConfig, publicDataManager: ActorRef, binancePublicDataChannel: ActorRef): Props =
-    Props(new BinancePublicDataChannel(config, publicDataManager, binancePublicDataChannel))
+  def props(globalConfig: GlobalConfig, exchangeConfig: ExchangeConfig, publicDataManager: ActorRef, binancePublicDataChannel: ActorRef): Props =
+    Props(new BinancePublicDataChannel(globalConfig, exchangeConfig, publicDataManager, binancePublicDataChannel))
 }
 /**
  * Binance TradePair-based data channel
  * Converts Raw TradePair-based data to unified ExchangeTPStreamData
  */
-class BinancePublicDataChannel(config: ExchangeConfig, publicDataManager: ActorRef, binancePublicDataInquirer: ActorRef) extends Actor {
+class BinancePublicDataChannel(globalConfig: GlobalConfig,
+                               exchangeConfig: ExchangeConfig,
+                               publicDataManager: ActorRef,
+                               binancePublicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BinancePublicDataChannel])
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
   val BaseRestEndpoint = "https://api.binance.com"
   val WebSocketEndpoint: Uri = Uri(s"wss://stream.binance.com:9443/stream")
-  val IdBookTickerStreamRequest: Int = 1
+  val IdBookTickerStream: Int = 1
   val BookTickerStreamName: String = "!bookTicker" // real-time stream
+
+  val streamSubscribeResponses: Map[Int, Promise[Boolean]] = Map(
+    IdBookTickerStream -> Promise[Boolean]
+  )
 
   private var binanceTradePairBySymbol: Map[String, BinanceTradePair] = _
 
@@ -46,35 +54,50 @@ class BinancePublicDataChannel(config: ExchangeConfig, publicDataManager: ActorR
   val resolveTradePairSymbol: String => TradePair =
     symbol => binanceTradePairBySymbol(symbol).toTradePair
 
+  def streamSubscribeResponse(j: JsObject): Unit = {
+    if (log.isTraceEnabled) log.trace(s"received $j")
+    val channelId = j.fields("id").convertTo[Int]
+    streamSubscribeResponses(channelId).success(true)
+    if (streamSubscribeResponses.values.forall(_.isCompleted)) {
+      onSreamsRunning()
+    }
+  }
+
   def exchangeDataMapping(in: Seq[IncomingPublicBinanceJson]): Seq[ExchangePublicStreamData] = in.map {
     // @formatter:off
-    case t: RawBookTickerRestJson   => t.toTicker(config.exchangeName, resolveTradePairSymbol)
-    case t: RawBookTickerStreamJson => t.toTicker(config.exchangeName, resolveTradePairSymbol)
+    case t: RawBookTickerRestJson   => t.toTicker(exchangeConfig.exchangeName, resolveTradePairSymbol)
+    case t: RawBookTickerStreamJson => t.toTicker(exchangeConfig.exchangeName, resolveTradePairSymbol)
     case other                      =>
       log.error(s"binance unhandled object: $other")
       throw new RuntimeException()
     // @formatter:on
   }
 
+  def decodeDataMessage(j: JsObject): Seq[IncomingPublicBinanceJson] = {
+    j.fields("stream").convertTo[String] match {
+      case BookTickerStreamName =>
+        j.fields("data").convertTo[RawBookTickerStreamJson] match {
+          case t if binanceTradePairBySymbol.contains(t.s) => Seq(t)
+          case other =>
+            if (log.isTraceEnabled) log.trace(s"ignoring data message, because its not in our symbol list: $other")
+            Nil
+        }
+      case name: String =>
+        log.warn(s"${Emoji.Confused}  Unhandled data stream '$name' received: $j")
+        Nil
+    }
+  }
+
   def decodeMessage(message: Message): Future[Seq[IncomingPublicBinanceJson]] = message match {
     case msg: TextMessage =>
-      msg.toStrict(Config.httpTimeout)
+      msg.toStrict(globalConfig.httpTimeout)
         .map(_.getStrictText)
         .map(s => JsonParser(s).asJsObject() match {
           case j: JsObject if j.fields.contains("result") =>
-            if (log.isTraceEnabled) log.trace(s"received $j")
-            Nil // ignoring stream subscribe responses
+            streamSubscribeResponse(j)
+            Nil
           case j: JsObject if j.fields.contains("stream") =>
-            j.fields("stream").convertTo[String] match {
-              case BookTickerStreamName =>
-                j.fields("data").convertTo[RawBookTickerStreamJson] match {
-                  case t if binanceTradePairBySymbol.contains(t.s) => Seq(t)
-                  case _ => Nil
-                }
-              case name: String =>
-                log.warn(s"${Emoji.Confused}  Unhandled data stream '$name' received: $j")
-                Nil
-            }
+            decodeDataMessage(j)
           case j: JsObject =>
             log.warn(s"Unknown json object received: $j")
             Nil
@@ -85,7 +108,7 @@ class BinancePublicDataChannel(config: ExchangeConfig, publicDataManager: ActorR
   }
 
   def subscribeMessages: List[StreamSubscribeRequestJson] = List(
-    StreamSubscribeRequestJson(params = Seq(BookTickerStreamName), id = IdBookTickerStreamRequest),
+    StreamSubscribeRequestJson(params = Seq(BookTickerStreamName), id = IdBookTickerStream),
   )
 
   // flow to us
@@ -127,9 +150,8 @@ class BinancePublicDataChannel(config: ExchangeConfig, publicDataManager: ActorR
     log.trace("open WebSocket stream...")
 
     ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow)
+    ws._2.future.onComplete(e => log.info(s"connection closed: ${e.get}"))
     connected = createConnected
-
-    deliverBookTickerState()
   }
 
   // to disconnect:
@@ -145,12 +167,16 @@ class BinancePublicDataChannel(config: ExchangeConfig, publicDataManager: ActorR
   }
 
   def initBinanceTradePairBySymbol(): Unit = {
-    implicit val timeout: Timeout = Config.internalCommunicationTimeoutDuringInit
+    implicit val timeout: Timeout = globalConfig.internalCommunicationTimeoutDuringInit
     binanceTradePairBySymbol = Await.result(
       (binancePublicDataInquirer ? GetBinanceTradePairs()).mapTo[Set[BinanceTradePair]],
-      Config.internalCommunicationTimeout.duration.plus(500.millis))
+      globalConfig.internalCommunicationTimeout.duration.plus(500.millis))
       .map(e => (e.symbol, e))
       .toMap
+  }
+
+  def onSreamsRunning(): Unit = {
+    deliverBookTickerState()
   }
 
   override def preStart() {
@@ -179,7 +205,7 @@ case class RawBookTickerRestJson(symbol: String,
                                  askPrice: String,
                                  askQty: String) extends IncomingPublicBinanceJson {
   def toTicker(exchange: String, resolveSymbol: String => TradePair): Ticker = {
-    Ticker(exchange, resolveSymbol(symbol), bidPrice.toDouble, Some(bidQty.toDouble), askPrice.toDouble, Some(askQty.toDouble), None)
+    adapter.Ticker(exchange, resolveSymbol(symbol), bidPrice.toDouble, Some(bidQty.toDouble), askPrice.toDouble, Some(askQty.toDouble), None)
   }
 }
 
@@ -191,7 +217,7 @@ case class RawBookTickerStreamJson(u: Long, // order book updateId
                                    A: String // best ask quantity
                                   ) extends IncomingPublicBinanceJson {
   def toTicker(exchange: String, resolveSymbol: String => TradePair): Ticker =
-    Ticker(exchange, resolveSymbol(s), b.toDouble, Some(B.toDouble), a.toDouble, Some(A.toDouble), None)
+    adapter.Ticker(exchange, resolveSymbol(s), b.toDouble, Some(B.toDouble), a.toDouble, Some(A.toDouble), None)
 }
 
 object WebSocketJsonProtocoll extends DefaultJsonProtocol {

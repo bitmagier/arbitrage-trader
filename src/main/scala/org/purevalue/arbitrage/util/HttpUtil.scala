@@ -8,12 +8,13 @@ import akka.http.scaladsl.model._
 import akka.http.scaladsl.model.headers.RawHeader
 import akka.stream.Materializer
 import org.purevalue.arbitrage.util.Util.convertBytesToLowerCaseHex
-import org.purevalue.arbitrage.{Config, SecretsConfig}
+import org.purevalue.arbitrage.{Config, GlobalConfig, Main, SecretsConfig}
 import spray.json.{DeserializationException, JsValue, JsonParser, JsonReader}
 
 import scala.concurrent.{ExecutionContext, Future}
 
 object HttpUtil {
+  val globalConfig: GlobalConfig = Main.config().global
 
   def query(uri: String)
            (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[HttpEntity.Strict] = {
@@ -21,7 +22,7 @@ object HttpUtil {
       HttpRequest(
         method = HttpMethods.GET,
         uri = uri
-      )).flatMap(_.entity.toStrict(Config.httpTimeout))
+      )).flatMap(_.entity.toStrict(globalConfig.httpTimeout))
   }
 
   //[linux]$ echo -n "symbol=LTCBTC&side=BUY&type=LIMIT&timeInForce=GTC&quantity=1&price=0.1&recvWindow=5000&timestamp=1499827319559" | openssl dgst -sha256 -hmac "NhqPtmdSJYdKjVHjA7PZj4Mge3R5YNiP1e3UZjInClVN65XAbvqqM6A7H5fATj0j"
@@ -69,7 +70,7 @@ object HttpUtil {
           case None => HttpEntity.Empty
           case Some(x) => HttpEntity(x)
         }
-      )).flatMap(_.entity.toStrict(Config.httpTimeout))
+      )).flatMap(_.entity.toStrict(globalConfig.httpTimeout))
   }
 
   def httpRequestBitfinexHmacSha384(method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig)
@@ -95,7 +96,7 @@ object HttpUtil {
           case None => HttpEntity.Empty
           case Some(x) => HttpEntity(x)
         }
-      )).flatMap(_.entity.toStrict(Config.httpTimeout))
+      )).flatMap(_.entity.toStrict(globalConfig.httpTimeout))
   }
 
   def httpGetPureJson(uri: String)

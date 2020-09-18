@@ -2,6 +2,7 @@ package org.purevalue.arbitrage.traderoom
 
 import java.util.UUID
 
+import org.purevalue.arbitrage.adapter.Fee
 import org.purevalue.arbitrage.traderoom.Asset.Bitcoin
 import org.scalatest.TestSuite
 import org.scalatest.matchers.should.Matchers

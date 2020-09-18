@@ -1,7 +1,7 @@
 package org.purevalue.arbitrage.traderoom
 
 import akka.actor.{Actor, ActorRef, PoisonPill, Props, Status}
-import org.purevalue.arbitrage.traderoom.ExchangeAccountDataManager.{CancelOrder, CancelOrderResult, NewLimitOrder, NewOrderAck}
+import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager.{CancelOrder, CancelOrderResult, NewLimitOrder, NewOrderAck}
 import org.purevalue.arbitrage.traderoom.OrderSetPlacer.NewOrderSet
 import org.slf4j.LoggerFactory
 
@@ -27,7 +27,7 @@ case class OrderSetPlacer(exchanges: Map[String, ActorRef]) extends Actor {
       requestSender = sender()
       numRequests = request.orders.length
       request.orders.foreach { o =>
-        exchanges(o.o.exchange) ! o
+        exchanges(o.orderRequest.exchange) ! o
       }
 
     case a: NewOrderAck =>

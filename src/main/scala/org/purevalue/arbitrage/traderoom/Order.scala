@@ -4,6 +4,7 @@ import java.time.{Instant, LocalDateTime}
 import java.util.UUID
 
 import akka.actor.ActorRef
+import org.purevalue.arbitrage.adapter.{ExchangeAccountStreamData, Fee}
 import org.purevalue.arbitrage.traderoom.Asset.USDT
 import org.purevalue.arbitrage.traderoom.OrderStatus.{CANCELED, EXPIRED, FILLED, REJECTED}
 import org.purevalue.arbitrage.traderoom.TradeRoom.{OrderRef, TickersReadonly}
