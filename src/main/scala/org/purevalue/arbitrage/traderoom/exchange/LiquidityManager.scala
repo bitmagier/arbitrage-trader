@@ -99,7 +99,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
   private val log = LoggerFactory.getLogger(classOf[LiquidityManager])
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
-  var houseKeepingSchedule: Cancellable = actorSystem.scheduler.scheduleWithFixedDelay(2.minute, 30.seconds, self, HouseKeeping())
+  var houseKeepingSchedule: Cancellable = actorSystem.scheduler.scheduleWithFixedDelay(1.minute, 30.seconds, self, HouseKeeping())
   var shutdownInitiated: Boolean = false
 
 

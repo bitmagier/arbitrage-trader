@@ -196,15 +196,15 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
         if (r.fields.contains("status") && r.fields("status").convertTo[String] == "CANCELED"
           && r.fields.contains("orderId") && r.fields("orderId").convertTo[Long] == externalOrderId) {
           log.debug(s"Order successfully cancelled: $response")
-          CancelOrderResult(tradePair, externalOrderId.toString, success = true)
+          CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = true)
         } else {
           log.warn(s"CancelOrder did not succeed: $r")
-          CancelOrderResult(tradePair, externalOrderId.toString, success = false)
+          CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = false)
         }
     } recover {
       case e: Exception =>
         log.error(s"CancelOrder failed", e)
-        CancelOrderResult(tradePair, externalOrderId.toString, success = false)
+        CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = false)
     }
   }
 

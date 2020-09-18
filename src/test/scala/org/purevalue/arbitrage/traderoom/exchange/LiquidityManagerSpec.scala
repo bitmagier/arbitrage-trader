@@ -90,13 +90,8 @@ class LiquidityManagerSpec
         USDollar -> adapter.Balance(USDollar, 999, 0.0)
       ), exchangeConfig)
 
-      val m: ActorRef = system.actorOf(LiquidityManager.props(liquidityManagerConfig, exchangeConfig, tpData, wallet))
+      val m: ActorRef = system.actorOf(LiquidityManager.props(liquidityManagerConfig, exchangeConfig, tpData, wallet, tradeRoom.ref, _ => None, () => referenceTicker))
 
-      implicit val timeout: Timeout = 1.second
-      Await.ready(
-        m ? JoinTradeRoom(tradeRoom.ref, _ => None, () => referenceTicker),
-        1.second
-      )
       m ! LiquidityManager.HouseKeeping() // trigger housekeeping
 
       // expect:
@@ -140,14 +135,10 @@ class LiquidityManagerSpec
         Asset("OMG") -> adapter.Balance(Asset("OMG"), 1000.0, 0.0) // staked (in do-not-touch list)
       ), exchangeConfig)
 
-      val m: ActorRef = system.actorOf(LiquidityManager.props(liquidityManagerConfig, exchangeConfig, tpData, wallet))
-      implicit val timeout: Timeout = 1.second
-      Await.ready(
-        m ? JoinTradeRoom(tradeRoom.ref, _ => None, () => referenceTicker),
-        1.second
-      )
+      val m: ActorRef = system.actorOf(LiquidityManager.props(liquidityManagerConfig, exchangeConfig, tpData, wallet, tradeRoom.ref, _ => None, () => referenceTicker))
 
       val requestedLiquidity = Seq(CryptoValue(Asset("ADA"), 100.0), CryptoValue(Asset("LINK"), 25.0))
+      implicit val timeout: Timeout = 2.seconds
       val lock = Await.result(
         (m ? LiquidityRequest(UUID.randomUUID(), Instant.now, "e1", "foo", requestedLiquidity, Set(Bitcoin))).mapTo[Option[LiquidityLock]],
         2.second)
@@ -205,13 +196,9 @@ class LiquidityManagerSpec
         Euro -> adapter.Balance(Euro, 1000.0, 0.0)
       ), exchangeConfig)
 
-      val m = system.actorOf(LiquidityManager.props(liquidityManagerConfig, exchangeConfig, tpData, wallet))
-      implicit val timeout: Timeout = 2.seconds
-      Await.ready(
-        m ? JoinTradeRoom(tradeRoom.ref, _ => None, () => referenceTicker),
-        1.second
-      )
+      val m = system.actorOf(LiquidityManager.props(liquidityManagerConfig, exchangeConfig, tpData, wallet, tradeRoom.ref, _ => None, () => referenceTicker))
 
+      implicit val timeout: Timeout = 2.seconds
       val lock = Await.result(
         (m ? LiquidityRequest(
           UUID.randomUUID(),

@@ -18,7 +18,7 @@ object ExchangeAccountDataManager {
   case class IncomingData(data: Seq[ExchangeAccountStreamData])
   case class Initialized()
   case class CancelOrder(tradePair: TradePair, externalOrderId: String)
-  case class CancelOrderResult(tradePair: TradePair, externalOrderId: String, success: Boolean)
+  case class CancelOrderResult(exchange:String, tradePair: TradePair, externalOrderId: String, success: Boolean)
   case class NewLimitOrder(orderRequest: OrderRequest) // response is NewOrderAck
   case class NewOrderAck(exchange: String, tradePair: TradePair, externalOrderId: String, orderId: UUID) {
     def toOrderRef: OrderRef = OrderRef(exchange, tradePair, externalOrderId)

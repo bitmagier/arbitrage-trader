@@ -514,10 +514,10 @@ class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
       exchangeConfig.secrets
     ).map {
       case r: OrderResponseJson if r.status == "SUCCESS" && r.orders.size == 1 =>
-        CancelOrderResult(tradePair, r.orders.head.id.toString, success = true)
+        CancelOrderResult(exchangeConfig.exchangeName, tradePair, r.orders.head.id.toString, success = true)
       case r: OrderResponseJson =>
         log.debug(s"Cancel order failed. Result: $r")
-        CancelOrderResult(tradePair, externalOrderId.toString, success = false)
+        CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = false)
     }
   }
 

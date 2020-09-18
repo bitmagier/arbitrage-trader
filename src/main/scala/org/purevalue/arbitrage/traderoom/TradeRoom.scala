@@ -10,7 +10,7 @@ import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, OneForOneStrategy,
 import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage._
-import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager.{CancelOrder, NewLimitOrder, NewOrderAck}
+import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager.{CancelOrder, CancelOrderResult, NewLimitOrder, NewOrderAck}
 import org.purevalue.arbitrage.adapter.{Fee, PublicDataTimestamps, Ticker, Wallet}
 import org.purevalue.arbitrage.trader.FooTrader
 import org.purevalue.arbitrage.traderoom.Asset.USDT
@@ -429,12 +429,12 @@ class TradeRoom(val config: Config,
     }
   }
 
-
   def cancelAgedActiveOrders(): Unit = {
     val limit: Instant = Instant.now.minus(config.tradeRoom.maxOrderLifetime)
 
     val orderToCancel: Iterable[Order] =
       activeOrders.values.flatten
+        .filterNot(_._2.orderStatus.isFinal)
         .filter(_._2.creationTime.isBefore(limit))
         .map(_._2)
 
@@ -444,7 +444,7 @@ class TradeRoom(val config: Config,
         case None => activeOrderBundles.values.find(_.ordersRefs.exists(_.externalOrderId == o.externalId)) match {
           case Some(orderBundle) => s"order-bundle: ${orderBundle.shortDesc}"
           case None =>
-            log.error(s"active $o not in our active-liquidity-tx or active-order-bundle list")
+            log.warn(s"active $o not in our active-liquidity-tx or active-order-bundle list")
             "unknown source"
         }
       }
@@ -455,10 +455,28 @@ class TradeRoom(val config: Config,
   }
 
 
+  def reportOrphanOpenOrders(): Unit = {
+    activeOrders.values.foreach { orders =>
+      val orphanOrders = orders
+        .filterNot(o => activeOrderBundles.values.exists(_.ordersRefs.contains(o._1)))
+        .filterNot(o => activeLiquidityTx.contains(o._1))
+      if (orphanOrders.nonEmpty) {
+        log.warn(s"""unreferenced order(s) on ${orphanOrders.head._1.exchange}:\n${orphanOrders.map(_._2.shortDesc).mkString(", ")}""")
+        orphanOrders
+          .filter(_._2.orderStatus.isFinal)
+          .foreach { o =>
+            log.info(s"cleanup finished orphan order ${o._2.shortDesc}")
+            activeOrders(o._1.exchange).remove(o._1)
+          }
+      }
+    }
+  }
+
   def houseKeeping(): Unit = {
     cancelAgedActiveOrders()
+    reportOrphanOpenOrders()
 
-    // TODO report entries in openOrders, which are not referenced by activeOrderBundle or activeLiquidityTx
+    // TODO report entries in openOrders, which are not referenced by activeOrderBundle or activeLiquidityTx - but what to do with them?
     // TODO report apparently dead entries in openOrderBundle
     // TODO report apparently dead entries in openLiquidityTx
   }
@@ -516,6 +534,15 @@ class TradeRoom(val config: Config,
     }
   }
 
+  def onCancelOrderResult(c: CancelOrderResult): Unit = {
+    if (c.success) {
+      log.info(s"Cancel order succeeded: $c")
+    } else {
+      log.error(s"Cancel order failed: $c")
+      // TODO error handling for failed cancels
+    }
+  }
+
   // @formatter:off
   def receive: Receive = {
     // messages from Exchanges
@@ -523,6 +550,7 @@ class TradeRoom(val config: Config,
     case bundle: OrderRequestBundle                 => tryToPlaceOrderBundle(bundle)
     case LiquidityTransformationOrder(orderRequest) => placeLiquidityTransformationOrder(orderRequest)
     case OrderUpdateTrigger(orderRef)               => onOrderUpdate(orderRef)
+    case c: CancelOrderResult                       => onCancelOrderResult(c)
     case LogStats()                                 => logStats()
     case HouseKeeping()                             => houseKeeping()
     case Stop(timeout)                              => shutdown(timeout)

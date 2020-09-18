@@ -14,17 +14,17 @@ import org.purevalue.arbitrage.{ExchangeConfig, adapter}
 import scala.concurrent.{ExecutionContextExecutor, Future}
 
 object TradeSimulator {
-  def props(config: ExchangeConfig,
+  def props(exchangeConfig: ExchangeConfig,
             accountDataManager: ActorRef): Props =
-    Props(new TradeSimulator(config, accountDataManager))
+    Props(new TradeSimulator(exchangeConfig, accountDataManager))
 }
-class TradeSimulator(config: ExchangeConfig,
+class TradeSimulator(exchangeConfig: ExchangeConfig,
                      accountDataManager: ActorRef) extends Actor {
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
   def cancelOrder(tradePair: TradePair, externalOrderId: String): Future[CancelOrderResult] = {
     Future.successful(
-      CancelOrderResult(tradePair, externalOrderId, success = false) // [easy] always fail, because we assume the order is already filled
+      CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId, success = false) // [easy] always fail, because we assume the order is already filled
     )
   }
 
@@ -64,7 +64,7 @@ class TradeSimulator(config: ExchangeConfig,
     executionContext.execute(() => simulateOrderLifetime(externalOrderId, o))
 
     Future.successful(
-      NewOrderAck(config.exchangeName, o.tradePair, externalOrderId, o.id)
+      NewOrderAck(exchangeConfig.exchangeName, o.tradePair, externalOrderId, o.id)
     )
   }
 
