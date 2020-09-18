@@ -16,7 +16,7 @@ import org.purevalue.arbitrage.trader.FooTrader
 import org.purevalue.arbitrage.traderoom.Asset.USDT
 import org.purevalue.arbitrage.traderoom.OrderSetPlacer.NewOrderSet
 import org.purevalue.arbitrage.traderoom.TradeRoom._
-import org.purevalue.arbitrage.traderoom.exchange.Exchange
+import org.purevalue.arbitrage.traderoom.exchange.Exchange.OrderUpdateTrigger
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityRequest}
 import org.purevalue.arbitrage.util.Emoji
 import org.purevalue.arbitrage.util.Util.formatDecimal
@@ -69,9 +69,6 @@ object TradeRoom {
   case class LogStats()
   case class HouseKeeping()
   case class Stop(timeout: Duration)
-  // from ExchangeAccountDataManager
-  case class OrderUpdateTrigger(ref: OrderRef) // status of an order has changed
-  case class WalletUpdateTrigger(exchange: String)
   // from liquidity managers
   case class LiquidityTransformationOrder(orderRequest: OrderRequest)
   /**
@@ -81,6 +78,7 @@ object TradeRoom {
   case class JoinTradeRoom(tradeRoom: ActorRef,
                            findOpenLiquidityTx: (LiquidityTx => Boolean) => Option[LiquidityTx],
                            referenceTicker: () => collection.Map[TradePair, Ticker])
+  case class TradeRoomJoined(exchange: String)
 
   def props(config: Config,
             exchanges: Map[String, ActorRef],
@@ -88,7 +86,7 @@ object TradeRoom {
             dataAge: Map[String, PublicDataTimestamps],
             wallets: Map[String, Wallet],
             activeOrders: Map[String, ConcurrentMap[OrderRef, Order]]
-            ): Props =
+           ): Props =
     Props(new TradeRoom(config, exchanges, tickers, dataAge, wallets, activeOrders))
 }
 
@@ -494,10 +492,11 @@ class TradeRoom(val config: Config,
     implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
     for (exchange <- exchanges.values) {
       Await.ready(
-        exchange ? JoinTradeRoom(
-        self,
-        (f: Function1[LiquidityTx, Boolean]) => activeLiquidityTx.values.find(f),
-        () => referenceTicker),
+        exchange ?
+          JoinTradeRoom(
+            self,
+            (f: Function1[LiquidityTx, Boolean]) => activeLiquidityTx.values.find(f),
+            () => referenceTicker),
         timeout.duration.plus(1.second)
       )
     }
@@ -520,11 +519,10 @@ class TradeRoom(val config: Config,
   // @formatter:off
   def receive: Receive = {
     // messages from Exchanges
-    case Exchange.TradeRoomJoined(exchange)                  => onExchangeJoined(exchange)
+    case TradeRoomJoined(exchange)                  => onExchangeJoined(exchange)
     case bundle: OrderRequestBundle                 => tryToPlaceOrderBundle(bundle)
     case LiquidityTransformationOrder(orderRequest) => placeLiquidityTransformationOrder(orderRequest)
     case OrderUpdateTrigger(orderRef)               => onOrderUpdate(orderRef)
-    case t: WalletUpdateTrigger                     => exchanges(t.exchange).forward(t)
     case LogStats()                                 => logStats()
     case HouseKeeping()                             => houseKeeping()
     case Stop(timeout)                              => shutdown(timeout)

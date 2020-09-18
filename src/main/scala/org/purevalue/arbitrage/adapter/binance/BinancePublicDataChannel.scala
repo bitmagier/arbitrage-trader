@@ -8,13 +8,14 @@ import akka.http.scaladsl.model.{StatusCodes, Uri}
 import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
-import org.purevalue.arbitrage.{adapter, _}
-import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.GetBinanceTradePairs
 import org.purevalue.arbitrage.adapter.ExchangePublicDataManager.IncomingData
+import org.purevalue.arbitrage.adapter.binance.BinancePublicDataChannel.Connect
+import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.GetBinanceTradePairs
 import org.purevalue.arbitrage.adapter.{ExchangePublicStreamData, Ticker}
 import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.util.Emoji
 import org.purevalue.arbitrage.util.HttpUtil.httpGetJson
+import org.purevalue.arbitrage.{adapter, _}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsonParser, RootJsonFormat, enrichAny}
 
@@ -23,6 +24,8 @@ import scala.concurrent.{Await, ExecutionContextExecutor, Future, Promise}
 import scala.util.{Failure, Success}
 
 object BinancePublicDataChannel {
+  private case class Connect()
+
   def props(globalConfig: GlobalConfig, exchangeConfig: ExchangeConfig, publicDataManager: ActorRef, binancePublicDataChannel: ActorRef): Props =
     Props(new BinancePublicDataChannel(globalConfig, exchangeConfig, publicDataManager, binancePublicDataChannel))
 }
@@ -43,9 +46,7 @@ class BinancePublicDataChannel(globalConfig: GlobalConfig,
   val IdBookTickerStream: Int = 1
   val BookTickerStreamName: String = "!bookTicker" // real-time stream
 
-  val streamSubscribeResponses: Map[Int, Promise[Boolean]] = Map(
-    IdBookTickerStream -> Promise[Boolean]
-  )
+  @volatile var outstandingStreamSubscribeResponses: Set[Int] = Set(IdBookTickerStream)
 
   private var binanceTradePairBySymbol: Map[String, BinanceTradePair] = _
 
@@ -57,8 +58,10 @@ class BinancePublicDataChannel(globalConfig: GlobalConfig,
   def streamSubscribeResponse(j: JsObject): Unit = {
     if (log.isTraceEnabled) log.trace(s"received $j")
     val channelId = j.fields("id").convertTo[Int]
-    streamSubscribeResponses(channelId).success(true)
-    if (streamSubscribeResponses.values.forall(_.isCompleted)) {
+    synchronized {
+      outstandingStreamSubscribeResponses = outstandingStreamSubscribeResponses - channelId
+    }
+    if (outstandingStreamSubscribeResponses.isEmpty) {
       onSreamsRunning()
     }
   }
@@ -146,7 +149,7 @@ class BinancePublicDataChannel(globalConfig: GlobalConfig,
       }
     }
 
-  def startWsStream(): Unit = {
+  def connect(): Unit = {
     log.trace("open WebSocket stream...")
 
     ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow)
@@ -183,16 +186,18 @@ class BinancePublicDataChannel(globalConfig: GlobalConfig,
     try {
       log.trace(s"BinancePublicDataChannel initializing...")
       initBinanceTradePairBySymbol()
-      startWsStream()
+      self ! Connect()
     } catch {
       case e: Exception => log.error("preStart failed", e)
     }
   }
 
+  // @formatter:off
   override def receive: Receive = {
-    case Status.Failure(cause) =>
-      log.error("received failure", cause)
+    case Connect()             => connect()
+    case Status.Failure(cause) => log.error("received failure", cause)
   }
+  // @formatter:on
 }
 
 case class StreamSubscribeRequestJson(method: String = "SUBSCRIBE", params: Seq[String], id: Int)

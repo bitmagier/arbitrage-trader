@@ -131,11 +131,6 @@ case class ExchangePublicDataManager(globalConfig:GlobalConfig,
     }
   }
 
-  override def preStart(): Unit = {
-    publicDataChannel = context.actorOf(exchangePublicDataChannelProps(globalConfig, exchangeConfig, self, exchangePublicDataInquirer),
-      s"${exchangeConfig.exchangeName}-PublicDataChannel")
-  }
-
   def initTimeoutCheck(): Unit = {
     if (tickerCompletelyInitialized) initCheckSchedule.cancel()
     else {
@@ -146,8 +141,13 @@ case class ExchangePublicDataManager(globalConfig:GlobalConfig,
     }
   }
 
+  override def preStart(): Unit = {
+    publicDataChannel = context.actorOf(exchangePublicDataChannelProps(globalConfig, exchangeConfig, self, exchangePublicDataInquirer),
+    s"${exchangeConfig.exchangeName}-PublicDataChannel")
+  }
 
-  def receive: Receive = {
+
+  override def receive: Receive = {
     // @formatter:off
     case IncomingData(data)    => applyDataset(data)
     case InitTimeoutCheck()    => initTimeoutCheck()

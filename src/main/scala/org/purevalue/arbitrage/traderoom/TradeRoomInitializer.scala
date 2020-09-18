@@ -8,9 +8,9 @@ import akka.util.Timeout
 import org.purevalue.arbitrage.adapter._
 import org.purevalue.arbitrage.traderoom.Asset.{Bitcoin, USDT}
 import org.purevalue.arbitrage.traderoom.TradeRoom.{ConcurrentMap, OrderRef}
-import org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator.InitializedTradeRoom
+import org.purevalue.arbitrage.traderoom.TradeRoomInitializer.InitializedTradeRoom
 import org.purevalue.arbitrage.traderoom.exchange.Exchange
-import org.purevalue.arbitrage.traderoom.exchange.Exchange.{GetTradePairs, RemoveTradePair}
+import org.purevalue.arbitrage.traderoom.exchange.Exchange.{GetTradePairs, RemoveTradePair, StartStreaming}
 import org.purevalue.arbitrage.util.Emoji
 import org.purevalue.arbitrage.{Config, ExchangeInitStuff, StaticConfig}
 import org.slf4j.LoggerFactory
@@ -19,14 +19,14 @@ import scala.collection.concurrent.TrieMap
 import scala.concurrent.Await
 import scala.concurrent.duration.DurationInt
 
-object TradeRoomInitCoordinator {
+object TradeRoomInitializer {
   case class InitializedTradeRoom(tradeRoom: ActorRef)
-  def props(config: Config, parent: ActorRef): Props = Props(new TradeRoomInitCoordinator(config, parent))
+  def props(config: Config, parent: ActorRef): Props = Props(new TradeRoomInitializer(config, parent))
 }
-class TradeRoomInitCoordinator(val config: Config,
-                               val parent: ActorRef) extends Actor {
+class TradeRoomInitializer(val config: Config,
+                           val parent: ActorRef) extends Actor {
 
-  private val log = LoggerFactory.getLogger(classOf[TradeRoomInitCoordinator])
+  private val log = LoggerFactory.getLogger(classOf[TradeRoomInitializer])
 
   // @formatter:off
   var exchanges:    Map[String, ActorRef] = Map()
@@ -130,21 +130,36 @@ class TradeRoomInitCoordinator(val config: Config,
     }
   }
 
-  override def preStart(): Unit = {
-    startExchanges() // parallel
-    dropUnusableTradepairsSync() // all exchanges, sync
-    onInitialized()
+  var exchangesStreamingPending: Set[String] = _
+
+  def sendStartStreaming(): Unit = {
+    exchangesStreamingPending = exchanges.keySet
+    exchanges.values.foreach { exchange =>
+      exchange ! StartStreaming()
+    }
+  }
+
+  def onStreamingStarted(exchange: String): Unit = {
+    exchangesStreamingPending = exchangesStreamingPending - exchange
+    if (exchangesStreamingPending.isEmpty) {
+      onInitialized()
+    }
   }
 
   def onInitialized(): Unit = {
     log.debug("TradeRoom initialized")
-    parent ! InitializedTradeRoom(
-      context.actorOf(TradeRoom.props(config, exchanges, tickers, dataAge, wallets, activeOrders), "TradeRoom")
-    )
+    parent ! InitializedTradeRoom(context.actorOf(TradeRoom.props(config, exchanges, tickers, dataAge, wallets, activeOrders), "TradeRoom"))
     self ! PoisonPill
   }
 
+  override def preStart(): Unit = {
+    startExchanges() // parallel
+    dropUnusableTradepairsSync() // all exchanges, sync
+    sendStartStreaming()
+  }
+
   override def receive: Receive = {
-    case msg => log.error(s"unexpected message: $msg")
+    case Exchange.StreamingStarted(exchange) => onStreamingStarted(exchange)
+    case msg                                 => log.error(s"unexpected message: $msg")
   }
 }

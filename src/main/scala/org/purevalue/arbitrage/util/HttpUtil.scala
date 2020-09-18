@@ -8,7 +8,7 @@ import akka.http.scaladsl.model._
 import akka.http.scaladsl.model.headers.RawHeader
 import akka.stream.Materializer
 import org.purevalue.arbitrage.util.Util.convertBytesToLowerCaseHex
-import org.purevalue.arbitrage.{Config, GlobalConfig, Main, SecretsConfig}
+import org.purevalue.arbitrage.{GlobalConfig, Main, SecretsConfig}
 import spray.json.{DeserializationException, JsValue, JsonParser, JsonReader}
 
 import scala.concurrent.{ExecutionContext, Future}

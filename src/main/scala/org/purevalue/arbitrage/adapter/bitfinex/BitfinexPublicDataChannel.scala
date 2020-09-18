@@ -10,12 +10,13 @@ import akka.http.scaladsl.model.{StatusCodes, Uri}
 import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
-import org.purevalue.arbitrage.{adapter, _}
-import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.GetBitfinexTradePairs
 import org.purevalue.arbitrage.adapter.ExchangePublicDataManager.IncomingData
+import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataChannel.Connect
+import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.GetBitfinexTradePairs
 import org.purevalue.arbitrage.adapter.{ExchangePublicStreamData, Heartbeat, Ticker}
 import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.util.Emoji
+import org.purevalue.arbitrage.{adapter, _}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
@@ -98,6 +99,8 @@ object WebSocketJsonProtocoll extends DefaultJsonProtocol {
 ////////////////////////////////////////////////
 
 object BitfinexPublicDataChannel {
+  private case class Connect()
+
   def props(globalConfig: GlobalConfig,
             exchangeConfig: ExchangeConfig,
             exchangePublicDataManager: ActorRef,
@@ -265,7 +268,7 @@ class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
   private def subscribeMessage(tradePair: BitfinexTradePair): SubscribeRequestJson =
     SubscribeRequestJson(channel = "ticker", symbol = tradePair.apiSymbol)
 
-  def startWsStreams(): Unit = {
+  def connect(): Unit = {
     bitfinexTradePairBySymbol.values.sliding(MaximumNumberOfChannelsPerConnection).foreach { partition =>
       if (log.isTraceEnabled) log.trace(s"""starting a WebSocket stream partition for ${partition.mkString(",")}""")
       val subscribeMessages: List[SubscribeRequestJson] = partition.map(e => subscribeMessage(e)).toList
@@ -289,16 +292,18 @@ class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
     try {
       if (log.isTraceEnabled()) log.trace(s"BitfinexPublicDataChannel initializing...")
       initBitfinexTradePairBySymbol()
-      startWsStreams()
+      self ! Connect()
     } catch {
       case e: Exception => log.error("preStart failed", e)
     }
   }
 
+  // @formatter:off
   override def receive: Receive = {
-    case Status.Failure(cause) =>
-      log.error("Failure received", cause)
+    case Connect()             => connect()
+    case Status.Failure(cause) => log.error("Failure received", cause)
   }
+  // @formatter:on
 }
 
 //case class RawOrderBookEntryJson(price: Double, count: Int, amount: Double)

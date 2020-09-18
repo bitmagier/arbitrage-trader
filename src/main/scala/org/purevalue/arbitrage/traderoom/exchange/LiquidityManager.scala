@@ -8,7 +8,7 @@ import akka.actor.{Actor, ActorRef, Cancellable, Props}
 import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.adapter.{ExchangePublicDataReadonly, Ticker, Wallet}
 import org.purevalue.arbitrage.traderoom.Asset.USDT
-import org.purevalue.arbitrage.traderoom.TradeRoom.{JoinTradeRoom, LiquidityTransformationOrder, LiquidityTx, WalletUpdateTrigger}
+import org.purevalue.arbitrage.traderoom.TradeRoom.{JoinTradeRoom, LiquidityTransformationOrder, LiquidityTx}
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager._
 import org.purevalue.arbitrage.util.Emoji

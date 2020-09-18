@@ -109,17 +109,13 @@ class BinancePublicDataInquirer(globalConfig: GlobalConfig,
     }
   }
 
+
   override def receive: Receive = {
-    // Messages from Exchange
-    case GetTradePairs() =>
-      sender() ! TradePairs(tradePairs)
-
-    // Messages from BinanceTPDataChannel
-    case GetBinanceTradePairs() =>
-      sender() ! binanceTradePairs
-
-    case Status.Failure(cause) =>
-      log.error("received failure", cause)
+    // @formatter:off
+    case GetTradePairs()        => sender() ! TradePairs(tradePairs) // from exchange
+    case GetBinanceTradePairs() => sender() ! binanceTradePairs // from BinancePublicDataChannel
+    case Status.Failure(cause)  => log.error("received failure", cause)
+    // @formatter:on
   }
 }
 

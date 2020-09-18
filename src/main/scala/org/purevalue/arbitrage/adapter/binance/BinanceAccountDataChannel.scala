@@ -11,16 +11,16 @@ import akka.http.scaladsl.model.{HttpMethods, StatusCodes, Uri}
 import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
-import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.SendPing
+import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager._
+import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.{SendPing, Connect}
 import org.purevalue.arbitrage.adapter.binance.BinanceOrder.{toOrderStatus, toOrderType, toTradeSide}
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.{BinanceBaseRestEndpoint, GetBinanceTradePairs}
-import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager._
+import org.purevalue.arbitrage.adapter._
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.util.BadCalculationError
 import org.purevalue.arbitrage.util.HttpUtil.{httpRequestJsonBinanceAccount, httpRequestPureJsonBinanceAccount}
 import org.purevalue.arbitrage.util.Util.{formatDecimal, formatDecimalWithPrecision}
 import org.purevalue.arbitrage.{adapter, _}
-import org.purevalue.arbitrage.adapter.{Balance, ExchangeAccountStreamData, WalletAssetUpdate, WalletBalanceUpdate}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
@@ -29,8 +29,9 @@ import scala.concurrent.{Await, ExecutionContextExecutor, Future, Promise}
 
 
 object BinanceAccountDataChannel {
-  case class SendPing()
-  case class QueryAccountInformation()
+  private case class Connect()
+  private case class SendPing()
+  private case class QueryAccountInformation()
 
   def props(globalConfig: GlobalConfig,
             exchangeConfig: ExchangeConfig,
@@ -48,24 +49,20 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
   // outboundAccountPosition is sent any time an account balance has changed and contains the assets
   // that were possibly changed by the event that generated the balance change
   private val OutboundAccountPositionStreamName = "outboundAccountPosition"
-  private val IdOutboundAccountPositionStream = 1
+  private val IdOutboundAccountPositionStream: Int = 1
   // Balance Update occurs during the following:
   // - Deposits or withdrawals from the account
   // - Transfer of funds between accounts (e.g. Spot to Margin)
   private val BalanceUpdateStreamName = "balanceUpdate"
-  private val IdBalanceUpdateStream = 2
+  private val IdBalanceUpdateStream: Int = 2
   // Orders are updated with the executionReport event
   private val OrderExecutionReportStreamName = "executionReport"
-  private val IdOrderExecutionResportStream = 3
+  private val IdOrderExecutionResportStream: Int = 3
 
   implicit val system: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = system.dispatcher
 
-  val streamSubscribeResponses: Map[Int, Promise[Boolean]] = Map(
-    IdOutboundAccountPositionStream -> Promise[Boolean],
-    IdBalanceUpdateStream -> Promise[Boolean],
-    IdOrderExecutionResportStream -> Promise[Boolean]
-  )
+  @volatile var outstandingStreamSubscribeResponses: Set[Int] = Set(IdOutboundAccountPositionStream, IdBalanceUpdateStream, IdOrderExecutionResportStream)
 
   val pingSchedule: Cancellable = system.scheduler.scheduleAtFixedRate(30.minutes, 30.minutes, self, SendPing())
 
@@ -90,9 +87,12 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
   def streamSubscribeResponse(j: JsObject): Unit = {
     if (log.isTraceEnabled) log.trace(s"received $j")
     val channelId = j.fields("id").convertTo[Int]
-    streamSubscribeResponses(channelId).success(true)
+    synchronized {
+      outstandingStreamSubscribeResponses = outstandingStreamSubscribeResponses - channelId
+    }
 
-    if (streamSubscribeResponses.values.forall(_.isCompleted)) {
+    if (outstandingStreamSubscribeResponses.isEmpty) {
+      log.debug("all streams running")
       onStreamsRunning()
     }
   }
@@ -295,21 +295,7 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
   def onStreamsRunning(): Unit = {
     deliverAccountInformation()
     deliverOpenOrders()
-    exchangeAccountDataManager ! Initialized()
-  }
-
-  override def preStart(): Unit = {
-    try {
-      createListenKey()
-      pullBinanceTradePairs()
-
-      log.trace("starting WebSocket stream")
-      ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow)
-      ws._2.future.onComplete(e => log.info(s"connection closed: ${e.get}"))
-      connected = createConnected
-    } catch {
-      case e: Exception => log.error("preStart failed", e)
-    }
+    exchangeAccountDataManager ! ExchangeAccountDataManager.Initialized()
   }
 
   override def postStop(): Unit = {
@@ -317,8 +303,27 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
     // https://github.com/binance-exchange/binance-official-api-docs/blob/master/user-data-stream.md
   }
 
+  def connect(): Unit = {
+    log.trace("starting WebSocket stream")
+    ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow)
+    ws._2.future.onComplete(e => log.info(s"connection closed: ${e.get}"))
+    connected = createConnected
+  }
+
+  override def preStart(): Unit = {
+    try {
+      createListenKey()
+      pullBinanceTradePairs()
+      self ! Connect()
+    } catch {
+      case e: Exception => log.error("preStart failed", e)
+    }
+  }
+
+
   // @formatter:off
   override def receive: Receive = {
+    case Connect()                               => connect()
     case SendPing()                              => pingUserStream()
     case CancelOrder(tradePair, externalOrderId) => cancelOrder(tradePair, externalOrderId.toLong).pipeTo(sender())
     case NewLimitOrder(o)                        => newLimitOrder(o).pipeTo(sender())

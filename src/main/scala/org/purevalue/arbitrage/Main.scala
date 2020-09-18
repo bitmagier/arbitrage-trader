@@ -2,7 +2,7 @@ package org.purevalue.arbitrage
 
 import akka.actor.SupervisorStrategy.Restart
 import akka.actor.{Actor, ActorRef, ActorSystem, OneForOneStrategy, Props, Status}
-import org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator
+import org.purevalue.arbitrage.traderoom.TradeRoomInitializer
 import org.slf4j.{Logger, LoggerFactory}
 
 import scala.concurrent.duration.DurationInt
@@ -24,12 +24,12 @@ class RootGuardian(val config: Config) extends Actor {
   }
 
   override def preStart(): Unit = {
-    initCoordinator = context.actorOf(TradeRoomInitCoordinator.props(config, self))
+    initCoordinator = context.actorOf(TradeRoomInitializer.props(config, self), "TradeRoomInitCoordinator")
   }
 
   override def receive: Receive = {
     // @formatter:off
-    case TradeRoomInitCoordinator.InitializedTradeRoom(tradeRoom) => this.tradeRoom = tradeRoom
+    case TradeRoomInitializer.InitializedTradeRoom(tradeRoom) => this.tradeRoom = tradeRoom
     case Status.Failure(cause)                                    => log.error("received failure", cause)
     // @formatter:on
   }

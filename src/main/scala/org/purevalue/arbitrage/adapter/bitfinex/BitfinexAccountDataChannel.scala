@@ -10,9 +10,10 @@ import akka.http.scaladsl.model.{HttpMethods, StatusCodes, Uri}
 import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
+import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager._
+import org.purevalue.arbitrage.adapter.bitfinex.BitfinexAccountDataChannel.Connect
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexOrderUpdateJson.{toOrderStatus, toOrderType}
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.{GetBitfinexAssets, GetBitfinexTradePairs}
-import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager._
 import org.purevalue.arbitrage.adapter.{Balance, ExchangeAccountStreamData, WalletAssetUpdate}
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.util.HttpUtil
@@ -274,6 +275,8 @@ object BitfinexAccountDataJsonProtocoll extends DefaultJsonProtocol {
 
 
 object BitfinexAccountDataChannel {
+  private case class Connect()
+
   def props(globalConfig: GlobalConfig,
             exchangeConfig: ExchangeConfig,
             exchangeAccountDataManager: ActorRef,
@@ -526,7 +529,7 @@ class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
     try {
       pullBitfinexTradePairs()
       pullBitfinexAssets()
-      connect()
+      self ! Connect()
     } catch {
       case e: Exception => log.error("preStart failed", e)
     }
@@ -534,6 +537,7 @@ class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
 
   // @formatter:off
   override def receive: Receive = {
+    case Connect()                               => connect()
     case CancelOrder(tradePair, externalOrderId) => cancelOrder(tradePair, externalOrderId.toLong).pipeTo(sender())
     case NewLimitOrder(o)                        => newLimitOrder(o).pipeTo(sender())
   }
