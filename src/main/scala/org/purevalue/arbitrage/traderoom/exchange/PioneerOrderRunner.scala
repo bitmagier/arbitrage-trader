@@ -55,6 +55,8 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
   def validateFinishedPioneerOrder(request: OrderRequest, finishedOrder: Order): Unit = {
     def failed = throw new RuntimeException(s"Pioneer order validation failed! \n$request, \n$finishedOrder")
 
+    def diffMoreThan(a:Double, b:Double, maxDiffRate:Double): Boolean = ((a-b).abs / a.abs) > maxDiffRate
+
     if (finishedOrder.exchange != request.exchange) failed
     if (finishedOrder.side != request.tradeSide) failed
     if (finishedOrder.tradePair != request.tradePair) failed
@@ -65,6 +67,16 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
     if (finishedOrder.orderStatus != OrderStatus.FILLED) failed
     if (finishedOrder.quantity != request.amountBaseAsset) failed
     if (finishedOrder.cumulativeFilledQuantity != request.amountBaseAsset) failed
+
+    val withoutFee = Fee(request.exchange, 0.0, 0.0)
+    val incoming = finishedOrder.calcIncomingLiquidity(withoutFee)
+    if (incoming.asset != Bitcoin) failed
+    if (incoming.amount != request.amountBaseAsset) failed
+
+    val outgoing = finishedOrder.calcOutgoingLiquidity(withoutFee)
+    if (outgoing.asset != USDT) failed
+    if (diffMoreThan(outgoing.amount, request.calcOutgoingLiquidity.amount, 0.0001)) failed
+
     val sumUSDT = OrderBill.aggregateValues(
       OrderBill.calcBalanceSheet(finishedOrder, Fee(exchangeName, 0.0, 0.0)),
       USDT,
@@ -99,7 +111,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
   override def preStart(): Unit = {
     log.info(s"running pioneer order for $exchangeName")
     val tradePair = TradePair(Bitcoin, USDT)
-    val limit = tickers(tradePair).priceEstimate
+    val limit = tickers(tradePair).priceEstimate * (1.0 + tradeRoomConfig.liquidityManager.txLimitBelowOrAboveBestBidOrAsk)
     val amountBitcoin = CryptoValue(USDT, tradeRoomConfig.pioneerOrderValueUSDT).convertTo(Bitcoin, tickers).amount
     orderRequest = OrderRequest(UUID.randomUUID(), None, exchangeName, tradePair, TradeSide.Buy, tradeRoomConfig.exchanges(exchangeName).fee, amountBitcoin, limit)
 

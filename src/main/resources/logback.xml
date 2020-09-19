@@ -13,6 +13,8 @@
     <logger name="org.purevalue.arbitrage" level="INFO"/>
     <logger name="org.purevalue.arbitrage.util.HttpUtil" level="DEBUG"/>
 
+    <logger name="org.purevalue.arbitrage.adapter.bitfinex.BitfinexAccountDataChannel" level="TRACE"/>
+
     <root level="INFO">
         <appender-ref ref="STDOUT"/>
     </root>

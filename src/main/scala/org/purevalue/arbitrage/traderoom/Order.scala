@@ -88,7 +88,6 @@ object OrderType {
   case object TAKE_PROFIT extends OrderType // binance only
   case object TAKE_PROFIT_LIMIT extends OrderType // binance only
   case object LIMIT_MAKER extends OrderType // binance only
-  // bitfinex extras: TRAILING_STOP, EXCHANGE_MARKET, EXCHANGE_LIMIT, EXCHANGE_STOP, EXCHANGE_STOP_LIMIT, EXCHANGE TRAILING STOP, FOK, EXCHANGE FOK, IOC, EXCHANGE IOC
 }
 
 sealed trait OrderStatus {

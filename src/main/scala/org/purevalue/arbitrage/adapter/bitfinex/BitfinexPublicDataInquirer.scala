@@ -13,7 +13,7 @@ import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor}
 
 case class BitfinexSymbol(asset: Asset, apiSymbol: String)
-case class BitfinexTradePair(baseAsset: Asset, quoteAsset: Asset, apiSymbol: String) {
+case class BitfinexTradePair(baseAsset: Asset, quoteAsset: Asset, apiSymbol:String) {
   def toTradePair: TradePair = TradePair(baseAsset, quoteAsset)
 }
 
@@ -91,7 +91,7 @@ class BitfinexPublicDataInquirer(globalConfig: GlobalConfig,
       .filter(e =>
         bitfinexAssets.exists(_.asset.officialSymbol == e._1)
           && bitfinexAssets.exists(_.asset.officialSymbol == e._2)) // crosscheck with bitfinex (configured) assets
-      .map(e => BitfinexTradePair(Asset(e._1), Asset(e._2), e._3))
+      .map(e => BitfinexTradePair(Asset(e._1), Asset(e._2), s"t${e._3}"))
       .filter(e => exchangeConfig.tradeAssets.contains(e.baseAsset) && exchangeConfig.tradeAssets.contains(e.quoteAsset))
       .toSet
     if (log.isTraceEnabled) log.trace(s"bitfinexTradePairs: $bitfinexTradePairs")

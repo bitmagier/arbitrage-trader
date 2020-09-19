@@ -20,7 +20,7 @@ import org.purevalue.arbitrage.traderoom.exchange.PioneerOrderRunner.{PioneerOrd
 import org.purevalue.arbitrage.util.{Emoji, InitSequence, InitStep, WaitingFor}
 import org.slf4j.LoggerFactory
 
-import scala.concurrent.duration.DurationInt
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.concurrent.{Await, ExecutionContextExecutor, Future, TimeoutException}
 import scala.util.{Failure, Success}
 
@@ -182,6 +182,7 @@ case class Exchange(exchangeName: String,
   def startStreaming(): Unit = {
     val sendStreamingStartedResponseTo = sender()
     val maxWaitTime = globalConfig.internalCommunicationTimeoutDuringInit.duration
+    val pioneerOrderMaxWaitTime: FiniteDuration = maxWaitTime.plus(FiniteDuration(tradeRoomConfig.maxOrderLifetime.toMillis, TimeUnit.MILLISECONDS))
     val initSequence = new InitSequence(
       log,
       exchangeName,
@@ -193,7 +194,7 @@ case class Exchange(exchangeName: String,
         InitStep("wait until public-data-manager initialized", () => publicDataManagerInitialized.await(maxWaitTime)),
         InitStep("check if balance is sufficient for trading", () => checkIfBalanceIsSufficientForTrading()),
         InitStep(s"initiate pioneer order (${tradeRoomConfig.pioneerOrderValueUSDT} USDT -> Bitcoin)", () => initiatePioneerOrder()),
-        InitStep("waiting for pioneer order to succeed", () => pioneerOrderSucceeded.await(maxWaitTime)),
+        InitStep("waiting for pioneer order to succeed", () => pioneerOrderSucceeded.await(pioneerOrderMaxWaitTime)),
         InitStep("send streaming-started", () => sendStreamingStartedResponseTo ! StreamingStarted(exchangeName)),
         InitStep("wait until joined trade-room", () => joinedTradeRoom.await(maxWaitTime))
       ))

@@ -123,7 +123,7 @@ class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
   val WebSocketEndpoint: Uri = Uri(s"wss://api-pub.bitfinex.com/ws/2")
   val MaximumNumberOfChannelsPerConnection: Int = 25
 
-  var bitfinexTradePairBySymbol: Map[String, BitfinexTradePair] = _
+  var bitfinexTradePairByApiSymbol: Map[String, BitfinexTradePair] = _
   val tickerSymbolsByChannelId: collection.concurrent.Map[Int, String] = TrieMap()
 
   var wsList: List[(Future[WebSocketUpgradeResponse], Promise[Option[Message]])] = List()
@@ -133,7 +133,7 @@ class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
 
   def exchangeDataMapping(in: Seq[IncomingPublicBitfinexJson]): Seq[ExchangePublicStreamData] = in.map {
     // @formatter:off
-    case t: RawTickerJson => t.value.toTicker(exchangeConfig.exchangeName, bitfinexTradePairBySymbol(tickerSymbolsByChannelId(t.channelId)).toTradePair)
+    case t: RawTickerJson => t.value.toTicker(exchangeConfig.exchangeName, bitfinexTradePairByApiSymbol(tickerSymbolsByChannelId(t.channelId)).toTradePair)
     case RawHeartbeat()   => Heartbeat(Instant.now)
     case other            => log.error(s"unhandled object: $other"); throw new NotImplementedError()
     // @formatter:on
@@ -153,11 +153,7 @@ class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
       channel match {
         case "ticker" =>
           val symbol = j.fields("symbol").convertTo[String]
-          val pair = symbol.head match {
-            case 't' => symbol.substring(1)
-            case _ => log.error(s"ticker event symbol does not start with 't': $j"); throw new RuntimeException()
-          }
-          tickerSymbolsByChannelId.put(channelId, pair)
+          tickerSymbolsByChannelId.put(channelId, symbol)
 
         case _ => log.error(s"unknown channel subscribe response for: $channel")
       }
@@ -269,7 +265,7 @@ class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
     SubscribeRequestJson(channel = "ticker", symbol = tradePair.apiSymbol)
 
   def connect(): Unit = {
-    bitfinexTradePairBySymbol.values.sliding(MaximumNumberOfChannelsPerConnection).foreach { partition =>
+    bitfinexTradePairByApiSymbol.values.sliding(MaximumNumberOfChannelsPerConnection).foreach { partition =>
       if (log.isTraceEnabled) log.trace(s"""starting a WebSocket stream partition for ${partition.mkString(",")}""")
       val subscribeMessages: List[SubscribeRequestJson] = partition.map(e => subscribeMessage(e)).toList
       val ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow(subscribeMessages))
@@ -281,7 +277,7 @@ class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
 
   def initBitfinexTradePairBySymbol(): Unit = {
     implicit val timeout: Timeout = globalConfig.internalCommunicationTimeoutDuringInit
-    bitfinexTradePairBySymbol = Await.result(
+    bitfinexTradePairByApiSymbol = Await.result(
       (publicDataInquirer ? GetBitfinexTradePairs()).mapTo[Set[BitfinexTradePair]],
       timeout.duration.plus(500.millis))
       .map(e => (e.apiSymbol, e))
