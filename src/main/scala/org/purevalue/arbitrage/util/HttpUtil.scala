@@ -9,7 +9,6 @@ import akka.http.scaladsl.model.headers.RawHeader
 import akka.stream.Materializer
 import org.purevalue.arbitrage.util.Util.convertBytesToLowerCaseHex
 import org.purevalue.arbitrage.{GlobalConfig, Main, SecretsConfig}
-import org.slf4j.LoggerFactory
 import spray.json.{DeserializationException, JsValue, JsonParser, JsonReader}
 
 import scala.concurrent.{ExecutionContext, Future}

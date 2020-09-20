@@ -17,7 +17,8 @@ object Util {
     format.format(d)
   }
 
-  def formatDecimalWithPrecision(d: Double, precision:Int): String = {
+  // format with exactly the given precision
+  def formatDecimalWithFixPrecision(d: Double, precision:Int): String = {
     val numWholeDigits = d.toInt.toString.length
     val numFractionDigits: Int = precision - numWholeDigits
     formatDecimal(d, numFractionDigits, numFractionDigits)

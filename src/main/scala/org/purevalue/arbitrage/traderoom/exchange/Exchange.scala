@@ -228,7 +228,7 @@ case class Exchange(exchangeName: String,
     case ExchangePublicDataManager.Initialized()  => publicDataManagerInitialized.arrived()
     case ExchangeAccountDataManager.Initialized() => accountDataManagerInitialized.arrived()
     case PioneerOrderSucceeded()                  => pioneerOrderSucceeded.arrived()
-    case PioneerOrderFailed(e)                    => pioneerOrderSucceeded.arrived()
+    case PioneerOrderFailed(e)                    => log.error("Pioneer order failed", e)
     case j: JoinTradeRoom                         => joinTradeRoom(j)
     case WalletUpdateTrigger()                    => if (!walletInitialized.isArrived) walletInitialized.arrived()
     case t: OrderUpdateTrigger                    => if (tradeRoom.isDefined) tradeRoom.get.forward(t)

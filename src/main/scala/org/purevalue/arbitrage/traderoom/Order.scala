@@ -35,7 +35,8 @@ case class Order(externalId: String,
     }
     s"[$side ${formatDecimal(cumulativeFilledQuantity, tradePair.baseAsset.defaultPrecision)} " +
       s"${tradePair.baseAsset.officialSymbol}$direction${tradePair.quoteAsset.officialSymbol} " +
-      s"${formatDecimal(cumulativeFilledQuantity * priceAverage, tradePair.quoteAsset.defaultPrecision)}]"
+      s"${formatDecimal(cumulativeFilledQuantity * priceAverage, tradePair.quoteAsset.defaultPrecision)} " +
+      s"price ${formatDecimal(orderPrice, tradePair.quoteAsset.defaultPrecision)}]"
   }
 
 
@@ -117,7 +118,7 @@ case class OrderUpdate(externalOrderId: String,
                        tradePair: TradePair,
                        side: TradeSide,
                        orderType: OrderType,
-                       orderPrice: Double,
+                       orderPrice: Double, // may be the original price or a rounded one from the exchange
                        stopPrice: Option[Double],
                        originalQuantity: Option[Double],
                        orderCreationTime: Option[Instant],
@@ -133,7 +134,7 @@ case class OrderUpdate(externalOrderId: String,
     orderType,
     orderPrice,
     stopPrice,
-    originalQuantity.getOrElse(0.0), // TODO
+    originalQuantity.getOrElse(cumulativeFilledQuantity), // not perfect, but should be good enough in all cases
     None,
     orderCreationTime.getOrElse(Instant.now),
     orderStatus,
@@ -162,7 +163,8 @@ case class OrderRequest(id: UUID,
       case TradeSide.Sell => s"${tradePair.baseAsset.officialSymbol}->${tradePair.quoteAsset.officialSymbol}"
     }
     s"($exchange: ${formatDecimal(amountBaseAsset, tradePair.baseAsset.defaultPrecision)} " +
-      s"$orderDesc ${formatDecimal(amountBaseAsset * limit, tradePair.quoteAsset.defaultPrecision)})"
+      s"$orderDesc ${formatDecimal(amountBaseAsset * limit, tradePair.quoteAsset.defaultPrecision)} " +
+      s"limit ${formatDecimal(limit, tradePair.quoteAsset.defaultPrecision)})"
   }
   def shortDesc: String = s"OrderRequest($exchange: $tradeDesc)"
 

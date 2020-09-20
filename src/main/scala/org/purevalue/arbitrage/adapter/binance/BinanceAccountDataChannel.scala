@@ -19,7 +19,7 @@ import org.purevalue.arbitrage.adapter._
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.util.BadCalculationError
 import org.purevalue.arbitrage.util.HttpUtil.{httpRequestJsonBinanceAccount, httpRequestPureJsonBinanceAccount}
-import org.purevalue.arbitrage.util.Util.{formatDecimal, formatDecimalWithPrecision}
+import org.purevalue.arbitrage.util.Util.{formatDecimal, formatDecimalWithFixPrecision}
 import org.purevalue.arbitrage.{adapter, _}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
@@ -254,8 +254,8 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
         s"&side=${BinanceOrder.toString(o.tradeSide)}" +
         s"&type=${BinanceOrder.toString(OrderType.LIMIT)}" +
         s"&timeInForce=GTC" +
-        s"&quantity=${formatDecimalWithPrecision(quantity, binanceTradePair.baseAssetPrecision)}" +
-        s"&price=${formatDecimalWithPrecision(price, binanceTradePair.quotePrecision)}" +
+        s"&quantity=${formatDecimalWithFixPrecision(quantity, binanceTradePair.baseAssetPrecision)}" +
+        s"&price=${formatDecimalWithFixPrecision(price, binanceTradePair.quotePrecision)}" +
         s"&newClientOrderId=${o.id.toString}" +
         s"&newOrderRespType=ACK"
 

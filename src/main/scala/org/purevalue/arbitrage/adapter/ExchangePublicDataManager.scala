@@ -24,7 +24,7 @@ case class Ticker(exchange: String,
                   lowestAskQuantity: Option[Double],
                   lastPrice: Option[Double]) extends ExchangePublicStreamData {
   def priceEstimate: Double = lastPrice match {
-    case Some(last) => (highestBidPrice + last + lowestAskPrice) / 3
+    case Some(last) => last
     case None => (highestBidPrice + lowestAskPrice) / 2
   }
 }
