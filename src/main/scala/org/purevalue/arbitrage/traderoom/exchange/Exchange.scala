@@ -1,7 +1,7 @@
 package org.purevalue.arbitrage.traderoom.exchange
 
 import java.time.{Duration, Instant}
-import java.util.concurrent.{CountDownLatch, TimeUnit}
+import java.util.concurrent.TimeUnit
 
 import akka.Done
 import akka.actor.SupervisorStrategy.Restart
@@ -21,7 +21,7 @@ import org.purevalue.arbitrage.util.{Emoji, InitSequence, InitStep, WaitingFor}
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
-import scala.concurrent.{Await, ExecutionContextExecutor, Future, TimeoutException}
+import scala.concurrent.{Await, ExecutionContextExecutor, Future}
 import scala.util.{Failure, Success}
 
 object Exchange {
@@ -91,7 +91,7 @@ case class Exchange(exchangeName: String,
   def initLiquidityManager(j: JoinTradeRoom): Unit = {
     liquidityManager = context.actorOf(
       LiquidityManager.props(
-        tradeRoomConfig.liquidityManager, exchangeConfig, publicData.readonly, accountData.wallet, j.tradeRoom, j.findOpenLiquidityTx, j.referenceTicker),
+        tradeRoomConfig.liquidityManager, exchangeConfig, tradePairs, publicData.readonly, accountData.wallet, j.tradeRoom, j.findOpenLiquidityTx, j.referenceTicker),
       s"LiquidityManager-$exchangeName"
     )
   }
@@ -150,7 +150,7 @@ case class Exchange(exchangeName: String,
       tradeRoomConfig,
       exchangeName,
       self,
-      publicData.ticker,
+      publicData,
       (orderRef: OrderRef) => accountData.activeOrders.get(orderRef)
     ), s"PioneerOrderRunner-$exchangeName")
   }
@@ -193,10 +193,11 @@ case class Exchange(exchangeName: String,
         InitStep("wait until wallet data arrives", () => {walletInitialized.await(maxWaitTime); Thread.sleep(2000)}), // wait another 2 seconds for all wallet entries to arrive (bitfinex)
         InitStep("wait until public-data-manager initialized", () => publicDataManagerInitialized.await(maxWaitTime)),
         InitStep("check if balance is sufficient for trading", () => checkIfBalanceIsSufficientForTrading()),
+        InitStep("warmup channels for 5 seconds", () => Thread.sleep(5000)),
         InitStep(s"initiate pioneer order (${tradeRoomConfig.pioneerOrderValueUSDT} USDT -> Bitcoin)", () => initiatePioneerOrder()),
         InitStep("waiting for pioneer order to succeed", () => pioneerOrderSucceeded.await(pioneerOrderMaxWaitTime)),
         InitStep("send streaming-started", () => sendStreamingStartedResponseTo ! StreamingStarted(exchangeName)),
-        InitStep("wait until joined trade-room", () => joinedTradeRoom.await(maxWaitTime))
+        InitStep("wait until joined trade-room", () => joinedTradeRoom.await(maxWaitTime * 3))
       ))
 
     Future(initSequence.run()).onComplete {
@@ -210,8 +211,8 @@ case class Exchange(exchangeName: String,
   override def preStart(): Unit = {
     try {
       log.info(s"Initializing Exchange $exchangeName" +
-        s"${if (tradeSimulationMode) " in TRADE-SIMULATION mode"}" +
-        s"${if (exchangeConfig.doNotTouchTheseAssets.nonEmpty) s" DoNotTouch: ${exchangeConfig.doNotTouchTheseAssets.mkString(",")}"}")
+        s"${if (tradeSimulationMode) " in TRADE-SIMULATION mode" else ""}" +
+        s"${if (exchangeConfig.doNotTouchTheseAssets.nonEmpty) s" DoNotTouch: ${exchangeConfig.doNotTouchTheseAssets.mkString(",")}" else ""}")
 
       startPublicDataInquirer()
 
@@ -263,7 +264,7 @@ case class Exchange(exchangeName: String,
    * Will trigger a restart of the TradeRoom if stale data is found
    */
   def stalePublicDataWatch(): Unit = {
-    val lastSeen: Instant = (publicData.age.heartbeatTS.toSeq ++ Seq(publicData.age.tickerTS)).max
+    val lastSeen: Instant = (publicData.age.heartbeatTS.toSeq ++ publicData.age.tickerTS.toSeq ++ publicData.age.orderBookTS.toSeq).max
     if (Duration.between(lastSeen, Instant.now).compareTo(tradeRoomConfig.restarExchangeWhenDataStreamIsOlderThan) > 0) {
       log.warn(s"${Emoji.Robot}  Killing Exchange actor ($exchangeName) because of outdated ticker data")
       self ! Kill

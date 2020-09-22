@@ -1,11 +1,11 @@
 package org.purevalue.arbitrage.adapter
 
-import java.time.{Duration, Instant}
+import java.time.Instant
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, Props, Status}
 import org.purevalue.arbitrage.adapter.ExchangePublicDataManager._
-import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.ExchangePublicDataChannelInit
+import org.purevalue.arbitrage.traderoom.{TradePair, TradeSide}
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig, Main, TradeRoomConfig}
 import org.slf4j.LoggerFactory
@@ -30,14 +30,16 @@ case class Ticker(exchange: String,
 }
 
 /**
- * A bid is an offer to buy an asset; (likely aggregated) bid position(s) for a price level
+ * A bid is an offer to buy an asset.
+ * (likely aggregated) bid position(s) for a price level
  */
 case class Bid(price: Double, quantity: Double) {
   override def toString: String = s"Bid(price=${formatDecimal(price)}, amount=${formatDecimal(quantity)})"
 }
 
 /**
- * An ask is an offer to sell an asset; (likely aggregated) ask position(s) for a price level
+ * An ask is an offer to sell an asset.
+ * (likely aggregated) ask position(s) for a price level
  */
 case class Ask(price: Double, quantity: Double) {
   override def toString: String = s"Ask(price=${formatDecimal(price)}, amount=${formatDecimal(quantity)})"
@@ -46,7 +48,10 @@ case class Ask(price: Double, quantity: Double) {
 case class OrderBook(exchange: String,
                      tradePair: TradePair,
                      bids: Map[Double, Bid], // price-level -> bid
-                     asks: Map[Double, Ask]) { // price-level -> ask
+                     asks: Map[Double, Ask] // price-level -> ask
+                    ) extends ExchangePublicStreamData {
+  private val log = LoggerFactory.getLogger(classOf[OrderBook])
+
   def toCondensedString: String = {
     val bestBid = highestBid
     val bestAsk = lowestAsk
@@ -57,23 +62,65 @@ case class OrderBook(exchange: String,
   def highestBid: Bid = bids(bids.keySet.max)
 
   def lowestAsk: Ask = asks(asks.keySet.min)
+
+  def determineOptimalOrderLimit(tradeSide: TradeSide, amountBaseAssetEstimate: Double): Option[Double] = {
+    //                                            Iterator (price , amount)  : limit
+    def fillAmount(amount: Double, stackIterator: Iterator[(Double, Double)]): Option[Double] = {
+      var filled: Double = 0.0
+      var price: Option[Double] = None
+      while (filled < amount && stackIterator.hasNext) {
+        stackIterator.next() match {
+          case (_price,_amount) =>
+            price = Some(_price)
+            filled = filled + _amount
+        }
+      }
+      if (filled >= amount) price
+      else {
+        log.warn(s"order book not filled enough to take our order amount:($amount) $tradeSide $this")
+        None
+      }
+    }
+
+    def highestLevelToFulfillAmount(bids: Map[Double, Bid], amount: Double): Option[Double] = {
+      val stackIterator = bids.values.map(e => (e.price, e.quantity)).toSeq.sortBy(_._1).reverseIterator // (price,quantity) sorted with highest price first
+      fillAmount(amount, stackIterator)
+    }
+    def lowestLevelToFulfillAmount(asks: Map[Double, Ask], amount: Double): Option[Double] = {
+      val stackIterator = asks.values.map(e => (e.price, e.quantity)).toSeq.sortBy(_._1).iterator // (price,quantity) sorted with lowest price first
+      fillAmount(amount, stackIterator)
+    }
+
+    tradeSide match {
+      case TradeSide.Sell => highestLevelToFulfillAmount(bids, amountBaseAssetEstimate)
+      case TradeSide.Buy => lowestLevelToFulfillAmount(asks, amountBaseAssetEstimate)
+    }
+  }
 }
 
-case class PublicDataTimestamps(var heartbeatTS: Option[Instant],
-                                var tickerTS: Instant)
+case class OrderBookUpdate(exchange:String,
+                           tradePair: TradePair,
+                           bidUpdates: List[Bid], // quantity == 0.0 means: remove position from our OrderBook
+                           askUpdates: List[Ask]) extends ExchangePublicStreamData
+
+case class PublicDataTimestamps(@volatile var heartbeatTS: Option[Instant],
+                                @volatile var tickerTS: Option[Instant],
+                                @volatile var orderBookTS: Option[Instant])
 
 case class ExchangePublicData(ticker: concurrent.Map[TradePair, Ticker],
+                              orderBook: concurrent.Map[TradePair, OrderBook],
                               age: PublicDataTimestamps) {
-  def readonly: ExchangePublicDataReadonly = ExchangePublicDataReadonly(ticker)
+  def readonly: ExchangePublicDataReadonly = ExchangePublicDataReadonly(ticker, orderBook)
 }
-case class ExchangePublicDataReadonly(ticker: collection.Map[TradePair, Ticker])
+case class ExchangePublicDataReadonly(ticker: collection.Map[TradePair, Ticker],
+                                      orderBook: collection.Map[TradePair, OrderBook])
 
 object ExchangePublicDataManager {
   case class InitTimeoutCheck()
   case class Initialized()
   case class IncomingData(data: Seq[ExchangePublicStreamData])
 
-  def props(globalConfig:GlobalConfig,
+  def props(globalConfig: GlobalConfig,
             exchangeConfig: ExchangeConfig,
             tradeRoomConfig: TradeRoomConfig,
             tradePairs: Set[TradePair],
@@ -87,7 +134,7 @@ object ExchangePublicDataManager {
 /**
  * Manages all sorts of public data streams at one exchange
  */
-case class ExchangePublicDataManager(globalConfig:GlobalConfig,
+case class ExchangePublicDataManager(globalConfig: GlobalConfig,
                                      exchangeConfig: ExchangeConfig,
                                      tradeRoomConfig: TradeRoomConfig,
                                      tradePairs: Set[TradePair],
@@ -100,12 +147,10 @@ case class ExchangePublicDataManager(globalConfig:GlobalConfig,
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
   private var publicDataChannel: ActorRef = _
-
   private val initStartDeadline: Instant = Instant.now.plus(tradeRoomConfig.dataManagerInitTimeout)
+  private val initCheckSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(1.seconds, 1.seconds, self, InitTimeoutCheck())
+
   private var tickerCompletelyInitialized: Boolean = false
-
-  val initCheckSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(1.seconds, 1.seconds, self, InitTimeoutCheck())
-
   def onTickerUpdate(): Unit = {
     if (!tickerCompletelyInitialized) {
       tickerCompletelyInitialized = tradePairs.subsetOf(publicData.ticker.keySet)
@@ -115,6 +160,7 @@ case class ExchangePublicDataManager(globalConfig:GlobalConfig,
     }
   }
 
+
   private def applyDataset(data: Seq[ExchangePublicStreamData]): Unit = {
     data.foreach {
       case h: Heartbeat =>
@@ -122,12 +168,23 @@ case class ExchangePublicDataManager(globalConfig:GlobalConfig,
 
       case t: Ticker =>
         publicData.ticker += t.tradePair -> t
-        publicData.age.tickerTS = Instant.now
+        publicData.age.tickerTS = Some(Instant.now)
         onTickerUpdate()
 
-      case other =>
-        log.error(s"Not implemended: $other")
-        throw new NotImplementedError
+      case b: OrderBook =>
+        publicData.orderBook.update(b.tradePair, b)
+        publicData.age.orderBookTS = Some(Instant.now)
+
+      case b: OrderBookUpdate =>
+        val book = publicData.orderBook(b.tradePair)
+        if (book.exchange != b.exchange) throw new IllegalArgumentException
+        val newBids: Map[Double, Bid] =
+          (book.bids -- b.bidUpdates.filter(_.quantity == 0.0).map(_.price)) ++ b.bidUpdates.filter(_.quantity != 0.0).map(e => e.price -> e)
+        val newAsks: Map[Double, Ask] =
+          (book.asks -- b.askUpdates.filter(_.quantity == 0.0).map(_.price)) ++ b.askUpdates.filter(_.quantity != 0.0).map(e => e.price -> e)
+
+        publicData.orderBook.update(b.tradePair, OrderBook(book.exchange, book.tradePair, newBids, newAsks))
+        publicData.age.orderBookTS = Some(Instant.now)
     }
   }
 
@@ -143,7 +200,7 @@ case class ExchangePublicDataManager(globalConfig:GlobalConfig,
 
   override def preStart(): Unit = {
     publicDataChannel = context.actorOf(exchangePublicDataChannelProps(globalConfig, exchangeConfig, self, exchangePublicDataInquirer),
-    s"${exchangeConfig.exchangeName}-PublicDataChannel")
+      s"${exchangeConfig.exchangeName}-PublicDataChannel")
   }
 
 

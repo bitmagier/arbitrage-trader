@@ -101,7 +101,10 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
     }
 
     val amountBaseAsset: Double = CryptoValue(USDT, tradeQuantityUSDT).convertTo(tradePair.baseAsset, tc.referenceTicker).amount
-
+    val tickerBasedBuyLimit = lowestAsk._2.price * (1.0d + orderLimitAdditionRate)
+    val buyLimit = if (tc.orderBooks(buyExchange).nonEmpty) {
+      tc.orderBooks(buyExchange)(tradePair).determineOptimalOrderLimit(TradeSide.Buy, amountBaseAsset).getOrElse(tickerBasedBuyLimit)
+    } else tickerBasedBuyLimit
     val ourBuyBaseAssetOrder =
       OrderRequest(
         UUID.randomUUID(),
@@ -111,7 +114,13 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
         TradeSide.Buy,
         tc.fees(buyExchange),
         amountBaseAsset / (1.0 - tc.fees(buyExchange).average), // usually we have to buy X + fee, because fee gets substracted; an exeption is on binance when paying with BNB
-        lowestAsk._2.price * (1.0d + orderLimitAdditionRate))
+        buyLimit
+      )
+
+    val tickerBasedSellLimit = highestBid._2.price * (1.0d - orderLimitAdditionRate)
+    val sellLimit = if (tc.orderBooks(sellExchange).nonEmpty) {
+      tc.orderBooks(sellExchange)(tradePair).determineOptimalOrderLimit(TradeSide.Sell, amountBaseAsset).getOrElse(tickerBasedSellLimit)
+    } else tickerBasedSellLimit
 
     val ourSellBaseAssetOrder =
       OrderRequest(
@@ -122,7 +131,7 @@ class FooTrader(config: Config, tradeRoom: ActorRef, tc: TradeContext) extends A
         TradeSide.Sell,
         tc.fees(sellExchange),
         amountBaseAsset,
-        highestBid._2.price * (1.0d - orderLimitAdditionRate)
+        sellLimit
       )
 
     val bill: OrderBill = OrderBill.calc(Seq(ourBuyBaseAssetOrder, ourSellBaseAssetOrder), tc.tickers)

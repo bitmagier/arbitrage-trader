@@ -43,11 +43,11 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
   }
 
   private def tickerDataUpToDate(o: OrderRequest): Boolean = {
-    val lastSeen = (dataAge(o.exchange).heartbeatTS.toSeq ++ Seq(dataAge(o.exchange).tickerTS)).max
+    val lastSeen = (dataAge(o.exchange).heartbeatTS.toSeq ++ dataAge(o.exchange).tickerTS.toSeq ++ dataAge(o.exchange).orderBookTS.toSeq).max
     val age = Duration.between(lastSeen, Instant.now)
     val r = age.compareTo(config.maxTickerAge) < 0
     if (!r) {
-      log.warn(s"${Emoji.NoSupport}  Sorry, can't let that order through, because we have an aged ticker (${age.toSeconds} s) for ${o.exchange} here.")
+      log.warn(s"${Emoji.NoSupport}  Sorry, can't let that order through, because we have an aged ticker/orderBook (${age.toSeconds} s) for ${o.exchange} here.")
       log.debug(s"${Emoji.NoSupport}  $o")
     }
     r

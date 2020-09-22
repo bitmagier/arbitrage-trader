@@ -11,7 +11,7 @@ import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager.{CancelOrder, CancelOrderResult, NewLimitOrder, NewOrderAck}
-import org.purevalue.arbitrage.adapter.{Fee, PublicDataTimestamps, Ticker, Wallet}
+import org.purevalue.arbitrage.adapter._
 import org.purevalue.arbitrage.trader.FooTrader
 import org.purevalue.arbitrage.traderoom.Asset.USDT
 import org.purevalue.arbitrage.traderoom.OrderSetPlacer.NewOrderSet
@@ -24,7 +24,7 @@ import org.slf4j.LoggerFactory
 
 import scala.collection.concurrent.TrieMap
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
-import scala.concurrent.{Await, ExecutionContextExecutor, Future}
+import scala.concurrent.{ExecutionContextExecutor, Future}
 import scala.util.{Failure, Success}
 
 object TradeRoom {
@@ -36,8 +36,9 @@ object TradeRoom {
    * An always-uptodate view on the TradeRoom Pre-Trade Data.
    * Modification of the content is NOT permitted by users of the TRadeContext (even if technically possible)!
    */
-  case class TradeContext(tickers: TickersReadonly,
+  case class TradeContext(tickers: collection.Map[String, collection.Map[TradePair, Ticker]],
                           referenceTickerExchange: String,
+                          orderBooks: collection.Map[String, collection.Map[TradePair, OrderBook]],
                           balances: collection.Map[String, Wallet],
                           fees: collection.Map[String, Fee],
                           doNotTouch: Map[String, Seq[Asset]]) {
@@ -82,11 +83,12 @@ object TradeRoom {
 
   def props(config: Config,
             exchanges: Map[String, ActorRef],
-            tickers: Map[String, ConcurrentMap[TradePair, Ticker]],
+            tickers: Map[String, collection.Map[TradePair, Ticker]],
+            orderBooks: Map[String, collection.Map[TradePair, OrderBook]],
             dataAge: Map[String, PublicDataTimestamps],
             wallets: Map[String, Wallet],
             activeOrders: Map[String, ConcurrentMap[OrderRef, Order]]): Props =
-    Props(new TradeRoom(config, exchanges, tickers, dataAge, wallets, activeOrders))
+    Props(new TradeRoom(config, exchanges, tickers, orderBooks, dataAge, wallets, activeOrders))
 }
 
 /**
@@ -97,7 +99,8 @@ object TradeRoom {
  */
 class TradeRoom(val config: Config,
                 val exchanges: Map[String, ActorRef],
-                val tickers: Map[String, ConcurrentMap[TradePair, Ticker]], // a map per exchange
+                val tickers: Map[String, collection.Map[TradePair, Ticker]], // a map per exchange
+                val orderBooks: Map[String, collection.Map[TradePair, OrderBook]],
                 val dataAge: Map[String, PublicDataTimestamps],
                 val wallets: Map[String, Wallet],
                 val activeOrders: Map[String, ConcurrentMap[OrderRef, Order]] // Map(exchange-name -> Map(order-ref -> order)) contains incoming order & order-update data from exchanges data stream
@@ -124,6 +127,7 @@ class TradeRoom(val config: Config,
     TradeContext(
       tickers,
       config.tradeRoom.referenceTickerExchange,
+      orderBooks,
       wallets,
       fees,
       doNotTouchAssets)
@@ -246,25 +250,6 @@ class TradeRoom(val config: Config,
       }
     }
 
-    def toEntriesPerExchange[T](m: collection.Map[String, collection.Map[TradePair, T]]): String = {
-      m.map(e => (e._1, e._2.values.size))
-        .toSeq
-        .sortBy(_._1)
-        .map(e => s"${e._1}:${e._2}")
-        .mkString(", ")
-    }
-
-
-    def logTickerStats(): Unit = {
-      val freshestTicker = dataAge.maxBy(_._2.tickerTS.toEpochMilli)
-      val oldestTicker = dataAge.minBy(_._2.tickerTS.toEpochMilli)
-      log.info(s"${Emoji.Robot}  TradeRoom stats: [general] " +
-        s"ticker:[${toEntriesPerExchange(tickers)}]" +
-        s" (oldest: ${oldestTicker._1} ${Duration.between(oldestTicker._2.tickerTS, Instant.now).toMillis} ms," +
-        s" freshest: ${freshestTicker._1} ${Duration.between(freshestTicker._2.tickerTS, Instant.now).toMillis} ms)")
-    }
-
-
     def logOrderBundleSafetyGuardStats(): Unit = {
       log.info(s"${Emoji.Robot}  OrderBundleSafetyGuard decision stats: [${orderBundleSafetyGuard.unsafeStats.mkString("|")}]")
     }
@@ -322,7 +307,6 @@ class TradeRoom(val config: Config,
     }
 
     logWalletOverview()
-    logTickerStats()
     logOrderBundleSafetyGuardStats()
     logFinalOrderStateStats()
     logOrderGainStats()

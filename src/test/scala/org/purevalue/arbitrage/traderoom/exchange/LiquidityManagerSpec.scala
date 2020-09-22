@@ -9,7 +9,7 @@ import akka.testkit.{ImplicitSender, TestKit, TestProbe}
 import akka.util.Timeout
 import org.purevalue.arbitrage.adapter.{Balance, ExchangePublicDataReadonly, Ticker, Wallet}
 import org.purevalue.arbitrage.traderoom.Asset.{Bitcoin, Euro, USDT, USDollar}
-import org.purevalue.arbitrage.traderoom.TradeRoom.{JoinTradeRoom, LiquidityTransformationOrder}
+import org.purevalue.arbitrage.traderoom.TradeRoom.LiquidityTransformationOrder
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityRequest}
 import org.purevalue.arbitrage.traderoom.{Asset, CryptoValue, TradePair, TradeSide}
 import org.purevalue.arbitrage.{ExchangeConfig, LiquidityManagerConfig, adapter}
@@ -31,7 +31,7 @@ class LiquidityManagerSpec
       Duration.ofSeconds(5),
       Duration.ofSeconds(5),
       providingLiquidityExtra = 0.02,
-      maxAcceptableLocalTickerLossFromReferenceTicker = 0.01,
+      maxAcceptableExchangeRateLossVersusReferenceTicker = 0.01,
       minimumKeepReserveLiquidityPerAssetInUSDT = 50.0,
       txLimitBelowOrAboveBestBidOrAsk = 0.00005,
       rebalanceTxGranularityInUSDT = 20.0,
@@ -67,11 +67,13 @@ class LiquidityManagerSpec
       TradePair(Asset("OMG"), Bitcoin) -> 3.50/BitcoinPriceUSD
     ).map(e => e._1 -> Ticker("e1", e._1, e._2, None, e._2, None, Some(e._2)))
 
+  private val tradePairs: Set[TradePair] = referenceTicker.keySet
+
 
   private val tickers: Map[String, Map[TradePair, Ticker]] =
     Map("e1" -> referenceTicker)
 
-  private val tpData = ExchangePublicDataReadonly(tickers("e1"))
+  private val tpData = ExchangePublicDataReadonly(tickers("e1"), Map())
 
   val CheckSpread = 0.01
 
@@ -90,7 +92,7 @@ class LiquidityManagerSpec
         USDollar -> adapter.Balance(USDollar, 999, 0.0)
       ), exchangeConfig)
 
-      val m: ActorRef = system.actorOf(LiquidityManager.props(liquidityManagerConfig, exchangeConfig, tpData, wallet, tradeRoom.ref, _ => None, () => referenceTicker))
+      val m: ActorRef = system.actorOf(LiquidityManager.props(liquidityManagerConfig, exchangeConfig, tradePairs, tpData, wallet, tradeRoom.ref, _ => None, () => referenceTicker))
 
       m ! LiquidityManager.HouseKeeping() // trigger housekeeping
 
@@ -135,7 +137,7 @@ class LiquidityManagerSpec
         Asset("OMG") -> adapter.Balance(Asset("OMG"), 1000.0, 0.0) // staked (in do-not-touch list)
       ), exchangeConfig)
 
-      val m: ActorRef = system.actorOf(LiquidityManager.props(liquidityManagerConfig, exchangeConfig, tpData, wallet, tradeRoom.ref, _ => None, () => referenceTicker))
+      val m: ActorRef = system.actorOf(LiquidityManager.props(liquidityManagerConfig, exchangeConfig, tradePairs, tpData, wallet, tradeRoom.ref, _ => None, () => referenceTicker))
 
       val requestedLiquidity = Seq(CryptoValue(Asset("ADA"), 100.0), CryptoValue(Asset("LINK"), 25.0))
       implicit val timeout: Timeout = 2.seconds
@@ -196,7 +198,7 @@ class LiquidityManagerSpec
         Euro -> adapter.Balance(Euro, 1000.0, 0.0)
       ), exchangeConfig)
 
-      val m = system.actorOf(LiquidityManager.props(liquidityManagerConfig, exchangeConfig, tpData, wallet, tradeRoom.ref, _ => None, () => referenceTicker))
+      val m = system.actorOf(LiquidityManager.props(liquidityManagerConfig, exchangeConfig, tradePairs, tpData, wallet, tradeRoom.ref, _ => None, () => referenceTicker))
 
       implicit val timeout: Timeout = 2.seconds
       val lock = Await.result(

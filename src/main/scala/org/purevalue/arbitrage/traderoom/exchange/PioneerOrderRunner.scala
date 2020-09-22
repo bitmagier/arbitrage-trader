@@ -7,7 +7,7 @@ import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, PoisonPill, Props}
 import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager.{NewLimitOrder, NewOrderAck}
-import org.purevalue.arbitrage.adapter.{Fee, Ticker}
+import org.purevalue.arbitrage.adapter.{ExchangePublicData, Fee, Ticker}
 import org.purevalue.arbitrage.traderoom.Asset.{Bitcoin, USDT}
 import org.purevalue.arbitrage.traderoom.TradeRoom._
 import org.purevalue.arbitrage.traderoom._
@@ -32,16 +32,16 @@ object PioneerOrderRunner {
             tradeRoomConfig: TradeRoomConfig,
             exchangeName: String,
             exchange: ActorRef,
-            tickers: collection.Map[TradePair, Ticker],
+            publicData: ExchangePublicData,
             activeOrderLookup: OrderRef => Option[Order]
            ): Props =
-    Props(new PioneerOrderRunner(globalConfig, tradeRoomConfig, exchangeName, exchange, tickers, activeOrderLookup))
+    Props(new PioneerOrderRunner(globalConfig, tradeRoomConfig, exchangeName, exchange, publicData, activeOrderLookup))
 }
 class PioneerOrderRunner(globalConfig: GlobalConfig,
                          tradeRoomConfig: TradeRoomConfig,
                          exchangeName: String,
                          exchange: ActorRef,
-                         tickers: collection.Map[TradePair, Ticker],
+                         publicData: ExchangePublicData,
                          activeOrderLookup: OrderRef => Option[Order]
                         ) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[PioneerOrderRunner])
@@ -85,7 +85,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
     val sumUSDT = OrderBill.aggregateValues(
       OrderBill.calcBalanceSheet(finishedOrder, Fee(exchangeName, 0.0, 0.0)),
       USDT,
-      (_, tradePair) => tickers.get(tradePair).map(_.priceEstimate))
+      (_, tradePair) => publicData.ticker.get(tradePair).map(_.priceEstimate))
     if (sumUSDT < -0.01) failed(s"unexpected loss of ${formatDecimal(sumUSDT, 4)} USDT") // more than 1 cent loss is absolutely unacceptable
   }
 
@@ -118,9 +118,11 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
   override def preStart(): Unit = {
     log.info(s"running pioneer order for $exchangeName")
     val tradePair = TradePair(Bitcoin, USDT)
-    val ticker: Ticker = tickers(tradePair)
-    val limit = ticker.priceEstimate * (1.0 + tradeRoomConfig.liquidityManager.txLimitBelowOrAboveBestBidOrAsk)
-    val amountBitcoin = CryptoValue(USDT, tradeRoomConfig.pioneerOrderValueUSDT).convertTo(Bitcoin, tickers).amount
+    val ticker: Ticker = publicData.ticker(tradePair)
+    val amountBitcoin = CryptoValue(USDT, tradeRoomConfig.pioneerOrderValueUSDT).convertTo(Bitcoin, publicData.ticker).amount
+    val limit =
+      if (publicData.orderBook.contains(tradePair)) publicData.orderBook(tradePair).determineOptimalOrderLimit(TradeSide.Buy, amountBitcoin).get
+      else ticker.priceEstimate * (1.0 + tradeRoomConfig.liquidityManager.txLimitBelowOrAboveBestBidOrAsk)
 
     orderRequest = OrderRequest(UUID.randomUUID(), None, exchangeName, tradePair, TradeSide.Buy, tradeRoomConfig.exchanges(exchangeName).fee, amountBitcoin, limit)
     log.debug(s"[$exchangeName] pioneer order: ${orderRequest.shortDesc}; Ticker was: $ticker")

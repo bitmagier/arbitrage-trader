@@ -99,7 +99,7 @@ case class TradeRoomStatsConfig(reportInterval: Duration,
 case class LiquidityManagerConfig(liquidityLockMaxLifetime: Duration, // when a liquidity lock is not cleared, this is the maximum time, it can stay active
                                   liquidityDemandActiveTime: Duration, // when demanded liquidity is not requested within that time, the coins are transferred back to a reserve asset
                                   providingLiquidityExtra: Double, // we provide a little bit more than it was demanded, to potentially fulfill order requests with a slightly different amount
-                                  maxAcceptableLocalTickerLossFromReferenceTicker: Double, // defines the maximum acceptable relative loss (local ticker versus reference ticker) for liquidity conversion transactions
+                                  maxAcceptableExchangeRateLossVersusReferenceTicker: Double, // defines the maximum acceptable relative loss (local exchange rate versus reference ticker) for liquidity conversion transactions
                                   minimumKeepReserveLiquidityPerAssetInUSDT: Double, // when we convert to a reserve liquidity or re-balance our reserve liquidity, each of them should reach at least that value (measured in USDT)
                                   txLimitBelowOrAboveBestBidOrAsk: Double, // defines the rate we set our limit above the highest ask or below the lowest bid (use 0.0 for using exactly the bid or ask price).
                                   rebalanceTxGranularityInUSDT: Double, // that's the granularity (and also minimum amount) we transfer for reserve asset re-balance orders)}
@@ -109,7 +109,7 @@ object LiquidityManagerConfig {
     c.getDuration("liquidity-lock-max-lifetime"),
     c.getDuration("liquidity-demand-active-time"),
     c.getDouble("providing-liquidity-extra"),
-    c.getDouble("max-acceptable-local-ticker-loss-from-reference-ticker"),
+    c.getDouble("max-acceptable-exchange-rate-loss-versus-reference-ticker"),
     c.getDouble("minimum-keep-reserve-liquidity-per-asset-in-usdt"),
     c.getDouble("tx-limit-below-or-above-best-bid-or-ask"),
     c.getDouble("rebalance-tx-granularity-in-usdt"),

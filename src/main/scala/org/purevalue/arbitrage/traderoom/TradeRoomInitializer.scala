@@ -1,11 +1,8 @@
 package org.purevalue.arbitrage.traderoom
 
-import java.time.Instant
-
-import akka.actor.{Actor, ActorRef, PoisonPill, Props}
+import akka.actor.{Actor, ActorRef, Props}
 import akka.pattern.ask
 import akka.util.Timeout
-import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.adapter._
 import org.purevalue.arbitrage.traderoom.Asset.{Bitcoin, USDT}
 import org.purevalue.arbitrage.traderoom.TradeRoom.{ConcurrentMap, OrderRef}
@@ -32,6 +29,7 @@ class TradeRoomInitializer(val config: Config,
   // @formatter:off
   var exchanges:    Map[String, ActorRef] = Map()
   var tickers:      Map[String, ConcurrentMap[TradePair, Ticker]] = Map()
+  var orderBooks:   Map[String, ConcurrentMap[TradePair, OrderBook]] = Map()
   var dataAge:      Map[String, PublicDataTimestamps] = Map()
   var wallets:      Map[String, Wallet] = Map()
   var activeOrders: Map[String, ConcurrentMap[OrderRef, Order]] = Map()
@@ -101,8 +99,9 @@ class TradeRoomInitializer(val config: Config,
 
 
   def startExchange(exchangeName: String, exchangeInit: ExchangeInitStuff): Unit = {
-    tickers = tickers + (exchangeName -> TrieMap[TradePair, Ticker]())
-    dataAge = dataAge + (exchangeName -> PublicDataTimestamps(None, Instant.MIN))
+    tickers = tickers + (exchangeName -> TrieMap())
+    orderBooks = orderBooks + (exchangeName -> TrieMap())
+    dataAge = dataAge + (exchangeName -> PublicDataTimestamps(None, None, None))
     wallets = wallets + (exchangeName -> Wallet(exchangeName, Map(), config.tradeRoom.exchanges(exchangeName)))
     activeOrders = activeOrders + (exchangeName -> TrieMap())
 
@@ -116,6 +115,7 @@ class TradeRoomInitializer(val config: Config,
           exchangeInit,
           ExchangePublicData(
             tickers(exchangeName),
+            orderBooks(exchangeName),
             dataAge(exchangeName)
           ),
           ExchangeAccountData(
@@ -142,7 +142,7 @@ class TradeRoomInitializer(val config: Config,
 
   def onInitialized(): Unit = {
     log.debug("TradeRoom initialized")
-    val tradeRoom = context.actorOf(TradeRoom.props(config, exchanges, tickers, dataAge, wallets, activeOrders), "TradeRoom")
+    val tradeRoom = context.actorOf(TradeRoom.props(config, exchanges, tickers, orderBooks, dataAge, wallets, activeOrders), "TradeRoom")
     parent ! InitializedTradeRoom(tradeRoom)
     context.watch(tradeRoom)
   }

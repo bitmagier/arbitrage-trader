@@ -22,7 +22,7 @@ case class Order(externalId: String,
                  orderPrice: Double,
                  stopPrice: Option[Double], // for STOP_LIMIT
                  quantity: Double, // (TODO check what AMOUNT & AMOUNT_ORIG means on bitfinex)
-                 orderRejectReason: Option[String],
+                 orderRejectReason: Option[String], // TODO remove attribute
                  creationTime: Instant,
                  var orderStatus: OrderStatus,
                  var cumulativeFilledQuantity: Double,

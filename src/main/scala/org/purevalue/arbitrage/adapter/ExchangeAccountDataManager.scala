@@ -19,7 +19,7 @@ object ExchangeAccountDataManager {
   case class IncomingData(data: Seq[ExchangeAccountStreamData])
   case class Initialized()
   case class CancelOrder(tradePair: TradePair, externalOrderId: String)
-  case class CancelOrderResult(exchange:String, tradePair: TradePair, externalOrderId: String, success: Boolean)
+  case class CancelOrderResult(exchange: String, tradePair: TradePair, externalOrderId: String, success: Boolean)
   case class NewLimitOrder(orderRequest: OrderRequest) // response is NewOrderAck
   case class NewOrderAck(exchange: String, tradePair: TradePair, externalOrderId: String, orderId: UUID) {
     def toOrderRef: OrderRef = OrderRef(exchange, tradePair, externalOrderId)
@@ -92,9 +92,17 @@ class ExchangeAccountDataManager(globalConfig: GlobalConfig,
       s"${exchangeConfig.exchangeName}.AccountDataChannel")
   }
 
+  override def receive: Receive = {
+    case i: Initialized =>
+      exchange.forward(i) // is expected to come from exchange specific account-data-channel when initialized
+      context.become(initializedModeReceive)
+
+    case Failure(e) => log.error("received failure", e)
+  }
+
+
   // @formatter:off
-  def receive: Receive = {
-    case i: Initialized         => exchange.forward(i) // is expected to come from exchange specific account-data-channel when initialized
+  def initializedModeReceive: Receive = {
     case IncomingData(data)     => data.foreach(applyData)
     case c: CancelOrder         => accountDataChannel.forward(c)
     case o: NewLimitOrder       => accountDataChannel.forward(o)

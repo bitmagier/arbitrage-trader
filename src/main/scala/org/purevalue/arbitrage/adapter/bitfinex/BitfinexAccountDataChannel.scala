@@ -17,8 +17,8 @@ import org.purevalue.arbitrage.adapter.bitfinex.BitfinexOrderUpdateJson.{toOrder
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.{GetBitfinexAssets, GetBitfinexTradePairs}
 import org.purevalue.arbitrage.adapter.{Balance, ExchangeAccountStreamData, WalletAssetUpdate}
 import org.purevalue.arbitrage.traderoom._
-import org.purevalue.arbitrage.util.HttpUtil
 import org.purevalue.arbitrage.util.Util.formatDecimal
+import org.purevalue.arbitrage.util.{HttpUtil, WrongAssumption}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsString, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
@@ -49,7 +49,7 @@ case class BitfinexOrderUpdateJson(streamType: String, // "os" = order snapshot,
                                    priceTrailing: Double,
                                    priceAuxLimit: Double, // Auxiliary Limit price (STOP_LIMIT)
                                    notifY: Int, // 0 if false, 1 if true
-                                   hidden: Int, // 1 if Hidden, 0 if not hidden
+                                   hidden: Option[Int], // 1 if Hidden, 0 if not hidden
                                    placedId: Option[Long], // if another order caused this order to be placed (OCO) this will be that other order's ID
                                    routing: String // indicates origin of action: BFX, ETHFX, API>BFX, API>ETHFX
                                   ) extends IncomingBitfinexAccountJson {
@@ -137,7 +137,7 @@ object BitfinexOrderUpdateJson {
     v(18).convertTo[Double],
     v(19).convertTo[Double],
     v(23).convertTo[Int],
-    v(24).convertTo[Int],
+    v(24).convertTo[Option[Int]],
     v(25).convertTo[Option[Long]],
     v(28).convertTo[String]
   )
@@ -204,16 +204,8 @@ case class SubmitLimitOrderJson(`type`: String,
                                 amount: String, // Amount of order (positive for buy, negative for sell)
                                 meta: JsObject)
 
-case class SingleOrderResponseJson(id: Long,
-                                   gid: Option[Long],
-                                   cid: Long,
-                                   symbol: String,
-                                   mtsCreate: Long,
-                                   orderStatus: String,
-                                   routing: String)
-
 case class OrderResponseJson(mts: Long,
-                             orders: List[SingleOrderResponseJson],
+                             orders: Array[BitfinexOrderUpdateJson],
                              status: String, // SUCCESS, ERROR. FAILURE, ...
                              text: String)
 
@@ -221,22 +213,6 @@ object BitfinexAccountDataJsonProtocoll extends DefaultJsonProtocol {
   implicit val bitfinexAuthMessage: RootJsonFormat[BitfinexAuthMessage] = jsonFormat6(BitfinexAuthMessage)
   implicit val submitLimitOrderJson: RootJsonFormat[SubmitLimitOrderJson] = jsonFormat5(SubmitLimitOrderJson)
 
-  // [51506597828,null,1600515007213,"tBTCUST",1600515007213,1600515007213,0.0022697,0.0022697,"EXCHANGE LIMIT",null,null,null,0,"ACTIVE",null,null,11015,0,0,0,null,null,null,0,0,null,null,null,"API>BFX",null,null,{"aff_code":"IUXlFHleA"}]
-  implicit object singleOrderResponseJson extends RootJsonFormat[SingleOrderResponseJson] {
-    def read(value: JsValue): SingleOrderResponseJson = {
-      val v = value.convertTo[Array[JsValue]]
-      SingleOrderResponseJson(
-        v(0).convertTo[Long],
-        v(1).convertTo[Option[Long]],
-        v(2).convertTo[Long],
-        v(3).convertTo[String],
-        v(4).convertTo[Long],
-        v(13).convertTo[String],
-        v(28).convertTo[String])
-    }
-
-    def write(v: SingleOrderResponseJson): JsValue = throw new NotImplementedError
-  }
   // [1600515007,
   // "on-req",
   // null,
@@ -248,7 +224,10 @@ object BitfinexAccountDataJsonProtocoll extends DefaultJsonProtocol {
   implicit object submitOrderResponseJson extends RootJsonFormat[OrderResponseJson] {
     def read(value: JsValue): OrderResponseJson = {
       val v = value.convertTo[Array[JsValue]]
-      OrderResponseJson(v(0).convertTo[Long], v(4).convertTo[List[SingleOrderResponseJson]], v(6).convertTo[String], v(7).convertTo[String])
+      val orderUpdates: Array[BitfinexOrderUpdateJson] =
+        v(4).convertTo[Array[Array[JsValue]]]
+        .map(o => BitfinexOrderUpdateJson.apply("on", o))
+      OrderResponseJson(v(0).convertTo[Long], orderUpdates, v(6).convertTo[String], v(7).convertTo[String])
     }
 
     def write(v: OrderResponseJson): JsValue = throw new NotImplementedError
@@ -496,7 +475,10 @@ class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
       exchangeConfig.secrets
     ).map {
       case r: OrderResponseJson if r.status == "SUCCESS" && r.orders.length == 1 =>
-        NewOrderAck(exchangeConfig.exchangeName, o.tradePair, r.orders.head.id.toString, o.id)
+        if (r.orders.length > 1) throw new WrongAssumption("returned number of orders > 1")
+        val order = r.orders.head
+        exchangeAccountDataManager ! IncomingData(exchangeDataMapping(Seq(order)))
+        NewOrderAck(exchangeConfig.exchangeName, o.tradePair, order.orderId.toString, o.id)
       case r: OrderResponseJson =>
         throw new RuntimeException(s"Something went wrong while placing a limit-order. Response is: $r")
     } recover {
@@ -515,8 +497,11 @@ class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
       Some(s"{id:$externalOrderId}"),
       exchangeConfig.secrets
     ).map {
-      case r: OrderResponseJson if r.status == "SUCCESS" && r.orders.size == 1 =>
-        CancelOrderResult(exchangeConfig.exchangeName, tradePair, r.orders.head.id.toString, success = true)
+      case r: OrderResponseJson if r.status == "SUCCESS" && r.orders.length == 1 =>
+        if (r.orders.length > 1) throw new WrongAssumption("returned number of orders > 1")
+        val order = r.orders.head
+        exchangeAccountDataManager ! IncomingData(exchangeDataMapping(Seq(order)))
+        CancelOrderResult(exchangeConfig.exchangeName, tradePair, r.orders.head.orderId.toString, success = true)
       case r: OrderResponseJson =>
         log.debug(s"Cancel order failed. Result: $r")
         CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = false)

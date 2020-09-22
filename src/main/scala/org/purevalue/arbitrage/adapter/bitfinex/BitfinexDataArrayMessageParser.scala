@@ -3,8 +3,8 @@ package org.purevalue.arbitrage.adapter.bitfinex
 import java.text.ParseException
 
 
-class BitfinexDataArrayMessageParser(val s:String) {
-  var pos:Int = 0
+class BitfinexDataArrayMessageParser(private val s:String) {
+  private var pos:Int = 0
 
   private def skipWhitespaces():Unit = {
     while (s.charAt(pos).isWhitespace) pos += 1

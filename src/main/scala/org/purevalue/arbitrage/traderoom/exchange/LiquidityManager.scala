@@ -5,7 +5,7 @@ import java.util.{NoSuchElementException, UUID}
 
 import akka.actor.{Actor, ActorRef, Cancellable, Props}
 import org.purevalue.arbitrage.Main.actorSystem
-import org.purevalue.arbitrage.adapter.{ExchangePublicDataReadonly, Ticker, Wallet}
+import org.purevalue.arbitrage.adapter._
 import org.purevalue.arbitrage.traderoom.Asset.USDT
 import org.purevalue.arbitrage.traderoom.TradeRoom.{LiquidityTransformationOrder, LiquidityTx}
 import org.purevalue.arbitrage.traderoom._
@@ -79,16 +79,18 @@ object LiquidityManager {
 
   def props(config: LiquidityManagerConfig,
             exchangeConfig: ExchangeConfig,
+            tradePairs: Set[TradePair],
             tpData: ExchangePublicDataReadonly,
             wallet: Wallet,
             tradeRoom: ActorRef,
             findOpenLiquidityTx: (LiquidityTx => Boolean) => Option[LiquidityTx],
             referenceTicker: () => collection.Map[TradePair, Ticker]
            ): Props =
-    Props(new LiquidityManager(config, exchangeConfig, tpData, wallet, tradeRoom, findOpenLiquidityTx, referenceTicker))
+    Props(new LiquidityManager(config, exchangeConfig, tradePairs, tpData, wallet, tradeRoom, findOpenLiquidityTx, referenceTicker))
 }
 class LiquidityManager(val config: LiquidityManagerConfig,
                        val exchangeConfig: ExchangeConfig,
+                       val tradePairs: Set[TradePair],
                        val tpData: ExchangePublicDataReadonly,
                        val wallet: Wallet,
                        val tradeRoom: ActorRef,
@@ -200,39 +202,45 @@ class LiquidityManager(val config: LiquidityManagerConfig,
    */
   def estimatedManufactingCosts(demand: UniqueDemand, reserveAsset: Asset): Double = {
     CryptoValue(demand.asset, demand.amount)
-      .convertTo(reserveAsset, tpData.ticker)
+      .convertTo(reserveAsset, referenceTicker())
       .amount
   }
 
   /**
-   * Gives back a rating of the local ticker, indicating how good the local exchange-rate is compared with the reference-ticker.
-   * Ratings can be interpreted as a percentage being better (positive rating) or worse (negative rating) that the reference ticker.
+   * Gives back a rating for trading a amount on that tradepair on the local exchange - compared to reference ticker
+   * Ratings can be interpreted as a percentage of the local limit needed to fulfill a local trade compared to the reference ticker.
+   * A result rate > 0 indicates a positive rating - being better than the reference ticker, a negative rate the opposite
    */
-  def localTickerRating(tradePair: TradePair, tradeSide: TradeSide): Double = {
-    tradeSide match {
-      case TradeSide.Sell =>
-        val tickerPrice = tpData.ticker(tradePair).priceEstimate
-        val referencePrice = referenceTicker.apply().get(tradePair).map(_.priceEstimate)
-        if (referencePrice.isDefined)
-          tickerPrice / referencePrice.get - 1.0 // x/R - 1
-        else
-          0.0 // we can not judge it, because no reference ticker available
-
-      case TradeSide.Buy =>
-        val tickerPrice = tpData.ticker(tradePair).priceEstimate
-        val referencePrice = referenceTicker.apply().get(tradePair).map(_.priceEstimate)
-        if (referencePrice.isDefined)
-          1.0 - tickerPrice / referencePrice.get // 1 - x/R
-        else
-          0.0 // we cannot judge it, because no reference ticker available
+  def localExchangeRateRating(tradePair: TradePair, tradeSide: TradeSide, amountBaseAsset:Double): Double = {
+    val localLimit = determineGoodLimit(tradePair, tradeSide, amountBaseAsset)
+    val referenceTickerPrice: Option[Double] = referenceTicker().get(tradePair).map(_.priceEstimate)
+    referenceTickerPrice match {
+      case Some(referencePrice) => tradeSide match {
+        case TradeSide.Buy => 1.0 - localLimit / referencePrice // 1 - x/R
+        case TradeSide.Sell => localLimit / referencePrice - 1.0 // x/R - 1
+      }
+      case None => 0.0 // we can not judge it, because no reference ticker available
     }
   }
 
-  // TODO fine-tune that algorithm using the order book data, if available
-  def guessGoodLimit(tradePair: TradePair, tradeSide: TradeSide, amountBaseAssetEstimate: Double): Double = {
+
+  def determineLimitBasedOnTicker(ticker: Ticker, tradeSide: TradeSide): Double = {
     tradeSide match {
-      case TradeSide.Sell => tpData.ticker(tradePair).lowestAskPrice * (1.0 - config.txLimitBelowOrAboveBestBidOrAsk)
-      case TradeSide.Buy => tpData.ticker(tradePair).lowestAskPrice * (1.0 + config.txLimitBelowOrAboveBestBidOrAsk)
+      case TradeSide.Sell => ticker.highestBidPrice * (1.0 - config.txLimitBelowOrAboveBestBidOrAsk)
+      case TradeSide.Buy => ticker.lowestAskPrice * (1.0 + config.txLimitBelowOrAboveBestBidOrAsk)
+    }
+  }
+
+
+
+  def determineGoodLimit(tradePair: TradePair, tradeSide: TradeSide, amountBaseAssetEstimate: Double): Double = {
+    var limit: Option[Double] = None
+    if (tpData.orderBook.nonEmpty) {
+      limit = tpData.orderBook(tradePair).determineOptimalOrderLimit(tradeSide, amountBaseAssetEstimate * 1.5) // add 50% extra to increase our chance to fill the order
+    }
+    limit match {
+      case Some(limit) => limit
+      case None => determineLimitBasedOnTicker(tpData.ticker(tradePair), tradeSide)
     }
   }
 
@@ -244,10 +252,10 @@ class LiquidityManager(val config: LiquidityManagerConfig,
     val bestReserveAssets: Option[Tuple2[Asset, Double]] =
       exchangeConfig.reserveAssets
         .filterNot(demand.dontUseTheseReserveAssets.contains)
-        .filter(e => tpData.ticker.keySet.contains(TradePair(demand.asset, e))) // ticker available for trade pair?
+        .filter(e => tradePairs.contains(TradePair(demand.asset, e)))
         .filter(e => estimatedManufactingCosts(demand, e) < wallet.balance.get(e).map(_.amountAvailable).getOrElse(0.0)) // enough balance available?
-        .map(e => (e, localTickerRating(TradePair(demand.asset, e), TradeSide.Buy))) // join local ticker rating
-        .filter(_._2 >= -config.maxAcceptableLocalTickerLossFromReferenceTicker) // ticker rate acceptable?
+        .map(e => (e, localExchangeRateRating(TradePair(demand.asset, e), TradeSide.Buy, demand.amount))) // join local exchange rate rating
+        .filter(_._2 >= -config.maxAcceptableExchangeRateLossVersusReferenceTicker) // local rate acceptable?
         .sortBy(e => e._2)
         .lastOption
 
@@ -258,7 +266,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
       if (log.isTraceEnabled) log.trace(s"Found best usable reserve asset: ${bestReserveAssets.get._1}, rating=${bestReserveAssets.get._2} for providing $demand")
       val orderAmount: Double = demand.amount * (1.0 + config.providingLiquidityExtra)
       val tradePair = TradePair(demand.asset, bestReserveAssets.get._1)
-      val limit = guessGoodLimit(tradePair, TradeSide.Buy, orderAmount)
+      val limit = determineGoodLimit(tradePair, TradeSide.Buy, orderAmount)
       val orderRequest = OrderRequest(UUID.randomUUID(), None, exchangeConfig.exchangeName, tradePair, TradeSide.Buy, exchangeConfig.fee, orderAmount, limit)
 
       tradeRoom ! LiquidityTransformationOrder(orderRequest)
@@ -322,11 +330,11 @@ class LiquidityManager(val config: LiquidityManagerConfig,
     val possibleReserveAssets: List[Tuple2[Asset, Double]] =
       exchangeConfig.reserveAssets
         .filter(e => tpData.ticker.contains(TradePair(coins.asset, e))) // filter available TradePairs only (with a local ticker)
-        .map(e => (e, localTickerRating(TradePair(coins.asset, e), TradeSide.Sell))) // add local ticker rating
+        .map(e => (e, localExchangeRateRating(TradePair(coins.asset, e), TradeSide.Sell, coins.amount))) // add local exchange rate rating
 
     val availableReserveAssets: List[Tuple2[Asset, Double]] =
       possibleReserveAssets
-        .filter(_._2 >= -config.maxAcceptableLocalTickerLossFromReferenceTicker) // [non-loss-asset-filter]
+        .filter(_._2 >= -config.maxAcceptableExchangeRateLossVersusReferenceTicker) // [non-loss-asset-filter]
 
     if (availableReserveAssets.isEmpty) {
       if (possibleReserveAssets.isEmpty) log.debug(s"No reserve asset available to convert back $coins")
@@ -337,7 +345,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
 
     val bestAvailableReserveAssets: List[Asset] =
       availableReserveAssets
-        .sortBy(e => e._2) // sorted by local ticker rating
+        .sortBy(e => e._2) // sorted by local exchange rate rating
         .map(_._1) // asset only
         .reverse // best rating first
 
@@ -353,7 +361,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
     }
 
     val tradePair = TradePair(coins.asset, destinationReserveAsset.get)
-    val limit: Double = guessGoodLimit(tradePair, TradeSide.Sell, coins.amount)
+    val limit: Double = determineGoodLimit(tradePair, TradeSide.Sell, coins.amount)
     val orderRequest = OrderRequest(
       UUID.randomUUID(),
       None,
@@ -410,8 +418,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
   }
 
   def liquidityConversionPossibleBetween(a: Asset, b: Asset): Boolean = {
-    tpData.ticker.keySet.contains(TradePair(a, b)) ||
-      tpData.ticker.keySet.contains(TradePair(b, a))
+    tradePairs.contains(TradePair(a, b)) || tradePairs.contains(TradePair(b, a))
   }
 
   def rebalanceReserveAssetsAmountOrders(pendingIncomingReserveLiquidity: List[CryptoValue]): List[OrderRequest] = {
@@ -507,7 +514,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
               val tradeSide = TradeSide.Buy
               val baseAssetBucketValue: Double = CryptoValue(USDT, config.rebalanceTxGranularityInUSDT).convertTo(tradePair.baseAsset, tpData.ticker).amount
               val orderAmountBaseAsset = bucketsToTransfer * baseAssetBucketValue
-              val limit = guessGoodLimit(tradePair, tradeSide, orderAmountBaseAsset)
+              val limit = determineGoodLimit(tradePair, tradeSide, orderAmountBaseAsset)
               OrderRequest(UUID.randomUUID(), None, exchangeConfig.exchangeName, tradePair, tradeSide, exchangeConfig.fee, orderAmountBaseAsset, limit)
 
             case tp if tpData.ticker.contains(tp.reverse) =>
@@ -515,7 +522,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
               val tradeSide = TradeSide.Sell
               val quoteAssetBucketValue: Double = CryptoValue(USDT, config.rebalanceTxGranularityInUSDT).convertTo(tradePair.quoteAsset, tpData.ticker).amount
               val amountBaseAssetEstimate = bucketsToTransfer * quoteAssetBucketValue / tpData.ticker(tradePair).priceEstimate
-              val limit = guessGoodLimit(tradePair, tradeSide, amountBaseAssetEstimate)
+              val limit = determineGoodLimit(tradePair, tradeSide, amountBaseAssetEstimate)
               val orderAmountBaseAsset = bucketsToTransfer * quoteAssetBucketValue / limit
               OrderRequest(UUID.randomUUID(), None, exchangeConfig.exchangeName, tradePair, tradeSide, exchangeConfig.fee, orderAmountBaseAsset, limit)
 

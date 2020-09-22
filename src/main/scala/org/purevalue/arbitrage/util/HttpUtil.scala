@@ -78,7 +78,7 @@ object HttpUtil {
     val nonce = (Instant.now.toEpochMilli * 1000).toString
     val apiPath = Uri(uri).toRelative.toString() match {
       case s:String if s.startsWith("/") => s.substring(1)  // "v2/auth/..."
-      case _ => throw WrongPrecondition("relative url starts with /")
+      case _ => throw new WrongAssumption("relative url starts with /")
     }
     val contentToSign = s"/api/$apiPath$nonce${requestBody.getOrElse("")}"
     val signature = hmacSha384Signature(contentToSign, apiKeys.apiSecretKey)
@@ -110,9 +110,9 @@ object HttpUtil {
     }
   }
 
-  def httpRequestPureJsonBinanceAccount(method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig, signed: Boolean)
+  def httpRequestPureJsonBinanceAccount(method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig, sign: Boolean)
                                        (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[JsValue] =
-    httpRequestBinanceHmacSha256(method, uri, requestBody, apiKeys, signed).map { r =>
+    httpRequestBinanceHmacSha256(method, uri, requestBody, apiKeys, sign).map { r =>
       r.contentType match {
         case ContentTypes.`application/json` =>
           JsonParser(r.data.utf8String)
