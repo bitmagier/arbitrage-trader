@@ -21,13 +21,12 @@ case class Order(externalId: String,
                  orderType: OrderType,
                  orderPrice: Double,
                  stopPrice: Option[Double], // for STOP_LIMIT
-                 quantity: Double, // (TODO check what AMOUNT & AMOUNT_ORIG means on bitfinex)
-                 orderRejectReason: Option[String], // TODO remove attribute
+                 quantity: Double,
                  creationTime: Instant,
                  @volatile var orderStatus: OrderStatus,
                  @volatile var cumulativeFilledQuantity: Double,
                  @volatile var priceAverage: Double,
-                 @volatile var lastUpdateTime: Instant) extends ExchangeAccountStreamData {
+                 @volatile var lastUpdateTime: Instant) {
   def shortDesc: String = {
     val direction: String = side match {
       case TradeSide.Buy => "<-"
@@ -139,10 +138,14 @@ case class OrderUpdate(externalOrderId: String,
     orderType,
     orderPrice,
     stopPrice,
-    originalQuantity.getOrElse(cumulativeFilledQuantity), // not perfect, but should be good enough in all cases
-    None,
+    originalQuantity.getOrElse(if (orderStatus.exists(_.isFinal)) cumulativeFilledQuantity else 0.0),
     orderCreationTime.getOrElse(Instant.now),
-    orderStatus.getOrElse(OrderStatus.NEW), // TODO check if default NEW always works
+    orderStatus.getOrElse(originalQuantity match { // defaults in case not order status is available
+      case Some(originalQuantity) if cumulativeFilledQuantity == originalQuantity => OrderStatus.FILLED
+      case Some(originalQuantity) if cumulativeFilledQuantity < originalQuantity => OrderStatus.PARTIALLY_FILLED
+      case Some(_) => OrderStatus.NEW
+      case None => OrderStatus.NEW
+    }),
     cumulativeFilledQuantity,
     priceAverage,
     updateTime

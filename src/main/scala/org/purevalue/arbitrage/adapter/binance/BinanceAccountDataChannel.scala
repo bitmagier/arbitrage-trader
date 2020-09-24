@@ -78,9 +78,9 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
     case a: AccountInformationJson      => a.toWalletAssetUpdate // deprecated
     case a: OutboundAccountPositionJson => a.toWalletAssetUpdate
     case b: BalanceUpdateJson           => b.toWalletBalanceUpdate
-    case o: NewOrderResponseFullJson    => o.toOrder(exchangeConfig.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair) // expecting, that we have all relevant trade pairs
-    case o: OrderExecutionReportJson    => o.toOrderOrOrderUpdate(exchangeConfig.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair)
-    case o: OpenOrderJson               => o.toOrder(exchangeConfig.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair)
+    case o: NewOrderResponseFullJson    => o.toOrderUpdate(exchangeConfig.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair) // expecting, that we have all relevant trade pairs
+    case o: OrderExecutionReportJson    => o.toOrderUpdate(exchangeConfig.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair)
+    case o: OpenOrderJson               => o.toOrderUpdate(exchangeConfig.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair)
     case x                              => log.debug(s"$x"); throw new NotImplementedError
     // @formatter:on
   }
@@ -438,7 +438,7 @@ case class OpenOrderJson(symbol: String,
                          isWorking: Boolean
                          // origQuoteOrderQty: String
                         ) extends IncomingBinanceAccountJson {
-  def toOrder(exchange: String, resolveTradePair: String => TradePair): Order = Order(
+  def toOrderUpdate(exchange: String, resolveTradePair: String => TradePair): OrderUpdate = OrderUpdate(
     orderId.toString,
     exchange,
     resolveTradePair(symbol),
@@ -449,10 +449,9 @@ case class OpenOrderJson(symbol: String,
       case 0.0 => None
       case x => Some(x)
     },
-    origQty.toDouble,
-    None,
-    Instant.ofEpochMilli(time),
-    toOrderStatus(status),
+    Some(origQty.toDouble),
+    Some(Instant.ofEpochMilli(time)),
+    Some(toOrderStatus(status)),
     cumulativeQuoteQty.toDouble,
     cumulativeQuoteQty.toDouble / executedQty.toDouble,
     Instant.ofEpochMilli(updateTime))
@@ -494,10 +493,6 @@ case class OrderExecutionReportJson(e: String, // Event type
                                     // Q: String // Quote Order Qty
                                    ) extends IncomingBinanceAccountJson {
 
-  def toOrderOrOrderUpdate(exchange: String, resolveTradePair: String => TradePair): ExchangeAccountStreamData =
-    if (X == "NEW") toOrder(exchange, resolveTradePair)
-    else toOrderUpdate(exchange, resolveTradePair)
-
   // creationTime, orderPrice, stopPrice, originalQuantity
   def toOrderUpdate(exchange:String, resolveTradePair: String => TradePair): OrderUpdate = OrderUpdate(
     i.toString,
@@ -511,34 +506,11 @@ case class OrderExecutionReportJson(e: String, // Event type
       case x => Some(x)
     },
     Some(q.toDouble),
-    None,
+    Some(Instant.ofEpochMilli(O)),
     Some(toOrderStatus(X)),
     z.toDouble,
     Z.toDouble / z.toDouble,
     Instant.ofEpochMilli(E))
-
-  def toOrder(exchange: String, resolveTradePair: String => TradePair): Order = Order(
-    i.toString,
-    exchange,
-    resolveTradePair(s),
-    toTradeSide(S),
-    toOrderType(o),
-    p.toDouble,
-    P.toDouble match {
-      case 0.0 => None
-      case x => Some(x)
-    },
-    q.toDouble,
-    r match {
-      case "NONE" => None
-      case x => Some(x)
-    },
-    Instant.ofEpochMilli(E),
-    toOrderStatus(X),
-    z.toDouble,
-    Z.toDouble / z.toDouble,
-    Instant.ofEpochMilli(E)
-  )
 }
 
 object BinanceOrder {
@@ -607,9 +579,9 @@ case class NewOrderResponseFullJson(symbol: String,
   def priceAverage(qtyPricePairs: Seq[Tuple2[Double,Double]]): Double =
     qtyPricePairs.map(e => e._1 * e._2).sum / qtyPricePairs.map(_._1).sum
 
-  def toOrder(exchangeName: String, resolveTradePair: String => TradePair): Order = {
+  def toOrderUpdate(exchangeName: String, resolveTradePair: String => TradePair): OrderUpdate = {
     val ts = Instant.ofEpochMilli(transactTime)
-    Order(
+    OrderUpdate(
       orderId.toString,
       exchangeName,
       resolveTradePair(symbol),
@@ -617,10 +589,9 @@ case class NewOrderResponseFullJson(symbol: String,
       BinanceOrder.toOrderType(`type`),
       price.toDouble,
       None,
-      origQty.toDouble,
-      None,
-      ts,
-      BinanceOrder.toOrderStatus(status),
+      Some(origQty.toDouble),
+      Some(ts),
+      Some(BinanceOrder.toOrderStatus(status)),
       fills.map(_.qty.toDouble).sum,
       priceAverage(fills.map(e => (e.qty.toDouble, e.price.toDouble))), // Seq(qty, price)
       ts)

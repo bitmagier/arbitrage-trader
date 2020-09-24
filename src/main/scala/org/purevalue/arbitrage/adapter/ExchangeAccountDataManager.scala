@@ -62,11 +62,6 @@ class ExchangeAccountDataManager(globalConfig: GlobalConfig,
         }
         exchange ! WalletUpdateTrigger()
 
-      case o: Order =>
-        val ref = o.ref
-        accountData.activeOrders.update(ref, o)
-        exchange ! OrderUpdateTrigger(ref)
-
       case o: OrderUpdate =>
         val ref = OrderRef(exchangeConfig.exchangeName, o.tradePair, o.externalOrderId)
         if (accountData.activeOrders.contains(ref)) {

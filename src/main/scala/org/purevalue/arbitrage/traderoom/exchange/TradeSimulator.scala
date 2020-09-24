@@ -28,8 +28,8 @@ class TradeSimulator(exchangeConfig: ExchangeConfig,
     )
   }
 
-  def newLimitOrder(externalOrderId: String, creationTime: Instant, o: OrderRequest): Order =
-    Order(externalOrderId, o.exchange, o.tradePair, o.tradeSide, OrderType.LIMIT, o.limit, None, o.amountBaseAsset, None, creationTime, OrderStatus.NEW, 0.0, o.limit, creationTime)
+  def newLimitOrder(externalOrderId: String, creationTime: Instant, o: OrderRequest): OrderUpdate =
+    OrderUpdate(externalOrderId, o.exchange, o.tradePair, o.tradeSide, OrderType.LIMIT, o.limit, None, Some(o.amountBaseAsset), Some(creationTime), Some(OrderStatus.NEW), 0.0, o.limit, creationTime)
 
   def limitOrderPartiallyFilled(externalOrderId: String, creationTime: Instant, o: OrderRequest): OrderUpdate =
     OrderUpdate(externalOrderId, o.exchange, o.tradePair, o.tradeSide, OrderType.LIMIT, o.limit, None, Some(o.amountBaseAsset), Some(creationTime), Some(OrderStatus.PARTIALLY_FILLED), o.amountBaseAsset / 2.0, o.limit, Instant.now)

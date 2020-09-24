@@ -65,29 +65,6 @@ case class BitfinexOrderUpdateJson(streamType: String, // "os" = order snapshot,
     case _ => None
   }
 
-  def toOrder(exchange: String, resolveTradePair: String => TradePair): Order = Order(
-    orderId.toString,
-    exchange,
-    resolveTradePair(symbol),
-    if (amountOriginal >= 0.0) TradeSide.Buy else TradeSide.Sell,
-    toOrderType(orderType),
-    price,
-    if (priceAuxLimit != 0.0) Some(priceAuxLimit) else None, // TODO check what we get
-    amountOriginal.abs,
-    orderStatus match {
-      case s: String if s.startsWith("CANCELED") => Some(s)
-      case s: String if s.startsWith("RSN_DUST") => Some(s)
-      case s: String if s.startsWith("RSN_PAUSE") => Some(s)
-      case s: String if s.startsWith("INSUFFICIENT MARGIN") => Some(s)
-      case _ => None
-    },
-    Instant.ofEpochMilli(createTime),
-    toOrderStatus(orderStatus),
-    parseCumulativeFilled.map(_.abs).getOrElse(amount.abs),
-    priceAverage,
-    Instant.ofEpochMilli(updateTime)
-  )
-
   def toOrderUpdate(exchange: String, resolveTradePair: String => TradePair): OrderUpdate = OrderUpdate(
     orderId.toString,
     exchange,
@@ -102,11 +79,6 @@ case class BitfinexOrderUpdateJson(streamType: String, // "os" = order snapshot,
     parseCumulativeFilled.map(_.abs).getOrElse(amount.abs),
     priceAverage,
     Instant.ofEpochMilli(updateTime))
-
-  def toOrderOrOrderUpdate(exchange: String, resolveTradePair: String => TradePair): ExchangeAccountStreamData = {
-    if (streamType == "on") toOrder(exchange, resolveTradePair)
-    else toOrderUpdate(exchange, resolveTradePair)
-  }
 }
 object BitfinexOrderUpdateJson {
 
@@ -340,7 +312,7 @@ class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
 
   def exchangeDataMapping(in: Seq[IncomingBitfinexAccountJson]): Seq[ExchangeAccountStreamData] = in.map {
     // @formatter:off
-    case o: BitfinexOrderUpdateJson   => o.toOrderOrOrderUpdate(exchangeConfig.exchangeName, symbol => bitfinexTradePairByApiSymbol(symbol).toTradePair)
+    case o: BitfinexOrderUpdateJson   => o.toOrderUpdate(exchangeConfig.exchangeName, symbol => bitfinexTradePairByApiSymbol(symbol).toTradePair)
     case t: BitfinexTradeExecutedJson => t.toOrderUpdate(exchangeConfig.exchangeName, symbol => bitfinexTradePairByApiSymbol(symbol).toTradePair)
     case w: BitfinexWalletUpdateJson  => w.toWalletAssetUpdate(symbol => symbolToAsset(symbol))
     case x                            => log.error(s"$x"); throw new NotImplementedError
@@ -391,12 +363,13 @@ class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
             Seq()
 
           case "tu" =>
-            if (log.isTraceEnabled) log.trace(s"ignoring trade update event: $s")
+            if (log.isTraceEnabled) log.trace(s"watching trade update event: $s")
             Seq() // ignoring trade updates (prefering order updates, which have more details)
 
           case "te" =>
-            if (log.isTraceEnabled) log.trace(s"received event 'trade executed': $s")
-            Seq(BitfinexTradeExecutedJson(dataArray(2).convertTo[Vector[JsValue]]))
+            if (log.isTraceEnabled) log.trace(s"watching event 'trade executed': $s")
+            //Seq(BitfinexTradeExecutedJson(dataArray(2).convertTo[Vector[JsValue]]))
+            Seq()
 
           case "ws" =>
             if (log.isTraceEnabled) log.trace(s"received event 'wallet snapshot': $s")
