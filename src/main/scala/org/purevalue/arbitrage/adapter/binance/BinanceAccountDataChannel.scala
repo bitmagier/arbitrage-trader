@@ -422,7 +422,7 @@ case class OpenOrderJson(symbol: String,
                          price: String,
                          origQty: String,
                          executedQty: String,
-                         cumulativeQuoteQty: String,
+                         cummulativeQuoteQty: String, // yes cumulative has only one 'm', but this is what the API delivers :-)
                          status: String,
                          //timeInForce: String,
                          `type`: String,
@@ -448,8 +448,8 @@ case class OpenOrderJson(symbol: String,
     Some(origQty.toDouble),
     Some(Instant.ofEpochMilli(time)),
     Some(toOrderStatus(status)),
-    cumulativeQuoteQty.toDouble,
-    cumulativeQuoteQty.toDouble / executedQty.toDouble,
+    cummulativeQuoteQty.toDouble,
+    cummulativeQuoteQty.toDouble / executedQty.toDouble,
     Instant.ofEpochMilli(updateTime))
 }
 

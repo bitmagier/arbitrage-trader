@@ -160,30 +160,40 @@ object HttpUtil {
   def httpGetJson[T, E](uri: String)
                        (implicit evidence1: JsonReader[T], evidence2: JsonReader[E], system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[Either[T, E]] = {
     httpGetPureJson(uri).map {
-      case (statusCode, j) if statusCode.isSuccess() => Left(j.convertTo[T])
-      case (_, j) => Right(j.convertTo[E])
-    } recover {
-      case e: Exception => throw new RuntimeException(s"$uri failed", e)
+      case (statusCode, j) =>
+        try {
+          if (statusCode.isSuccess()) Left(j.convertTo[T])
+          else Right(j.convertTo[E])
+        } catch {
+          case e: Exception => throw new RuntimeException(s"$uri failed", e)
+        }
     }
   }
 
   def httpRequestJsonBinanceAccount[T, E](method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig, sign: Boolean)
                                          (implicit evidence1: JsonReader[T], evidence2: JsonReader[E], system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[Either[T, E]] = {
     httpRequestPureJsonBinanceAccount(method, uri, requestBody, apiKeys, sign).map {
-      case (statusCode, j) if statusCode.isSuccess() => Left(j.convertTo[T])
-      case (_, j) => Right(j.convertTo[E])
-    } recover {
-      case e: Exception => throw new RuntimeException(s"$uri failed", e)
+      case (statusCode, j) =>
+        try {
+          if (statusCode.isSuccess()) Left(j.convertTo[T])
+          else Right(j.convertTo[E])
+        } catch {
+          case e: Exception => throw new RuntimeException(s"$uri failed. Response: $statusCode, $j, ", e)
+        }
     }
   }
 
   def httpRequestJsonBitfinexAccount[T, E](method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig)
                                           (implicit evidence1: JsonReader[T], evidence2: JsonReader[E], system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[Either[T, E]] = {
     httpRequestPureJsonBitfinexAccount(method, uri, requestBody, apiKeys).map {
-      case (statusCode, j) if statusCode.isSuccess() => Left(j.convertTo[T])
-      case (statusCode, j) => Right(j.convertTo[E])
-    } recover {
-      case e: Exception => throw new RuntimeException(s"$uri failed", e)
+      case (statusCode, j) =>
+        try {
+          if (statusCode.isSuccess()) Left(j.convertTo[T])
+          else Right(j.convertTo[E])
+        } catch {
+          case e: Exception => throw new RuntimeException(s"$uri failed", e)
+        }
     }
   }
+
 }
