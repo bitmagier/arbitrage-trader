@@ -77,7 +77,7 @@ case class BitfinexOrderUpdateJson(streamType: String, // "os" = order snapshot,
     Some(Instant.ofEpochMilli(createTime)),
     Some(toOrderStatus(orderStatus)),
     parseCumulativeFilled.map(_.abs).getOrElse(amount.abs),
-    priceAverage,
+    Some(priceAverage),
     Instant.ofEpochMilli(updateTime))
 }
 object BitfinexOrderUpdateJson {
@@ -163,7 +163,7 @@ case class BitfinexTradeExecutedJson(tradeId: Long,
     None,
     None,
     execAmount.abs,
-    orderPrice,
+    Some(orderPrice),
     Instant.ofEpochMilli(executionTime)
   )
 }

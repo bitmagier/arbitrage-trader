@@ -25,7 +25,7 @@ case class Order(externalId: String,
                  creationTime: Instant,
                  @volatile var orderStatus: OrderStatus,
                  @volatile var cumulativeFilledQuantity: Double,
-                 @volatile var priceAverage: Double,
+                 @volatile var priceAverage: Option[Double],
                  @volatile var lastUpdateTime: Instant) {
   def shortDesc: String = {
     val direction: String = side match {
@@ -34,7 +34,7 @@ case class Order(externalId: String,
     }
     s"[$side ${formatDecimal(cumulativeFilledQuantity, tradePair.baseAsset.defaultPrecision)} " +
       s"${tradePair.baseAsset.officialSymbol}$direction${tradePair.quoteAsset.officialSymbol} " +
-      s"${formatDecimal(cumulativeFilledQuantity * priceAverage, tradePair.quoteAsset.defaultPrecision)} " +
+      s"${priceAverage.map(p => formatDecimal(cumulativeFilledQuantity * p, tradePair.quoteAsset.defaultPrecision))} " +
       s"price ${formatDecimal(orderPrice, tradePair.quoteAsset.defaultPrecision)} $orderStatus]"
   }
 
@@ -45,14 +45,14 @@ case class Order(externalId: String,
 
   // absolute (positive) amount minus fees
   def calcOutgoingLiquidity(fee: Fee): LocalCryptoValue = side match {
-    case TradeSide.Buy => LocalCryptoValue(exchange, tradePair.quoteAsset, priceAverage * cumulativeFilledQuantity)
+    case TradeSide.Buy => LocalCryptoValue(exchange, tradePair.quoteAsset, priceAverage.map(_ * cumulativeFilledQuantity).getOrElse(0.0))
     case TradeSide.Sell => LocalCryptoValue(exchange, tradePair.baseAsset, cumulativeFilledQuantity * (1.0 + fee.average))
   }
 
   // absolute (positive) amount minus fees
   def calcIncomingLiquidity(fee: Fee): LocalCryptoValue = side match {
     case TradeSide.Buy => LocalCryptoValue(exchange, tradePair.baseAsset, cumulativeFilledQuantity * (1.0 - fee.average))
-    case TradeSide.Sell => LocalCryptoValue(exchange, tradePair.quoteAsset, priceAverage * cumulativeFilledQuantity)
+    case TradeSide.Sell => LocalCryptoValue(exchange, tradePair.quoteAsset, priceAverage.map(_ * cumulativeFilledQuantity).getOrElse(0.0))
   }
 
   def ref: TradeRoom.OrderRef = OrderRef(exchange, tradePair, externalId)
@@ -67,7 +67,7 @@ case class Order(externalId: String,
       log.warn(s"Ignoring $u, because updateTime is not after order's lastUpdateTime: $this")
     } else {
       if (u.orderStatus.isDefined) orderStatus = u.orderStatus.get
-      priceAverage = u.priceAverage
+      if (u.priceAverage.isDefined) priceAverage = u.priceAverage
       cumulativeFilledQuantity = u.cumulativeFilledQuantity
       lastUpdateTime = u.updateTime
     }
@@ -115,7 +115,7 @@ object OrderStatus {
  * Order update coming from exchange data flow
  */
 case class OrderUpdate(externalOrderId: String,
-                       exchange:String,
+                       exchange: String,
                        tradePair: TradePair,
                        side: TradeSide,
                        orderType: OrderType,
@@ -125,7 +125,7 @@ case class OrderUpdate(externalOrderId: String,
                        orderCreationTime: Option[Instant],
                        orderStatus: Option[OrderStatus],
                        cumulativeFilledQuantity: Double,
-                       priceAverage: Double,
+                       priceAverage: Option[Double],
                        updateTime: Instant) extends ExchangeAccountStreamData {
 
   if ((originalQuantity.nonEmpty && originalQuantity.get < 0.0) || cumulativeFilledQuantity < 0.0) throw new IncomingDataError("quantity negative")
@@ -174,6 +174,7 @@ case class OrderRequest(id: UUID,
       s"$orderDesc ${formatDecimal(amountBaseAsset * limit, tradePair.quoteAsset.defaultPrecision)} " +
       s"limit ${formatDecimal(limit, tradePair.quoteAsset.defaultPrecision)})"
   }
+
   def shortDesc: String = s"OrderRequest($exchange: $tradeDesc)"
 
 

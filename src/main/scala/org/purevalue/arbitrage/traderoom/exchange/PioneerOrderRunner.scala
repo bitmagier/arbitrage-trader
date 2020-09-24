@@ -79,8 +79,8 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
       if (order.orderStatus != OrderStatus.FILLED) failed("order status mismatch")
 
       if (diffMoreThan(order.cumulativeFilledQuantity, request.amountBaseAsset, 0.003)) failed("cumulative filled quantity mismatch") // in most cases the fee is substracted from the amount we get
-      if (request.tradeSide == TradeSide.Buy && (order.priceAverage > request.limit)) failed("price average above limit")
-      if (request.tradeSide == TradeSide.Sell && (order.priceAverage < request.limit)) failed("price average below limit")
+      if (request.tradeSide == TradeSide.Buy && (order.priceAverage.isDefined && order.priceAverage.get > request.limit)) failed("price average above limit")
+      if (request.tradeSide == TradeSide.Sell && (order.priceAverage.isDefined && order.priceAverage.get < request.limit)) failed("price average below limit")
 
       val incomingRequested = request.calcIncomingLiquidity
       val incomingReal = order.calcIncomingLiquidity(request.fee)

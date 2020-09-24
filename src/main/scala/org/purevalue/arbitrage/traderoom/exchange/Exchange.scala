@@ -213,7 +213,7 @@ case class Exchange(exchangeName: String,
     try {
       log.info(s"Initializing Exchange $exchangeName" +
         s"${if (tradeSimulationMode) " in TRADE-SIMULATION mode" else ""}" +
-        s"${if (exchangeConfig.doNotTouchTheseAssets.nonEmpty) s" DoNotTouch: ${exchangeConfig.doNotTouchTheseAssets.mkString(",")}" else ""}")
+        s"${if (exchangeConfig.doNotTouchTheseAssets.nonEmpty) s" DoNotTouch: ${exchangeConfig.doNotTouchTheseAssets.mkString(", ")}" else ""}")
 
       startPublicDataInquirer()
 

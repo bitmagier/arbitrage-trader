@@ -7,7 +7,7 @@ import akka.Done
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
-import akka.http.scaladsl.model.{HttpMethods, StatusCode, StatusCodes, Uri}
+import akka.http.scaladsl.model.{HttpMethods, StatusCodes, Uri}
 import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
@@ -17,7 +17,7 @@ import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.{Connec
 import org.purevalue.arbitrage.adapter.binance.BinanceOrder.{toOrderStatus, toOrderType, toTradeSide}
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.{BinanceBaseRestEndpoint, GetBinanceTradePairs}
 import org.purevalue.arbitrage.traderoom._
-import org.purevalue.arbitrage.util.HttpUtil.{httpRequestJsonBinanceAccount, httpRequestPureJsonBinanceAccount}
+import org.purevalue.arbitrage.util.HttpUtil.httpRequestJsonBinanceAccount
 import org.purevalue.arbitrage.util.Util.{formatDecimal, formatDecimalWithFixPrecision}
 import org.purevalue.arbitrage.util.{BadCalculationError, WrongAssumption}
 import org.purevalue.arbitrage.{adapter, _}
@@ -81,6 +81,7 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
     case o: NewOrderResponseFullJson    => o.toOrderUpdate(exchangeConfig.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair) // expecting, that we have all relevant trade pairs
     case o: OrderExecutionReportJson    => o.toOrderUpdate(exchangeConfig.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair)
     case o: OpenOrderJson               => o.toOrderUpdate(exchangeConfig.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair)
+    case o: CancelOrderResponseJson     => o.toOrderUpdate(exchangeConfig.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair)
     case x                              => log.debug(s"$x"); throw new NotImplementedError
     // @formatter:on
   }
@@ -188,29 +189,20 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
   // fire and forget - error logging in case of failure
   def cancelOrder(tradePair: TradePair, externalOrderId: Long): Future[CancelOrderResult] = {
     val symbol = binanceTradePairsByTradePair(tradePair).symbol
-    httpRequestPureJsonBinanceAccount(
+    httpRequestJsonBinanceAccount[CancelOrderResponseJson, JsValue](
       HttpMethods.DELETE,
       s"$BinanceBaseRestEndpoint/api/v3/order?symbol=$symbol&orderId=$externalOrderId",
       None,
       exchangeConfig.secrets,
       sign = true
     ).map {
-      case (statusCode: StatusCode, response: JsValue) if statusCode.isSuccess() =>
-        val r: JsObject = response.asJsObject
-        if (r.fields.contains("status")
-          && r.fields("status").convertTo[String] == "CANCELED"
-          && r.fields.contains("orderId") && r.fields("orderId").convertTo[Long] == externalOrderId) {
-          log.debug(s"Order successfully cancelled: $response")
-          CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = true, None)
-        } else {
-          log.warn(s"CancelOrder did not succeed: $r")
-          CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = false, Some(r.compactPrint))
-        }
-      case (statusCode: StatusCode, response: JsValue) => throw new RuntimeException(s"CancelOrder failed: $statusCode, $response")
-    } recover {
-      case e: Exception =>
-        log.error(s"CancelOrder failed", e)
-        CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = false, Some(e.getMessage))
+      case Left(response) =>
+        log.trace(s"Order successfully canceled: $response")
+        exchangeAccountDataManager ! IncomingData(exchangeDataMapping(Seq(response)))
+        CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = true, None)
+      case Right(errorResponse) =>
+        log.error(s"CancelOrder failed: $errorResponse")
+        CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = false, Some(errorResponse.compactPrint))
     }
   }
 
@@ -449,7 +441,7 @@ case class OpenOrderJson(symbol: String,
     Some(Instant.ofEpochMilli(time)),
     Some(toOrderStatus(status)),
     cummulativeQuoteQty.toDouble,
-    cummulativeQuoteQty.toDouble / executedQty.toDouble,
+    Some(cummulativeQuoteQty.toDouble / executedQty.toDouble),
     Instant.ofEpochMilli(updateTime))
 }
 
@@ -505,7 +497,7 @@ case class OrderExecutionReportJson(e: String, // Event type
     Some(Instant.ofEpochMilli(O)),
     Some(toOrderStatus(X)),
     z.toDouble,
-    Z.toDouble / z.toDouble,
+    Some(Z.toDouble / z.toDouble),
     Instant.ofEpochMilli(E))
 }
 
@@ -589,7 +581,7 @@ case class NewOrderResponseFullJson(symbol: String,
       Some(ts),
       Some(BinanceOrder.toOrderStatus(status)),
       fills.map(_.qty.toDouble).sum,
-      priceAverage(fills.map(e => (e.qty.toDouble, e.price.toDouble))), // Seq(qty, price)
+      Some(priceAverage(fills.map(e => (e.qty.toDouble, e.price.toDouble)))), // Seq(qty, price)
       ts)
   }
 
@@ -597,6 +589,35 @@ case class NewOrderResponseFullJson(symbol: String,
     NewOrderAck(exchange, symbolToTradePair(symbol), orderId.toString, ourOrderId)
 }
 
+case class CancelOrderResponseJson(symbol: String,
+                                   origClientOrderId: String,
+                                   orderId: Long,
+                                   orderListId: Long,
+                                   clientOrderId: String,
+                                   price: String,
+                                   origQty: String,
+                                   executedQty: String,
+                                   cummulativeQuoteQty: String,
+                                   status: String,
+                                   timeInForce: String,
+                                   `type`: String,
+                                   side: String) extends IncomingBinanceAccountJson {
+  def toOrderUpdate(exchange: String, symbolToTradePair: String => TradePair): OrderUpdate = OrderUpdate(
+    orderId.toString,
+    exchange,
+    symbolToTradePair(symbol),
+    BinanceOrder.toTradeSide(side),
+    BinanceOrder.toOrderType(`type`),
+    price.toDouble,
+    None,
+    Some(origQty.toDouble),
+    None,
+    Some(BinanceOrder.toOrderStatus(status)),
+    executedQty.toDouble,
+    None,
+    Instant.now // we don't have any better
+  )
+}
 
 object BinanceAccountDataJsonProtocoll extends DefaultJsonProtocol {
   implicit val listenKeyJson: RootJsonFormat[ListenKeyJson] = jsonFormat1(ListenKeyJson)
@@ -611,4 +632,5 @@ object BinanceAccountDataJsonProtocoll extends DefaultJsonProtocol {
   implicit val openOrderJson: RootJsonFormat[OpenOrderJson] = jsonFormat14(OpenOrderJson)
   implicit val newOrderResponseFillJson: RootJsonFormat[NewOrderResponseFillJson] = jsonFormat4(NewOrderResponseFillJson)
   implicit val newOrderResponseResultJson: RootJsonFormat[NewOrderResponseFullJson] = jsonFormat14(NewOrderResponseFullJson)
+  implicit val cancelOrderResponseJson: RootJsonFormat[CancelOrderResponseJson] = jsonFormat13(CancelOrderResponseJson)
 }
