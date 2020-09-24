@@ -512,7 +512,7 @@ case class OrderExecutionReportJson(e: String, // Event type
     },
     Some(q.toDouble),
     None,
-    toOrderStatus(X),
+    Some(toOrderStatus(X)),
     z.toDouble,
     Z.toDouble / z.toDouble,
     Instant.ofEpochMilli(E))

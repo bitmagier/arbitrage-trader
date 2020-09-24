@@ -24,10 +24,10 @@ case class Order(externalId: String,
                  quantity: Double, // (TODO check what AMOUNT & AMOUNT_ORIG means on bitfinex)
                  orderRejectReason: Option[String], // TODO remove attribute
                  creationTime: Instant,
-                 var orderStatus: OrderStatus,
-                 var cumulativeFilledQuantity: Double,
-                 var priceAverage: Double,
-                 var lastUpdateTime: Instant) extends ExchangeAccountStreamData {
+                 @volatile var orderStatus: OrderStatus,
+                 @volatile var cumulativeFilledQuantity: Double,
+                 @volatile var priceAverage: Double,
+                 @volatile var lastUpdateTime: Instant) extends ExchangeAccountStreamData {
   def shortDesc: String = {
     val direction: String = side match {
       case TradeSide.Buy => "<-"
@@ -67,7 +67,7 @@ case class Order(externalId: String,
     if (u.updateTime.isBefore(lastUpdateTime)) {
       log.warn(s"Ignoring $u, because updateTime is not after order's lastUpdateTime: $this")
     } else {
-      orderStatus = u.orderStatus
+      if (u.orderStatus.isDefined) orderStatus = u.orderStatus.get
       priceAverage = u.priceAverage
       cumulativeFilledQuantity = u.cumulativeFilledQuantity
       lastUpdateTime = u.updateTime
@@ -124,7 +124,7 @@ case class OrderUpdate(externalOrderId: String,
                        stopPrice: Option[Double],
                        originalQuantity: Option[Double],
                        orderCreationTime: Option[Instant],
-                       orderStatus: OrderStatus,
+                       orderStatus: Option[OrderStatus],
                        cumulativeFilledQuantity: Double,
                        priceAverage: Double,
                        updateTime: Instant) extends ExchangeAccountStreamData {
@@ -142,7 +142,7 @@ case class OrderUpdate(externalOrderId: String,
     originalQuantity.getOrElse(cumulativeFilledQuantity), // not perfect, but should be good enough in all cases
     None,
     orderCreationTime.getOrElse(Instant.now),
-    orderStatus,
+    orderStatus.getOrElse(OrderStatus.NEW), // TODO check if default NEW always works
     cumulativeFilledQuantity,
     priceAverage,
     updateTime

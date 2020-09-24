@@ -24,7 +24,7 @@ class TradeSimulator(exchangeConfig: ExchangeConfig,
 
   def cancelOrder(tradePair: TradePair, externalOrderId: String): Future[CancelOrderResult] = {
     Future.successful(
-      CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId, success = false, Some("[easy] always fail, because we assume the order is already filled"))
+      CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId, success = false, Some("(easy way) always fail, because we assume the order is already filled"))
     )
   }
 
@@ -32,10 +32,10 @@ class TradeSimulator(exchangeConfig: ExchangeConfig,
     Order(externalOrderId, o.exchange, o.tradePair, o.tradeSide, OrderType.LIMIT, o.limit, None, o.amountBaseAsset, None, creationTime, OrderStatus.NEW, 0.0, o.limit, creationTime)
 
   def limitOrderPartiallyFilled(externalOrderId: String, creationTime: Instant, o: OrderRequest): OrderUpdate =
-    OrderUpdate(externalOrderId, o.exchange, o.tradePair, o.tradeSide, OrderType.LIMIT, o.limit, None, Some(o.amountBaseAsset), Some(creationTime), OrderStatus.PARTIALLY_FILLED, o.amountBaseAsset / 2.0, o.limit, Instant.now)
+    OrderUpdate(externalOrderId, o.exchange, o.tradePair, o.tradeSide, OrderType.LIMIT, o.limit, None, Some(o.amountBaseAsset), Some(creationTime), Some(OrderStatus.PARTIALLY_FILLED), o.amountBaseAsset / 2.0, o.limit, Instant.now)
 
   def limitOrderFilled(externalOrderId: String, creationTime: Instant, o: OrderRequest): OrderUpdate =
-    OrderUpdate(externalOrderId, o.exchange, o.tradePair, o.tradeSide, OrderType.LIMIT, o.limit, None, Some(o.amountBaseAsset), Some(creationTime), OrderStatus.FILLED, o.amountBaseAsset, o.limit, Instant.now)
+    OrderUpdate(externalOrderId, o.exchange, o.tradePair, o.tradeSide, OrderType.LIMIT, o.limit, None, Some(o.amountBaseAsset), Some(creationTime), Some(OrderStatus.FILLED), o.amountBaseAsset, o.limit, Instant.now)
 
   def walletBalanceUpdate(delta: LocalCryptoValue): WalletBalanceUpdate = adapter.WalletBalanceUpdate(delta.asset, delta.amount)
 

@@ -58,11 +58,11 @@ case class BitfinexOrderUpdateJson(streamType: String, // "os" = order snapshot,
     s.substring(s.indexOf('(') + 1, s.indexOf(')'))
   }
 
-  def parseCumulativeFilled: Double = orderStatus match {
-    case status: String if status.startsWith("EXECUTED") => extractBetweenRoundBrackets(status).toDouble // EXECUTED @ PRICE(AMOUNT) e.g. "EXECUTED @ 107.6(-0.2)"
-    case status: String if status.startsWith("PARTIALLY FILLED") => extractBetweenRoundBrackets(status).toDouble // PARTIALLY FILLED @ PRICE(AMOUNT)
-    case status: String if status.startsWith("CANCELLED was: PARTIALLY FILLED") => extractBetweenRoundBrackets(status).toDouble // CANCELED was: PARTIALLY FILLED @ PRICE(AMOUNT)
-    case _ => 0.0
+  def parseCumulativeFilled: Option[Double] = orderStatus match {
+    case status: String if status.startsWith("EXECUTED") => Some(extractBetweenRoundBrackets(status).toDouble) // EXECUTED @ PRICE(AMOUNT) e.g. "EXECUTED @ 107.6(-0.2)"
+    case status: String if status.startsWith("PARTIALLY FILLED") => Some(extractBetweenRoundBrackets(status).toDouble) // PARTIALLY FILLED @ PRICE(AMOUNT)
+    case status: String if status.startsWith("CANCELLED was: PARTIALLY FILLED") => Some(extractBetweenRoundBrackets(status).toDouble) // CANCELED was: PARTIALLY FILLED @ PRICE(AMOUNT)
+    case _ => None
   }
 
   def toOrder(exchange: String, resolveTradePair: String => TradePair): Order = Order(
@@ -83,7 +83,7 @@ case class BitfinexOrderUpdateJson(streamType: String, // "os" = order snapshot,
     },
     Instant.ofEpochMilli(createTime),
     toOrderStatus(orderStatus),
-    amount.abs, //parseCumulativeFilled.abs,
+    parseCumulativeFilled.map(_.abs).getOrElse(amount.abs),
     priceAverage,
     Instant.ofEpochMilli(updateTime)
   )
@@ -98,8 +98,8 @@ case class BitfinexOrderUpdateJson(streamType: String, // "os" = order snapshot,
     if (priceAuxLimit != 0.0) Some(priceAuxLimit) else None, // TODO check what we get
     Some(amountOriginal.abs),
     Some(Instant.ofEpochMilli(createTime)),
-    toOrderStatus(orderStatus),
-    amount.abs, //parseCumulativeFilled.abs,
+    Some(toOrderStatus(orderStatus)),
+    parseCumulativeFilled.map(_.abs).getOrElse(amount.abs),
     priceAverage,
     Instant.ofEpochMilli(updateTime))
 
@@ -189,7 +189,7 @@ case class BitfinexTradeExecutedJson(tradeId: Long,
     None,
     None,
     None,
-    OrderStatus.FILLED,
+    None,
     execAmount.abs,
     orderPrice,
     Instant.ofEpochMilli(executionTime)

@@ -141,7 +141,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
         arrival.arrived()
 
       case Some(order) =>
-        if (log.isTraceEnabled) log.trace(s"[$exchangeName] pioneer order in progress")
+        if (log.isTraceEnabled) log.trace(s"[$exchangeName] pioneer order in progress: $order")
         validationMethod(o.request, order)
 
       case None => // nop
@@ -150,9 +150,9 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
 
   def watchNextPioneerOrder(): Unit = {
     if (pioneerOrder1.get().isDefined && !order1Validated.isArrived) watchOrderTillFinalStatus(pioneerOrder1.get().get, (r, o) => validateFilledPioneerOrder(r, o), order1Validated)
-    if (pioneerOrder2.get().isDefined && !order2Validated.isArrived) watchOrderTillFinalStatus(pioneerOrder2.get().get, (r, o) => validateFilledPioneerOrder(r, o), order2Validated)
-    if (pioneerOrder3.get().isDefined && !order3Validated.isArrived) watchOrderTillFinalStatus(pioneerOrder3.get().get, (r, o) => validateCanceledPioneerOrder(r, o), order3Validated)
-    if (log.isTraceEnabled) log.trace("nothing to watch")
+    else if (pioneerOrder2.get().isDefined && !order2Validated.isArrived) watchOrderTillFinalStatus(pioneerOrder2.get().get, (r, o) => validateFilledPioneerOrder(r, o), order2Validated)
+    else if (pioneerOrder3.get().isDefined && !order3Validated.isArrived) watchOrderTillFinalStatus(pioneerOrder3.get().get, (r, o) => validateCanceledPioneerOrder(r, o), order3Validated)
+    else if (log.isTraceEnabled) log.trace(s"nothing to watch: orders: [$pioneerOrder1, $pioneerOrder2, $pioneerOrder3] validated: [${order1Validated.isArrived}, ${order2Validated.isArrived}, ${order3Validated.isArrived}]")
   }
 
 
