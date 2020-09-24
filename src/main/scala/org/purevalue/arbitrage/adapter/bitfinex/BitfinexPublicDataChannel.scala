@@ -11,9 +11,9 @@ import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
 import org.purevalue.arbitrage.adapter.ExchangePublicDataManager.IncomingData
+import org.purevalue.arbitrage.adapter._
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataChannel.Connect
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.GetBitfinexTradePairs
-import org.purevalue.arbitrage.adapter._
 import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.util.Emoji
 import org.purevalue.arbitrage.{adapter, _}
@@ -47,7 +47,7 @@ case class RawTickerEntryJson(bid: Double, // Price of last highest bid
     adapter.Ticker(exchange, tradePair, bid, None, ask, None, Some(lastPrice))
 }
 object RawTickerEntryJson {
-  def apply(v: Array[Double]): RawTickerEntryJson =
+  def apply(v: Vector[Double]): RawTickerEntryJson =
     RawTickerEntryJson(v(0), v(1), v(2), v(3), v(4), v(5), v(6), v(7), v(8), v(9))
 }
 
@@ -130,9 +130,9 @@ object RawOrderBookUpdateJson {
 object WebSocketJsonProtocoll extends DefaultJsonProtocol {
   implicit val subscribeRequest: RootJsonFormat[SubscribeRequestJson] = jsonFormat3(SubscribeRequestJson)
 
-
   implicit object rawTickerFormat extends RootJsonFormat[RawTickerEntryJson] {
-    def read(value: JsValue): RawTickerEntryJson = RawTickerEntryJson(value.convertTo[Array[Double]])
+
+    def read(value: JsValue): RawTickerEntryJson = RawTickerEntryJson(value.convertTo[Vector[Double]])
 
     def write(v: RawTickerEntryJson): JsValue = throw new NotImplementedError
   }
@@ -191,19 +191,23 @@ class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
   val MaximumNumberOfChannelsPerConnection: Int = 25
 
   var bitfinexTradePairByApiSymbol: Map[String, BitfinexTradePair] = _
-  val tickerSymbolsByChannelId: collection.concurrent.Map[Int, String] = TrieMap()
-  val orderBookSymbolsByChannelId: collection.concurrent.Map[Int, String] = TrieMap()
+  val tickerSymbolsByConnectionIdAndChannelId: collection.concurrent.Map[(Int, Int), String] = TrieMap() // Map[(connectionID,channelId), tickerSymbol]
+  val orderBookSymbolsByConnectionIdAndChannelId: collection.concurrent.Map[(Int, Int), String] = TrieMap() // Map[(connectionID,channelId), orderBookSymbol]
 
   var wsList: List[(Future[WebSocketUpgradeResponse], Promise[Option[Message]])] = List()
   var connectedList: List[Future[Done.type]] = List()
 
   import WebSocketJsonProtocoll._
 
-  def exchangeDataMapping(in: Seq[IncomingPublicBitfinexJson]): Seq[ExchangePublicStreamData] = in.map {
+  def tickerChannelTradePair(connectionId: Int, channelId: Int): TradePair = bitfinexTradePairByApiSymbol(tickerSymbolsByConnectionIdAndChannelId((connectionId, channelId))).toTradePair
+
+  def orderBookChannelTradepair(connectionId: Int, channelId: Int): TradePair = bitfinexTradePairByApiSymbol(orderBookSymbolsByConnectionIdAndChannelId((connectionId, channelId))).toTradePair
+
+  def exchangeDataMapping(connectionId: Int, in: Seq[IncomingPublicBitfinexJson]): Seq[ExchangePublicStreamData] = in.map {
     // @formatter:off
-    case t: RawTickerJson            => t.value.toTicker(exchangeConfig.exchangeName, bitfinexTradePairByApiSymbol(tickerSymbolsByChannelId(t.channelId)).toTradePair)
-    case b: RawOrderBookSnapshotJson => b.toOrderBook(exchangeConfig.exchangeName, bitfinexTradePairByApiSymbol(orderBookSymbolsByChannelId(b.channelId)).toTradePair)
-    case b: RawOrderBookUpdateJson   => b.toOrderBookUpdate(exchangeConfig.exchangeName, bitfinexTradePairByApiSymbol(orderBookSymbolsByChannelId(b.channelId)).toTradePair)
+    case t: RawTickerJson            => t.value.toTicker(exchangeConfig.exchangeName, tickerChannelTradePair(connectionId, t.channelId))
+    case b: RawOrderBookSnapshotJson => b.toOrderBook(exchangeConfig.exchangeName, orderBookChannelTradepair(connectionId, b.channelId))
+    case b: RawOrderBookUpdateJson   => b.toOrderBookUpdate(exchangeConfig.exchangeName, orderBookChannelTradepair(connectionId, b.channelId))
     case RawHeartbeat()              => Heartbeat(Instant.now)
     case other                       => log.error(s"unhandled object: $other"); throw new NotImplementedError()
     // @formatter:on
@@ -214,7 +218,7 @@ class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
   // 20060 : Entering in Maintenance mode. Please pause any activity and resume after receiving the info message 20061 (it should take 120 seconds at most).
   // 20061 : Maintenance ended. You can resume normal activity. It is advised to unsubscribe/subscribe again all channels.
 
-  def handleEvent(event: String, j: JsObject): Unit = event match {
+  def handleEvent(connectionId: Int, event: String, j: JsObject): Unit = event match {
     case "subscribed" =>
       if (log.isTraceEnabled) log.trace(s"received SubscribeResponse message: $j")
       val channel = j.fields("channel").convertTo[String]
@@ -223,10 +227,10 @@ class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
       channel match {
         case "ticker" =>
           val symbol = j.fields("symbol").convertTo[String]
-          tickerSymbolsByChannelId.put(channelId, symbol)
+          tickerSymbolsByConnectionIdAndChannelId.put((connectionId, channelId), symbol)
         case "book" =>
           val symbol = j.fields("symbol").convertTo[String]
-          orderBookSymbolsByChannelId.put(channelId, symbol)
+          orderBookSymbolsByConnectionIdAndChannelId.put((connectionId, channelId), symbol)
 
         case _ => log.error(s"unknown channel subscribe response for: $channel")
       }
@@ -252,22 +256,22 @@ class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
   val ChannelTypeTicker: Int = 1
   val ChannelTypeOrderBook: Int = 2
 
-  def channelTypeWithWait(channelId: Int): Option[Int] = {
+  def channelTypeWithWait(connectionId: Int, channelId: Int): Option[Int] = {
     val deadline = Instant.now.plusSeconds(1)
     do {
-      if (tickerSymbolsByChannelId.contains(channelId)) return Some(ChannelTypeTicker)
-      if (orderBookSymbolsByChannelId.contains(channelId)) return Some(ChannelTypeOrderBook)
+      if (tickerSymbolsByConnectionIdAndChannelId.contains((connectionId, channelId))) return Some(ChannelTypeTicker)
+      if (orderBookSymbolsByConnectionIdAndChannelId.contains((connectionId, channelId))) return Some(ChannelTypeOrderBook)
       Thread.sleep(50) // we wait a little and try again, because in the beginning of the stream some data arrives before the channel subscribe response message is processed
     } while (Instant.now.isBefore(deadline))
     None
   }
 
-  def decodeDataArray(dataChannelMessage: String): IncomingPublicBitfinexJson = {
+  def decodeDataArray(connectionId: Int, dataChannelMessage: String): IncomingPublicBitfinexJson = {
     val (channelId, payload) = new BitfinexDataArrayMessageParser(dataChannelMessage).decode
     if (payload.startsWith(""""hb"""")) { // [ CHANNEL_ID, "hb" ]
       RawHeartbeat()
     } else if (payload.startsWith("[")) {
-      channelTypeWithWait(channelId) match {
+      channelTypeWithWait(connectionId, channelId) match {
         case Some(ChannelTypeTicker) => JsonParser(dataChannelMessage).convertTo[RawTickerJson] // e.g. [241965,[225.34,791.79880999,225.9,634.57980242,2.66,0.012,225.24,122.90567532,232.83,222.58]]
         case Some(ChannelTypeOrderBook) => payload match {
           case payload: String if payload.startsWith("[[") => JsonParser(dataChannelMessage).convertTo[RawOrderBookSnapshotJson] // [channelId, [[price, count, amount],...]]
@@ -284,19 +288,19 @@ class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
     }
   }
 
-  def decodeMessage(message: Message): Future[Seq[IncomingPublicBitfinexJson]] = message match {
+  def decodeMessage(connectionId: Int, message: Message): Future[Seq[IncomingPublicBitfinexJson]] = message match {
     case msg: TextMessage =>
       msg.toStrict(globalConfig.httpTimeout)
         .map(_.getStrictText)
         .map {
           case s: String if s.startsWith("{") => decodeJsonObject(s)
-          case s: String if s.startsWith("[") => decodeDataArray(s)
+          case s: String if s.startsWith("[") => decodeDataArray(connectionId, s)
           case x =>
             log.error(s"unidentified response: $x")
             Nil
         } map {
         case JsonMessage(j) if j.fields.contains("event") =>
-          handleEvent(j.fields("event").convertTo[String], j)
+          handleEvent(connectionId, j.fields("event").convertTo[String], j)
           Nil
         case j: JsonMessage =>
           log.warn(s"Unhandled JsonMessage received: $j")
@@ -319,11 +323,11 @@ class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
 
   // flow to us
   // emits a list of Messages and then keep the connection open
-  def wsFlow(subscribeMessages: List[SubscribeRequestJson]): Flow[Message, Message, Promise[Option[Message]]] = {
+  def wsFlow(connectionId: Int, subscribeMessages: List[SubscribeRequestJson]): Flow[Message, Message, Promise[Option[Message]]] = {
     Flow.fromSinkAndSourceCoupledMat(
       Sink.foreach[Message](message =>
-        decodeMessage(message)
-          .map(exchangeDataMapping)
+        decodeMessage(connectionId, message)
+          .map(e => exchangeDataMapping(connectionId, e))
           .map(IncomingData)
           .pipeTo(exchangePublicDataManager)
       ),
@@ -348,10 +352,12 @@ class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
   private def subscribeOrderBookMessage(tradePair: BitfinexTradePair): SubscribeRequestJson = SubscribeRequestJson(channel = "book", symbol = tradePair.apiSymbol)
 
   def connect(): Unit = {
+    var connectionId: Int = 0
     bitfinexTradePairByApiSymbol.values.sliding(MaximumNumberOfChannelsPerConnection).foreach { partition =>
       if (log.isTraceEnabled) log.trace(s"""starting a WebSocket stream partition for Tickers ${partition.mkString(",")}""")
       val subscribeMessages: List[SubscribeRequestJson] = partition.map(e => subscribeTickerMessage(e)).toList
-      val ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow(subscribeMessages))
+      connectionId += 1
+      val ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow(connectionId, subscribeMessages))
       ws._2.future.onComplete(e => log.info(s"connection closed: ${e.get}"))
       wsList = ws :: wsList
       connectedList = createConnected(ws._1) :: connectedList
@@ -360,7 +366,8 @@ class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
     bitfinexTradePairByApiSymbol.values.sliding(MaximumNumberOfChannelsPerConnection).foreach { partition =>
       if (log.isTraceEnabled) log.trace(s"""starting a WebSocket stream partition for OrderBooks ${partition.mkString(",")}""")
       val subscribeMessages: List[SubscribeRequestJson] = partition.map(e => subscribeOrderBookMessage(e)).toList
-      val ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow(subscribeMessages))
+      connectionId += 1
+      val ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow(connectionId, subscribeMessages))
       ws._2.future.onComplete(e => log.info(s"connection closed: ${e.get}"))
       wsList = ws :: wsList
       connectedList = createConnected(ws._1) :: connectedList

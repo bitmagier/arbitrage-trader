@@ -3,10 +3,10 @@ package org.purevalue.arbitrage.traderoom
 import java.time.{Instant, LocalDateTime}
 import java.util.UUID
 
-import akka.actor.ActorRef
 import org.purevalue.arbitrage.adapter.{ExchangeAccountStreamData, Fee}
 import org.purevalue.arbitrage.traderoom.Asset.USDT
 import org.purevalue.arbitrage.traderoom.TradeRoom.{OrderRef, TickersReadonly}
+import org.purevalue.arbitrage.util.IncomingDataError
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.slf4j.LoggerFactory
 
@@ -36,7 +36,7 @@ case class Order(externalId: String,
     s"[$side ${formatDecimal(cumulativeFilledQuantity, tradePair.baseAsset.defaultPrecision)} " +
       s"${tradePair.baseAsset.officialSymbol}$direction${tradePair.quoteAsset.officialSymbol} " +
       s"${formatDecimal(cumulativeFilledQuantity * priceAverage, tradePair.quoteAsset.defaultPrecision)} " +
-      s"price ${formatDecimal(orderPrice, tradePair.quoteAsset.defaultPrecision)}]"
+      s"price ${formatDecimal(orderPrice, tradePair.quoteAsset.defaultPrecision)} $orderStatus]"
   }
 
 
@@ -61,7 +61,9 @@ case class Order(externalId: String,
   private val log = LoggerFactory.getLogger(classOf[Order])
 
   def applyUpdate(u: OrderUpdate): Unit = {
-    if (u.exchange != exchange || u.externalOrderId != externalId || u.tradePair != tradePair || u.side != side || u.orderType != orderType) throw new IllegalArgumentException()
+    if (u.exchange != exchange || u.externalOrderId != externalId || u.tradePair != tradePair || u.side != side || u.orderType != orderType)
+      throw new IllegalArgumentException(s"$u does not match \n$this")
+
     if (u.updateTime.isBefore(lastUpdateTime)) {
       log.warn(s"Ignoring $u, because updateTime is not after order's lastUpdateTime: $this")
     } else {
@@ -126,6 +128,9 @@ case class OrderUpdate(externalOrderId: String,
                        cumulativeFilledQuantity: Double,
                        priceAverage: Double,
                        updateTime: Instant) extends ExchangeAccountStreamData {
+
+  if ((originalQuantity.nonEmpty && originalQuantity.get < 0.0) || cumulativeFilledQuantity < 0.0) throw new IncomingDataError("quantity negative")
+
   def toOrder: Order = Order(
     externalOrderId,
     exchange,
@@ -241,7 +246,6 @@ object OrderBill {
 /** High level order request bundle, covering 2 or more trader orders */
 case class OrderRequestBundle(id: UUID,
                               tradePattern: String,
-                              trader: ActorRef,
                               creationTime: LocalDateTime,
                               orderRequests: List[OrderRequest],
                               bill: OrderBill) {

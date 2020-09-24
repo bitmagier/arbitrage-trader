@@ -50,7 +50,7 @@ class BinancePublicDataChannel(globalConfig: GlobalConfig,
 
   private var binanceTradePairBySymbol: Map[String, BinanceTradePair] = _
 
-  import WebSocketJsonProtocoll._
+  import WebSocketJsonProtocol._
 
   val resolveTradePairSymbol: String => TradePair =
     symbol => binanceTradePairBySymbol(symbol).toTradePair
@@ -62,7 +62,7 @@ class BinancePublicDataChannel(globalConfig: GlobalConfig,
       outstandingStreamSubscribeResponses = outstandingStreamSubscribeResponses - channelId
     }
     if (outstandingStreamSubscribeResponses.isEmpty) {
-      onSreamsRunning()
+      onStreamsRunning()
     }
   }
 
@@ -178,7 +178,7 @@ class BinancePublicDataChannel(globalConfig: GlobalConfig,
       .toMap
   }
 
-  def onSreamsRunning(): Unit = {
+  def onStreamsRunning(): Unit = {
     deliverBookTickerState()
   }
 
@@ -225,7 +225,7 @@ case class RawBookTickerStreamJson(u: Long, // order book updateId
     adapter.Ticker(exchange, resolveSymbol(s), b.toDouble, Some(B.toDouble), a.toDouble, Some(A.toDouble), None)
 }
 
-object WebSocketJsonProtocoll extends DefaultJsonProtocol {
+object WebSocketJsonProtocol extends DefaultJsonProtocol {
   implicit val subscribeMsg: RootJsonFormat[StreamSubscribeRequestJson] = jsonFormat3(StreamSubscribeRequestJson)
   implicit val rawBookTickerRest: RootJsonFormat[RawBookTickerRestJson] = jsonFormat5(RawBookTickerRestJson)
   implicit val rawBookTickerStream: RootJsonFormat[RawBookTickerStreamJson] = jsonFormat6(RawBookTickerStreamJson)

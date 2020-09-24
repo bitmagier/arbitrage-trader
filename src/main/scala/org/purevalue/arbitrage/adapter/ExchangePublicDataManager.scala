@@ -4,8 +4,8 @@ import java.time.Instant
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, Props, Status}
 import org.purevalue.arbitrage.adapter.ExchangePublicDataManager._
+import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.ExchangePublicDataChannelInit
-import org.purevalue.arbitrage.traderoom.{TradePair, TradeSide}
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig, Main, TradeRoomConfig}
 import org.slf4j.LoggerFactory
@@ -24,7 +24,7 @@ case class Ticker(exchange: String,
                   lowestAskQuantity: Option[Double],
                   lastPrice: Option[Double]) extends ExchangePublicStreamData {
   def priceEstimate: Double = lastPrice match {
-    case Some(last) => last
+    case Some(last) => (highestBidPrice + lowestAskPrice + last) / 3
     case None => (highestBidPrice + lowestAskPrice) / 2
   }
 }
@@ -62,40 +62,6 @@ case class OrderBook(exchange: String,
   def highestBid: Bid = bids(bids.keySet.max)
 
   def lowestAsk: Ask = asks(asks.keySet.min)
-
-  def determineOptimalOrderLimit(tradeSide: TradeSide, amountBaseAssetEstimate: Double): Option[Double] = {
-    //                                            Iterator (price , amount)  : limit
-    def fillAmount(amount: Double, stackIterator: Iterator[(Double, Double)]): Option[Double] = {
-      var filled: Double = 0.0
-      var price: Option[Double] = None
-      while (filled < amount && stackIterator.hasNext) {
-        stackIterator.next() match {
-          case (_price,_amount) =>
-            price = Some(_price)
-            filled = filled + _amount
-        }
-      }
-      if (filled >= amount) price
-      else {
-        log.warn(s"order book not filled enough to take our order amount:($amount) $tradeSide $this")
-        None
-      }
-    }
-
-    def highestLevelToFulfillAmount(bids: Map[Double, Bid], amount: Double): Option[Double] = {
-      val stackIterator = bids.values.map(e => (e.price, e.quantity)).toSeq.sortBy(_._1).reverseIterator // (price,quantity) sorted with highest price first
-      fillAmount(amount, stackIterator)
-    }
-    def lowestLevelToFulfillAmount(asks: Map[Double, Ask], amount: Double): Option[Double] = {
-      val stackIterator = asks.values.map(e => (e.price, e.quantity)).toSeq.sortBy(_._1).iterator // (price,quantity) sorted with lowest price first
-      fillAmount(amount, stackIterator)
-    }
-
-    tradeSide match {
-      case TradeSide.Sell => highestLevelToFulfillAmount(bids, amountBaseAssetEstimate)
-      case TradeSide.Buy => lowestLevelToFulfillAmount(asks, amountBaseAssetEstimate)
-    }
-  }
 }
 
 case class OrderBookUpdate(exchange:String,

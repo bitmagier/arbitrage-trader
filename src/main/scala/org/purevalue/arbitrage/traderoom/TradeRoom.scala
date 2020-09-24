@@ -16,7 +16,7 @@ import org.purevalue.arbitrage.trader.FooTrader
 import org.purevalue.arbitrage.traderoom.Asset.USDT
 import org.purevalue.arbitrage.traderoom.OrderSetPlacer.NewOrderSet
 import org.purevalue.arbitrage.traderoom.TradeRoom._
-import org.purevalue.arbitrage.traderoom.exchange.Exchange.OrderUpdateTrigger
+import org.purevalue.arbitrage.traderoom.exchange.Exchange.{OrderUpdateTrigger, RemoveOrphanOrder}
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityRequest}
 import org.purevalue.arbitrage.util.Emoji
 import org.purevalue.arbitrage.util.Util.formatDecimal
@@ -36,7 +36,8 @@ object TradeRoom {
    * An always-uptodate view on the TradeRoom Pre-Trade Data.
    * Modification of the content is NOT permitted by users of the TRadeContext (even if technically possible)!
    */
-  case class TradeContext(tickers: collection.Map[String, collection.Map[TradePair, Ticker]],
+  case class TradeContext(tradePairs: Map[String, Set[TradePair]],
+                          tickers: collection.Map[String, collection.Map[TradePair, Ticker]],
                           referenceTickerExchange: String,
                           orderBooks: collection.Map[String, collection.Map[TradePair, OrderBook]],
                           balances: collection.Map[String, Wallet],
@@ -83,12 +84,13 @@ object TradeRoom {
 
   def props(config: Config,
             exchanges: Map[String, ActorRef],
+            tradePairs: Map[String, Set[TradePair]],
             tickers: Map[String, collection.Map[TradePair, Ticker]],
             orderBooks: Map[String, collection.Map[TradePair, OrderBook]],
             dataAge: Map[String, PublicDataTimestamps],
             wallets: Map[String, Wallet],
             activeOrders: Map[String, ConcurrentMap[OrderRef, Order]]): Props =
-    Props(new TradeRoom(config, exchanges, tickers, orderBooks, dataAge, wallets, activeOrders))
+    Props(new TradeRoom(config, exchanges, tradePairs, tickers, orderBooks, dataAge, wallets, activeOrders))
 }
 
 /**
@@ -99,6 +101,7 @@ object TradeRoom {
  */
 class TradeRoom(val config: Config,
                 val exchanges: Map[String, ActorRef],
+                val tradePairs: Map[String, Set[TradePair]],
                 val tickers: Map[String, collection.Map[TradePair, Ticker]], // a map per exchange
                 val orderBooks: Map[String, collection.Map[TradePair, OrderBook]],
                 val dataAge: Map[String, PublicDataTimestamps],
@@ -125,6 +128,7 @@ class TradeRoom(val config: Config,
   private val doNotTouchAssets: Map[String, Seq[Asset]] = config.tradeRoom.exchanges.values.map(e => (e.exchangeName, e.doNotTouchTheseAssets)).toMap
   private val tradeContext: TradeContext =
     TradeContext(
+      tradePairs,
       tickers,
       config.tradeRoom.referenceTickerExchange,
       orderBooks,
@@ -449,8 +453,7 @@ class TradeRoom(val config: Config,
         orphanOrders
           .filter(_._2.orderStatus.isFinal)
           .foreach { o =>
-            log.info(s"cleanup finished orphan order ${o._2.shortDesc}")
-            activeOrders(o._1.exchange).remove(o._1)
+            exchanges(o._1.exchange) ! RemoveOrphanOrder(o._1)
           }
       }
     }

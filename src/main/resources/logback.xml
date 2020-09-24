@@ -5,15 +5,13 @@
 
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <layout class="ch.qos.logback.classic.PatternLayout">
-            <!-- <Pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</Pattern> -->
             <Pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level %logger{36} - %msg%n</Pattern>
         </layout>
     </appender>
 
     <logger name="org.purevalue.arbitrage" level="INFO"/>
-
-    <logger name="org.purevalue.arbitrage.traderoom.exchange.PioneerOrderRunner" level="DEBUG"/>
-    <logger name="org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel" level="TRACE"/>
+    <logger name="org.purevalue.arbitrage.adapter.bitfinex.BitfinexAccountDataChannel" level="TRACE"/>
+    <logger name="org.purevalue.arbitrage.traderoom.exchange.PioneerOrderRunner" level="TRACE"/>
 
     <root level="INFO">
         <appender-ref ref="STDOUT"/>

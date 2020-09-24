@@ -28,6 +28,7 @@ object Exchange {
   case class GetTradePairs()
   case class TradePairs(value: Set[TradePair])
   case class RemoveTradePair(tradePair: TradePair)
+  case class RemoveOrphanOrder(ref:OrderRef)
   case class StartStreaming()
   case class StreamingStarted(exchange: String)
   case class WalletUpdateTrigger()
@@ -229,7 +230,7 @@ case class Exchange(exchangeName: String,
     case ExchangePublicDataManager.Initialized()  => publicDataManagerInitialized.arrived()
     case ExchangeAccountDataManager.Initialized() => accountDataManagerInitialized.arrived()
     case PioneerOrderSucceeded()                  => pioneerOrderSucceeded.arrived()
-    case PioneerOrderFailed(e)                    => log.error("Pioneer order failed", e)
+    case PioneerOrderFailed(e)                    => log.error(s"[$exchangeName] Pioneer order failed", e)
     case j: JoinTradeRoom                         => joinTradeRoom(j)
     case WalletUpdateTrigger()                    => if (!walletInitialized.isArrived) walletInitialized.arrived()
     case t: OrderUpdateTrigger                    => if (tradeRoom.isDefined) tradeRoom.get.forward(t)
@@ -281,6 +282,12 @@ case class Exchange(exchangeName: String,
     self ! PoisonPill
   }
 
+  def removeOrphanOrder(ref: OrderRef): Unit = {
+    val order = accountData.activeOrders.remove(ref)
+    accountData.activeOrders.remove(ref)
+    log.info(s"[$exchangeName] cleaned up orphan finished order $order")
+  }
+
   // @formatter:off
   def initializedModeReceive: Receive = {
     case c: CancelOrder            => onCancelOrder(c)
@@ -289,6 +296,7 @@ case class Exchange(exchangeName: String,
     case c: LiquidityLockClearance => liquidityManager.forward(c)
     case _: WalletUpdateTrigger    => // currently unused
     case t: OrderUpdateTrigger     => tradeRoom.get.forward(t)
+    case RemoveOrphanOrder(ref)    => removeOrphanOrder(ref)
     case HouseKeeping()            => houseKeeping()
     case s: TradeRoom.Stop         => onStop(s)
     case Status.Failure(cause)     => log.error("received failure", cause)

@@ -19,7 +19,7 @@ object ExchangeAccountDataManager {
   case class IncomingData(data: Seq[ExchangeAccountStreamData])
   case class Initialized()
   case class CancelOrder(tradePair: TradePair, externalOrderId: String)
-  case class CancelOrderResult(exchange: String, tradePair: TradePair, externalOrderId: String, success: Boolean)
+  case class CancelOrderResult(exchange: String, tradePair: TradePair, externalOrderId: String, success: Boolean, text:Option[String])
   case class NewLimitOrder(orderRequest: OrderRequest) // response is NewOrderAck
   case class NewOrderAck(exchange: String, tradePair: TradePair, externalOrderId: String, orderId: UUID) {
     def toOrderRef: OrderRef = OrderRef(exchange, tradePair, externalOrderId)
@@ -56,7 +56,6 @@ class ExchangeAccountDataManager(globalConfig: GlobalConfig,
 
       case w: WalletBalanceUpdate =>
         accountData.wallet.balance = accountData.wallet.balance.map {
-          // TODO validate if an update of amountAvailable is the right thing, that is meant by this message (I'm 95% sure so far)
           case (a: Asset, b: Balance) if a == w.asset =>
             (a, Balance(b.asset, b.amountAvailable + w.amountDelta, b.amountLocked))
           case (a: Asset, b: Balance) => (a, b)
@@ -96,7 +95,7 @@ class ExchangeAccountDataManager(globalConfig: GlobalConfig,
     case i: Initialized =>
       exchange.forward(i) // is expected to come from exchange specific account-data-channel when initialized
       context.become(initializedModeReceive)
-
+    case IncomingData(data)     => data.foreach(applyData)
     case Failure(e) => log.error("received failure", e)
   }
 

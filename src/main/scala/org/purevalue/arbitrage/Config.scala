@@ -101,7 +101,7 @@ case class LiquidityManagerConfig(liquidityLockMaxLifetime: Duration, // when a 
                                   providingLiquidityExtra: Double, // we provide a little bit more than it was demanded, to potentially fulfill order requests with a slightly different amount
                                   maxAcceptableExchangeRateLossVersusReferenceTicker: Double, // defines the maximum acceptable relative loss (local exchange rate versus reference ticker) for liquidity conversion transactions
                                   minimumKeepReserveLiquidityPerAssetInUSDT: Double, // when we convert to a reserve liquidity or re-balance our reserve liquidity, each of them should reach at least that value (measured in USDT)
-                                  txLimitBelowOrAboveBestBidOrAsk: Double, // defines the rate we set our limit above the highest ask or below the lowest bid (use 0.0 for using exactly the bid or ask price).
+                                  txLimitAwayFromEdgeLimit: Double,  // [limit-reality-adjustmnt-rate] defines the rate we set our limit above the highest ask or below the lowest bid (use 0.0 for matching exactly the bid or ask price).
                                   rebalanceTxGranularityInUSDT: Double, // that's the granularity (and also minimum amount) we transfer for reserve asset re-balance orders)}
                                   dustLevelInUsdt: Double) // we don't try to convert back assets with a value below that one back to a reserve asset
 object LiquidityManagerConfig {
@@ -111,7 +111,7 @@ object LiquidityManagerConfig {
     c.getDouble("providing-liquidity-extra"),
     c.getDouble("max-acceptable-exchange-rate-loss-versus-reference-ticker"),
     c.getDouble("minimum-keep-reserve-liquidity-per-asset-in-usdt"),
-    c.getDouble("tx-limit-below-or-above-best-bid-or-ask"),
+    c.getDouble("tx-limit-away-from-edge-limit"),
     c.getDouble("rebalance-tx-granularity-in-usdt"),
     c.getDouble("dust-level-in-usdt")
   )

@@ -33,7 +33,7 @@ class LiquidityManagerSpec
       providingLiquidityExtra = 0.02,
       maxAcceptableExchangeRateLossVersusReferenceTicker = 0.01,
       minimumKeepReserveLiquidityPerAssetInUSDT = 50.0,
-      txLimitBelowOrAboveBestBidOrAsk = 0.00005,
+      txLimitAwayFromEdgeLimit = 0.00005,
       rebalanceTxGranularityInUSDT = 20.0,
       dustLevelInUsdt = 0.05)
 

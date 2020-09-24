@@ -27,6 +27,7 @@ class TradeRoomInitializer(val config: Config,
   private val log = LoggerFactory.getLogger(classOf[TradeRoomInitializer])
 
   // @formatter:off
+  var tradePairs:   Map[String, Set[TradePair]] = Map()
   var exchanges:    Map[String, ActorRef] = Map()
   var tickers:      Map[String, ConcurrentMap[TradePair, Ticker]] = Map()
   var orderBooks:   Map[String, ConcurrentMap[TradePair, OrderBook]] = Map()
@@ -38,6 +39,12 @@ class TradeRoomInitializer(val config: Config,
   def queryTradePairs(exchange: String): Set[TradePair] = {
     implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
     Await.result((exchanges(exchange) ? GetTradePairs()).mapTo[Set[TradePair]], timeout.duration.plus(500.millis))
+  }
+
+  def queryFinalTradePairs(): Unit = {
+    for (exchange <- exchanges.keys) {
+      tradePairs = tradePairs + (exchange -> queryTradePairs(exchange))
+    }
   }
 
   def dropTradePairSync(exchangeName: String, tp: TradePair): Unit = {
@@ -66,7 +73,7 @@ class TradeRoomInitializer(val config: Config,
    * For liquidity conversion and some calculations we need USDT pairs in ReferenceTicker, so for now we don't drop x:USDT pairs (until ReferenceTicker is decoupled from exchange TradePairs)
    * Also - if no x:USDT pair is available, we don't drop the x:BTC pair (like for IOTA on Bitfinex we only have IOTA:BTC & IOTA:ETH)
    */
-  def dropUnusableTradepairsSync(): Unit = {
+  def dropUnusableTradePairsSync(): Unit = {
     var eTradePairs: Set[Tuple2[String, TradePair]] = Set()
     for (exchange: String <- exchanges.keys) {
       val tp: Set[TradePair] = queryTradePairs(exchange)
@@ -142,7 +149,7 @@ class TradeRoomInitializer(val config: Config,
 
   def onInitialized(): Unit = {
     log.debug("TradeRoom initialized")
-    val tradeRoom = context.actorOf(TradeRoom.props(config, exchanges, tickers, orderBooks, dataAge, wallets, activeOrders), "TradeRoom")
+    val tradeRoom = context.actorOf(TradeRoom.props(config, exchanges, tradePairs, tickers, orderBooks, dataAge, wallets, activeOrders), "TradeRoom")
     parent ! InitializedTradeRoom(tradeRoom)
     context.watch(tradeRoom)
   }
@@ -154,15 +161,15 @@ class TradeRoomInitializer(val config: Config,
     }
   }
 
-
   override def preStart(): Unit = {
     startExchanges() // parallel
-    dropUnusableTradepairsSync() // all exchanges, sync
+    dropUnusableTradePairsSync() // all exchanges, sync
+    queryFinalTradePairs()
     sendStartStreaming()
   }
 
   override def receive: Receive = {
     case Exchange.StreamingStarted(exchange) => onStreamingStarted(exchange)
-    case msg                                 => log.error(s"unexpected message: $msg")
+    case msg => log.error(s"unexpected message: $msg")
   }
 }

@@ -212,7 +212,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
    * A result rate > 0 indicates a positive rating - being better than the reference ticker, a negative rate the opposite
    */
   def localExchangeRateRating(tradePair: TradePair, tradeSide: TradeSide, amountBaseAsset:Double): Double = {
-    val localLimit = determineGoodLimit(tradePair, tradeSide, amountBaseAsset)
+    val localLimit: Double = determineRealisticLimit(tradePair, tradeSide, amountBaseAsset)
     val referenceTickerPrice: Option[Double] = referenceTicker().get(tradePair).map(_.priceEstimate)
     referenceTickerPrice match {
       case Some(referencePrice) => tradeSide match {
@@ -224,24 +224,9 @@ class LiquidityManager(val config: LiquidityManagerConfig,
   }
 
 
-  def determineLimitBasedOnTicker(ticker: Ticker, tradeSide: TradeSide): Double = {
-    tradeSide match {
-      case TradeSide.Sell => ticker.highestBidPrice * (1.0 - config.txLimitBelowOrAboveBestBidOrAsk)
-      case TradeSide.Buy => ticker.lowestAskPrice * (1.0 + config.txLimitBelowOrAboveBestBidOrAsk)
-    }
-  }
-
-
-
-  def determineGoodLimit(tradePair: TradePair, tradeSide: TradeSide, amountBaseAssetEstimate: Double): Double = {
-    var limit: Option[Double] = None
-    if (tpData.orderBook.nonEmpty) {
-      limit = tpData.orderBook(tradePair).determineOptimalOrderLimit(tradeSide, amountBaseAssetEstimate * 1.5) // add 50% extra to increase our chance to fill the order
-    }
-    limit match {
-      case Some(limit) => limit
-      case None => determineLimitBasedOnTicker(tpData.ticker(tradePair), tradeSide)
-    }
+  def determineRealisticLimit(tradePair: TradePair, tradeSide: TradeSide, amountBaseAsset: Double): Double = {
+    new OrderLimitChooser(tpData.orderBook.get(tradePair), tpData.ticker(tradePair))
+      .determineRealisticOrderLimit(tradeSide, amountBaseAsset, config.txLimitAwayFromEdgeLimit)
   }
 
   /**
@@ -266,7 +251,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
       if (log.isTraceEnabled) log.trace(s"Found best usable reserve asset: ${bestReserveAssets.get._1}, rating=${bestReserveAssets.get._2} for providing $demand")
       val orderAmount: Double = demand.amount * (1.0 + config.providingLiquidityExtra)
       val tradePair = TradePair(demand.asset, bestReserveAssets.get._1)
-      val limit = determineGoodLimit(tradePair, TradeSide.Buy, orderAmount)
+      val limit = determineRealisticLimit(tradePair, TradeSide.Buy, orderAmount)
       val orderRequest = OrderRequest(UUID.randomUUID(), None, exchangeConfig.exchangeName, tradePair, TradeSide.Buy, exchangeConfig.fee, orderAmount, limit)
 
       tradeRoom ! LiquidityTransformationOrder(orderRequest)
@@ -361,7 +346,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
     }
 
     val tradePair = TradePair(coins.asset, destinationReserveAsset.get)
-    val limit: Double = determineGoodLimit(tradePair, TradeSide.Sell, coins.amount)
+    val limit: Double = determineRealisticLimit(tradePair, TradeSide.Sell, coins.amount)
     val orderRequest = OrderRequest(
       UUID.randomUUID(),
       None,
@@ -514,7 +499,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
               val tradeSide = TradeSide.Buy
               val baseAssetBucketValue: Double = CryptoValue(USDT, config.rebalanceTxGranularityInUSDT).convertTo(tradePair.baseAsset, tpData.ticker).amount
               val orderAmountBaseAsset = bucketsToTransfer * baseAssetBucketValue
-              val limit = determineGoodLimit(tradePair, tradeSide, orderAmountBaseAsset)
+              val limit = determineRealisticLimit(tradePair, tradeSide, orderAmountBaseAsset)
               OrderRequest(UUID.randomUUID(), None, exchangeConfig.exchangeName, tradePair, tradeSide, exchangeConfig.fee, orderAmountBaseAsset, limit)
 
             case tp if tpData.ticker.contains(tp.reverse) =>
@@ -522,7 +507,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
               val tradeSide = TradeSide.Sell
               val quoteAssetBucketValue: Double = CryptoValue(USDT, config.rebalanceTxGranularityInUSDT).convertTo(tradePair.quoteAsset, tpData.ticker).amount
               val amountBaseAssetEstimate = bucketsToTransfer * quoteAssetBucketValue / tpData.ticker(tradePair).priceEstimate
-              val limit = determineGoodLimit(tradePair, tradeSide, amountBaseAssetEstimate)
+              val limit = determineRealisticLimit(tradePair, tradeSide, amountBaseAssetEstimate)
               val orderAmountBaseAsset = bucketsToTransfer * quoteAssetBucketValue / limit
               OrderRequest(UUID.randomUUID(), None, exchangeConfig.exchangeName, tradePair, tradeSide, exchangeConfig.fee, orderAmountBaseAsset, limit)
 

@@ -24,7 +24,7 @@ class TradeSimulator(exchangeConfig: ExchangeConfig,
 
   def cancelOrder(tradePair: TradePair, externalOrderId: String): Future[CancelOrderResult] = {
     Future.successful(
-      CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId, success = false) // [easy] always fail, because we assume the order is already filled
+      CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId, success = false, Some("[easy] always fail, because we assume the order is already filled"))
     )
   }
 

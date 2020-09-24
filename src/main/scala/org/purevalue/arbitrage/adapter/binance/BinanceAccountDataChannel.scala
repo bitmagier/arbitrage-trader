@@ -17,9 +17,9 @@ import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.{Connec
 import org.purevalue.arbitrage.adapter.binance.BinanceOrder.{toOrderStatus, toOrderType, toTradeSide}
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.{BinanceBaseRestEndpoint, GetBinanceTradePairs}
 import org.purevalue.arbitrage.traderoom._
-import org.purevalue.arbitrage.util.BadCalculationError
 import org.purevalue.arbitrage.util.HttpUtil.{httpRequestJsonBinanceAccount, httpRequestPureJsonBinanceAccount}
 import org.purevalue.arbitrage.util.Util.{formatDecimal, formatDecimalWithFixPrecision}
+import org.purevalue.arbitrage.util.{BadCalculationError, WrongAssumption}
 import org.purevalue.arbitrage.{adapter, _}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
@@ -196,18 +196,19 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
     ).map {
       response: JsValue =>
         val r: JsObject = response.asJsObject
-        if (r.fields.contains("status") && r.fields("status").convertTo[String] == "CANCELED"
+        if (r.fields.contains("status")
+          && r.fields("status").convertTo[String] == "CANCELED"
           && r.fields.contains("orderId") && r.fields("orderId").convertTo[Long] == externalOrderId) {
           log.debug(s"Order successfully cancelled: $response")
-          CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = true)
+          CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = true, None)
         } else {
           log.warn(s"CancelOrder did not succeed: $r")
-          CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = false)
+          CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = false, Some(r.compactPrint))
         }
     } recover {
       case e: Exception =>
         log.error(s"CancelOrder failed", e)
-        CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = false)
+        CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = false, Some(e.getMessage))
     }
   }
 
@@ -236,6 +237,8 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
       else tickSize * (price / tickSize).round
     }
 
+    if (o.amountBaseAsset < 0.0) throw new WrongAssumption("our order amount is always positive")
+
     val binanceTradePair = binanceTradePairsByTradePair(o.tradePair)
     val price: Double = alignToTickSize(o.limit, binanceTradePair.tickSize)
     val quantity: Double = alignToStepSize(o.amountBaseAsset, binanceTradePair.lotSize.stepSize) match {
@@ -260,7 +263,7 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
         s"&quantity=${formatDecimalWithFixPrecision(quantity, binanceTradePair.baseAssetPrecision)}" +
         s"&price=${formatDecimalWithFixPrecision(price, binanceTradePair.quotePrecision)}" +
         s"&newClientOrderId=${o.id.toString}" +
-        s"&newOrderRespType=RESULT"
+        s"&newOrderRespType=FULL"
 
     val response: Future[NewOrderResponseFullJson] = httpRequestJsonBinanceAccount[NewOrderResponseFullJson](
       HttpMethods.POST,
@@ -365,8 +368,8 @@ case class AccountInformationJson(makerCommission: Int,
                                   canDeposit: Boolean,
                                   updateTime: Long,
                                   accountType: String,
-                                  balances: List[BalanceJson],
-                                  permissions: List[String]) extends IncomingBinanceAccountJson {
+                                  balances: Vector[BalanceJson],
+                                  permissions: Vector[String]) extends IncomingBinanceAccountJson {
   def toWalletAssetUpdate: WalletAssetUpdate = WalletAssetUpdate(
     balances
       .flatMap(_.toBalance)
@@ -389,14 +392,14 @@ case class OutboundAccountInfoJson(e: String, // event type
                                    W: Boolean, // can withdraw?
                                    D: Boolean, // can deposit?
                                    u: Long, // time of last account update
-                                   B: List[OutboundAccountInfoBalanceJson], // balances array
-                                   P: List[String] // account permissions (e.g. SPOT)
+                                   B: Vector[OutboundAccountInfoBalanceJson], // balances array
+                                   P: Vector[String] // account permissions (e.g. SPOT)
                                   ) extends IncomingBinanceAccountJson
 
 case class OutboundAccountPositionJson(e: String, // event type
                                        E: Long, // event time
                                        u: Long, // time of last account update
-                                       B: List[OutboundAccountInfoBalanceJson] // balances
+                                       B: Vector[OutboundAccountInfoBalanceJson] // balances
                                       ) extends IncomingBinanceAccountJson {
   def toWalletAssetUpdate: WalletAssetUpdate = WalletAssetUpdate(
     B.flatMap(_.toBalance)
@@ -584,7 +587,7 @@ object BinanceOrder {
 }
 
 
-case class NewOrderResponseFillJson(price:String, qty:String, comission:String, comissionAsset:String)
+case class NewOrderResponseFillJson(price:String, qty:String, commission:String, commissionAsset:String)
 case class NewOrderResponseFullJson(symbol: String,
                                     orderId: Long,
                                     orderListId: Long,
@@ -598,7 +601,7 @@ case class NewOrderResponseFullJson(symbol: String,
                                     timeInForce: String,
                                     `type`: String,
                                     side: String,
-                                    fills: Array[NewOrderResponseFillJson]
+                                    fills: Vector[NewOrderResponseFillJson]
                                    ) extends IncomingBinanceAccountJson {
 
   def priceAverage(qtyPricePairs: Seq[Tuple2[Double,Double]]): Double =
@@ -618,7 +621,7 @@ case class NewOrderResponseFullJson(symbol: String,
       None,
       ts,
       BinanceOrder.toOrderStatus(status),
-      cummulativeQuoteQty.toDouble,
+      fills.map(_.qty.toDouble).sum,
       priceAverage(fills.map(e => (e.qty.toDouble, e.price.toDouble))), // Seq(qty, price)
       ts)
   }
