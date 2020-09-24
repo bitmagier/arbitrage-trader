@@ -235,6 +235,7 @@ case class Exchange(exchangeName: String,
     case WalletUpdateTrigger()                    => if (!walletInitialized.isArrived) walletInitialized.arrived()
     case t: OrderUpdateTrigger                    => if (tradeRoom.isDefined) tradeRoom.get.forward(t)
     case o: NewLimitOrder                         => onNewLimitOrder(o) // needed only for pioneer order runner
+    case c: CancelOrder                           => onCancelOrder(c) // needed only for pioneer order runner
     case Done                                     => // ignoring Done from cascaded JoinTradeRoom
     case SwitchToInitializedMode()                => switchToInitializedMode()
     case s: TradeRoom.Stop                        => onStop(s)
@@ -290,8 +291,8 @@ case class Exchange(exchangeName: String,
 
   // @formatter:off
   def initializedModeReceive: Receive = {
-    case c: CancelOrder            => onCancelOrder(c)
     case o: NewLimitOrder          => onNewLimitOrder(o)
+    case c: CancelOrder            => onCancelOrder(c)
     case l: LiquidityRequest       => liquidityManager.forward(l)
     case c: LiquidityLockClearance => liquidityManager.forward(c)
     case _: WalletUpdateTrigger    => // currently unused

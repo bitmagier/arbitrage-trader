@@ -522,7 +522,7 @@ class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
     } recover {
       case e: Exception =>
         log.error(s"NewLimitOrder failed. Request body:\n$requestBody", e)
-        throw e;
+        throw e
     }
   }
 
@@ -542,6 +542,10 @@ class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
       case r: CancelOrderResponseJson =>
         log.debug(s"Cancel order failed. Response: $r")
         CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = false, Some(r.text))
+    } recover {
+      case e:Exception =>
+        log.error(s"CancelOrder failed", e)
+        throw e
     }
   }
 
