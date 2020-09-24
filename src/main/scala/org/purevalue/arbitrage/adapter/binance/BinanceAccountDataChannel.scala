@@ -187,7 +187,7 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
 
   // fire and forget - error logging in case of failure
   def cancelOrder(tradePair: TradePair, externalOrderId: Long): Future[CancelOrderResult] = {
-    val symbol = binanceTradePairsByTradePair(tradePair)
+    val symbol = binanceTradePairsByTradePair(tradePair).symbol
     httpRequestPureJsonBinanceAccount(
       HttpMethods.DELETE,
       s"$BinanceBaseRestEndpoint/api/v3/order?symbol=$symbol&orderId=$externalOrderId",
@@ -216,19 +216,6 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
 
 
   def newLimitOrder(o: OrderRequest): Future[NewOrderAck] = {
-
-    def toNewOrderAck(j: JsValue): NewOrderAck = {
-      j.asJsObject match {
-        case j: JsObject if j.fields.contains("orderId") && j.fields.contains("clientOrderId") =>
-          NewOrderAck(
-            exchangeConfig.exchangeName,
-            o.tradePair,
-            j.fields("orderId").convertTo[Long].toString,
-            UUID.fromString(j.fields("clientOrderId").convertTo[String])
-          )
-        case _ => throw new RuntimeException(s"NewLimitOrder: unidentified response: $j")
-      }
-    }
 
     def alignToStepSize(amount: Double, stepSize: Double): Double = {
       stepSize * (amount / stepSize).ceil
