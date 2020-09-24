@@ -74,6 +74,7 @@ case class TradeRoomConfig(tradeSimulation: Boolean,
                            liquidityManager: LiquidityManagerConfig,
                            exchanges: Map[String, ExchangeConfig]) {
   if (pioneerOrderValueUSDT > 100.0) throw new IllegalArgumentException("pioneer order value is unnecessary big")
+  if (!exchanges.contains(referenceTickerExchange)) throw new IllegalArgumentException("reference-ticker-exchange not in list of active exchanges")
 }
 object TradeRoomConfig {
   def apply(c: com.typesafe.config.Config): TradeRoomConfig = TradeRoomConfig(

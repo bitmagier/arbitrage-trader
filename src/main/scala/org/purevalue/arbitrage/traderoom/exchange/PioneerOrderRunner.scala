@@ -207,7 +207,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
   def submitBuyToCancelPioneerOrder(): Unit = {
     val amountBitcoin = CryptoValue(USDT, tradeRoomConfig.pioneerOrderValueUSDT).convertTo(Bitcoin, publicData.ticker).amount
     pioneerOrder3.set(Some(submitPioneerOrder(TradePair(Bitcoin, USDT), TradeSide.Buy, amountBitcoin, unrealisticGoodlimit = true)))
-    Thread.sleep(200)
+    Thread.sleep(500)
     cancelPioneerOrder(pioneerOrder3.get().get)
   }
 

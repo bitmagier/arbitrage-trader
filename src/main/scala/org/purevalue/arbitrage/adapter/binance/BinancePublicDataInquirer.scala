@@ -84,8 +84,11 @@ class BinancePublicDataInquirer(globalConfig: GlobalConfig,
 
     try {
       exchangeInfo = Await.result(
-        httpGetJson[RawBinanceExchangeInformationJson](s"$BinanceBaseRestEndpoint/api/v3/exchangeInfo"),
-        globalConfig.httpTimeout.plus(500.millis))
+        httpGetJson[RawBinanceExchangeInformationJson, JsValue](s"$BinanceBaseRestEndpoint/api/v3/exchangeInfo"),
+        globalConfig.httpTimeout.plus(500.millis)) match {
+        case Left(response) => response
+        case Right(errorResponse) => throw new RuntimeException(s"query exchange info failed: $errorResponse")
+      }
 
       binanceTradePairs = exchangeInfo.symbols
         .filter(s => s.status == "TRADING" && s.orderTypes.contains("LIMIT") /* && s.orderTypes.contains("LIMIT_MAKER")*/ && s.permissions.contains("SPOT"))

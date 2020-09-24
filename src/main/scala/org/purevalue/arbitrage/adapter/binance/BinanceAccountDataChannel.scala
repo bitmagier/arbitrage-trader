@@ -7,7 +7,7 @@ import akka.Done
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
-import akka.http.scaladsl.model.{HttpMethods, StatusCodes, Uri}
+import akka.http.scaladsl.model.{HttpMethods, StatusCode, StatusCodes, Uri}
 import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
@@ -163,24 +163,25 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
 
   def deliverAccountInformation(): Unit = {
     import BinanceAccountDataJsonProtocoll._
-    httpRequestJsonBinanceAccount[AccountInformationJson](HttpMethods.GET, s"$BinanceBaseRestEndpoint/api/v3/account", None, exchangeConfig.secrets, sign = true)
-      .map(e => Seq(e))
-      .map(exchangeDataMapping)
-      .map(IncomingData)
-      .pipeTo(exchangeAccountDataManager)
+    httpRequestJsonBinanceAccount[AccountInformationJson, JsValue](HttpMethods.GET, s"$BinanceBaseRestEndpoint/api/v3/account", None, exchangeConfig.secrets, sign = true)
+      .map {
+        case Left(response) => IncomingData(exchangeDataMapping(Seq(response)))
+        case Right(errorResponse) => throw new RuntimeException(s"deliverAccountInformation failed: $errorResponse")
+      }.pipeTo(exchangeAccountDataManager)
   }
 
   def deliverOpenOrders(): Unit = {
     import BinanceAccountDataJsonProtocoll._
-    httpRequestJsonBinanceAccount[List[OpenOrderJson]](HttpMethods.GET, s"$BinanceBaseRestEndpoint/api/v3/openOrders", None, exchangeConfig.secrets, sign = true)
-      .map(exchangeDataMapping)
-      .map(IncomingData)
-      .pipeTo(exchangeAccountDataManager)
+    httpRequestJsonBinanceAccount[List[OpenOrderJson], JsValue](HttpMethods.GET, s"$BinanceBaseRestEndpoint/api/v3/openOrders", None, exchangeConfig.secrets, sign = true)
+      .map {
+        case Left(response) => IncomingData(exchangeDataMapping(response))
+        case Right(errorResponse) => throw new RuntimeException(s"deliverOpenOrders failed: $errorResponse")
+      }.pipeTo(exchangeAccountDataManager)
   }
 
   def pingUserStream(): Unit = {
     import DefaultJsonProtocol._
-    httpRequestJsonBinanceAccount[String](HttpMethods.PUT,
+    httpRequestJsonBinanceAccount[String, String](HttpMethods.PUT,
       s"$BinanceBaseRestEndpoint/api/v3/userDataStream?listenKey=$listenKey", None, exchangeConfig.secrets, sign = false)
   }
 
@@ -194,7 +195,7 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
       exchangeConfig.secrets,
       sign = true
     ).map {
-      response: JsValue =>
+      case (statusCode: StatusCode, response: JsValue) if statusCode.isSuccess() =>
         val r: JsObject = response.asJsObject
         if (r.fields.contains("status")
           && r.fields("status").convertTo[String] == "CANCELED"
@@ -205,6 +206,7 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
           log.warn(s"CancelOrder did not succeed: $r")
           CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = false, Some(r.compactPrint))
         }
+      case (statusCode: StatusCode, response: JsValue) => throw new RuntimeException(s"CancelOrder failed: $statusCode, $response")
     } recover {
       case e: Exception =>
         log.error(s"CancelOrder failed", e)
@@ -265,17 +267,21 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
         s"&newClientOrderId=${o.id.toString}" +
         s"&newOrderRespType=FULL"
 
-    val response: Future[NewOrderResponseFullJson] = httpRequestJsonBinanceAccount[NewOrderResponseFullJson](
+    val response: Future[NewOrderResponseFullJson] = httpRequestJsonBinanceAccount[NewOrderResponseFullJson, JsValue](
       HttpMethods.POST,
       s"$BinanceBaseRestEndpoint/api/v3/order",
       Some(requestBody),
       exchangeConfig.secrets,
       sign = true
-    ).recover {
+    ).map {
+      case Left(response) => response
+      case Right(errorResponse) => throw new RuntimeException(s"newLimitOrder failed: $errorResponse")
+    }.recover {
       case e: Exception =>
         log.error(s"NewLimitOrder failed. Request body:\n$requestBody\nbinanceTradePair:$binanceTradePair\n", e)
         throw e
     }
+
     response.map(e => IncomingData(exchangeDataMapping(Seq(e)))).pipeTo(exchangeAccountDataManager)
     response.map(_.toNewOrderAck(exchangeConfig.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair, o.id))
   }
@@ -283,8 +289,11 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
   def createListenKey(): Unit = {
     import BinanceAccountDataJsonProtocoll._
     listenKey = Await.result(
-      httpRequestJsonBinanceAccount[ListenKeyJson](HttpMethods.POST, s"$BinanceBaseRestEndpoint/api/v3/userDataStream", None, exchangeConfig.secrets, sign = false),
-      globalConfig.httpTimeout.plus(500.millis)).listenKey
+      httpRequestJsonBinanceAccount[ListenKeyJson, JsValue](HttpMethods.POST, s"$BinanceBaseRestEndpoint/api/v3/userDataStream", None, exchangeConfig.secrets, sign = false),
+      globalConfig.httpTimeout.plus(500.millis)) match {
+      case Left(response) => response.listenKey
+      case Right(errorResponse) => throw new RuntimeException(s"createListenKey failed: $errorResponse")
+    }
     log.trace(s"got listenKey: $listenKey")
   }
 
@@ -559,7 +568,7 @@ object BinanceOrder {
 }
 
 
-case class NewOrderResponseFillJson(price:String, qty:String, commission:String, commissionAsset:String)
+case class NewOrderResponseFillJson(price: String, qty: String, commission: String, commissionAsset: String)
 case class NewOrderResponseFullJson(symbol: String,
                                     orderId: Long,
                                     orderListId: Long,
@@ -576,7 +585,7 @@ case class NewOrderResponseFullJson(symbol: String,
                                     fills: Vector[NewOrderResponseFillJson]
                                    ) extends IncomingBinanceAccountJson {
 
-  def priceAverage(qtyPricePairs: Seq[Tuple2[Double,Double]]): Double =
+  def priceAverage(qtyPricePairs: Seq[Tuple2[Double, Double]]): Double =
     qtyPricePairs.map(e => e._1 * e._2).sum / qtyPricePairs.map(_._1).sum
 
   def toOrderUpdate(exchangeName: String, resolveTradePair: String => TradePair): OrderUpdate = {

@@ -20,7 +20,7 @@ import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.util.{HttpUtil, WrongAssumption}
 import org.slf4j.LoggerFactory
-import spray.json.{DefaultJsonProtocol, JsObject, JsString, JsValue, JsonParser, RootJsonFormat, enrichAny}
+import spray.json.{DefaultJsonProtocol, JsNumber, JsObject, JsString, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
 import scala.collection.Seq
 import scala.concurrent.duration.DurationInt
@@ -150,7 +150,7 @@ case class BitfinexTradeExecutedJson(tradeId: Long,
                                      clientOrderId: Long
                                     ) extends IncomingBitfinexAccountJson {
   // fee: Option[Double], // "tu" only
-// feeCurrency: Option[String] // "tu" only
+  // feeCurrency: Option[String] // "tu" only
   def toOrderUpdate(exchange: String, resolveTradePair: String => TradePair): OrderUpdate = OrderUpdate(
     orderId.toString,
     exchange,
@@ -503,49 +503,48 @@ class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
       )
     }
 
-    if (o.amountBaseAsset < 0.0) throw new WrongAssumption("our order amount is always positive")
+    if (o.amountBaseAsset < 0.0) throw new WrongAssumption("our order amount is not positive")
 
     val requestBody = toSubmitLimitOrderJson(o, tp => bitfinexTradePairByTradePair(tp).apiSymbol, exchangeConfig.refCode).toJson.compactPrint
-    HttpUtil.httpRequestJsonBitfinexAccount[SubmitOrderResponseJson](
+    HttpUtil.httpRequestJsonBitfinexAccount[SubmitOrderResponseJson, JsValue](
       HttpMethods.POST,
       s"$BaseRestEndpoint/v2/auth/w/order/submit",
       Some(requestBody),
       exchangeConfig.secrets
     ).map {
-      case r: SubmitOrderResponseJson if r.status == "SUCCESS" && r.orders.length == 1 =>
-        if (log.isTraceEnabled) log.trace(s"$r")
-        val order = r.orders.head
-        exchangeAccountDataManager ! IncomingData(exchangeDataMapping(Seq(order)))
-        NewOrderAck(exchangeConfig.exchangeName, o.tradePair, order.orderId.toString, o.id)
-      case r: SubmitOrderResponseJson =>
-        throw new RuntimeException(s"Something went wrong while placing a limit-order. Response is: $r")
-    } recover {
-      case e: Exception =>
-        log.error(s"NewLimitOrder failed. Request body:\n$requestBody", e)
-        throw e
+      case Left(response) => response match {
+        case r: SubmitOrderResponseJson if r.status == "SUCCESS" && r.orders.length == 1 =>
+          if (log.isTraceEnabled) log.trace(s"$r")
+          val order = r.orders.head
+          exchangeAccountDataManager ! IncomingData(exchangeDataMapping(Seq(order)))
+          NewOrderAck(exchangeConfig.exchangeName, o.tradePair, order.orderId.toString, o.id)
+        case r: SubmitOrderResponseJson =>
+          throw new RuntimeException(s"Something went wrong while placing a limit-order. Response is: $r")
+      }
+      case Right(errorResponse) => throw new RuntimeException(s"NewLimitOrder failed: $errorResponse")
     }
   }
 
   def cancelOrder(tradePair: TradePair, externalOrderId: Long): Future[CancelOrderResult] = {
     import BitfinexAccountDataJsonProtocoll._
 
-    HttpUtil.httpRequestJsonBitfinexAccount[CancelOrderResponseJson](
+    val requestBody = JsObject("id" -> JsNumber(externalOrderId))
+    HttpUtil.httpRequestJsonBitfinexAccount[CancelOrderResponseJson, JsValue](
       HttpMethods.POST,
       s"$BaseRestEndpoint/v2/auth/w/order/cancel",
-      Some(s"{id:$externalOrderId}"),
+      Some(requestBody.compactPrint),
       exchangeConfig.secrets
     ).map {
-      case r: CancelOrderResponseJson if r.status == "SUCCESS" =>
-        if (log.isTraceEnabled) log.trace(s"$r")
-        exchangeAccountDataManager ! IncomingData(exchangeDataMapping(Seq(r.order)))
-        CancelOrderResult(exchangeConfig.exchangeName, tradePair, r.order.orderId.toString, success = true, Option(r.text))
-      case r: CancelOrderResponseJson =>
-        log.debug(s"Cancel order failed. Response: $r")
-        CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = false, Some(r.text))
-    } recover {
-      case e:Exception =>
-        log.error(s"CancelOrder failed", e)
-        throw e
+      case Left(response) => response match {
+        case r: CancelOrderResponseJson if r.status == "SUCCESS" =>
+          if (log.isTraceEnabled) log.trace(s"$r")
+          exchangeAccountDataManager ! IncomingData(exchangeDataMapping(Seq(r.order)))
+          CancelOrderResult(exchangeConfig.exchangeName, tradePair, r.order.orderId.toString, success = true, Option(r.text))
+        case r: CancelOrderResponseJson =>
+          log.debug(s"Cancel order failed. Response: $r")
+          CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = false, Some(r.text))
+      }
+      case Right(errorResponse) => throw new RuntimeException(s"CancelOrder id=$externalOrderId failed: $errorResponse")
     }
   }
 

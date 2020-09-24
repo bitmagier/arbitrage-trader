@@ -17,7 +17,7 @@ import org.purevalue.arbitrage.util.Emoji
 import org.purevalue.arbitrage.util.HttpUtil.httpGetJson
 import org.purevalue.arbitrage.{adapter, _}
 import org.slf4j.LoggerFactory
-import spray.json.{DefaultJsonProtocol, JsObject, JsonParser, RootJsonFormat, enrichAny}
+import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor, Future, Promise}
@@ -161,10 +161,11 @@ class BinancePublicDataChannel(globalConfig: GlobalConfig,
   //ws._2.success(None)
 
   def deliverBookTickerState(): Unit = {
-    httpGetJson[Seq[RawBookTickerRestJson]](s"$BaseRestEndpoint/api/v3/ticker/bookTicker") onComplete {
-      case Success(tickers) =>
+    httpGetJson[Seq[RawBookTickerRestJson], JsValue](s"$BaseRestEndpoint/api/v3/ticker/bookTicker") onComplete {
+      case Success(Left(tickers)) =>
         val rawTicker = tickers.filter(e => binanceTradePairBySymbol.keySet.contains(e.symbol))
         publicDataManager ! IncomingData(exchangeDataMapping(rawTicker))
+      case Success(Right(errorResponse)) => log.error(s"deliverBookTickerState failed: $errorResponse")
       case Failure(e) => log.error("Query/Transform RawBookTickerRestJson failed", e)
     }
   }
