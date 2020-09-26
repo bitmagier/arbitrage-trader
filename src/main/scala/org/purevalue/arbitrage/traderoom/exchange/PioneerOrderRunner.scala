@@ -141,7 +141,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
     accountData.activeOrders.get(o.ref) match {
       case Some(order) if order.orderStatus.isFinal =>
         validationMethod(o.request, order)
-        log.info(s"[$exchangeName]  pioneer order ${o.request.shortDesc} succeeded")
+        log.info(s"[$exchangeName]  pioneer order ${o.request.shortDesc} successfully validated")
         arrival.arrived()
         accountData.activeOrders.remove(o.ref)
 
@@ -174,19 +174,26 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
 
 
   def watchNextEvent(): Unit = {
-    if (pioneerOrder1.get().isDefined && !order1Validated.isArrived)
-      watchOrder(pioneerOrder1.get().get, (r, o) => validateFilledPioneerOrder(r, o), order1Validated)
-    else if (pioneerOrder1.get().isDefined && order1Validated.isArrived && !order1BalanceUpdateArrived.isArrived && afterPioneerOrder1BalanceExpected.get().isDefined)
-      watchBalance(afterPioneerOrder1BalanceExpected.get().get, order1BalanceUpdateArrived)
-    else if (pioneerOrder2.get().isDefined && !order2Validated.isArrived)
-      watchOrder(pioneerOrder2.get().get, (r, o) => validateFilledPioneerOrder(r, o), order2Validated)
-    else if (pioneerOrder1.get().isDefined && order2Validated.isArrived && !order2BalanceUpdateArrived.isArrived && afterPioneerOrder2BalanceExpected.get().isDefined)
-      watchBalance(afterPioneerOrder2BalanceExpected.get().get, order2BalanceUpdateArrived)
-    else if (pioneerOrder3.get().isDefined && !order3Validated.isArrived)
-      watchOrder(pioneerOrder3.get().get, (r, o) => validateCanceledPioneerOrder(r, o), order3Validated)
-    else
-      log.trace(s"nothing to watch: orders: [\n${pioneerOrder1.get()}, \n${pioneerOrder2.get()}, \n${pioneerOrder3.get()}] \n" +
-        s"validated: [${order1Validated.isArrived}, ${order2Validated.isArrived}, ${order3Validated.isArrived}]")
+    try {
+      if (pioneerOrder1.get().isDefined && !order1Validated.isArrived)
+        watchOrder(pioneerOrder1.get().get, (r, o) => validateFilledPioneerOrder(r, o), order1Validated)
+      else if (pioneerOrder1.get().isDefined && order1Validated.isArrived && !order1BalanceUpdateArrived.isArrived && afterPioneerOrder1BalanceExpected.get().isDefined)
+        watchBalance(afterPioneerOrder1BalanceExpected.get().get, order1BalanceUpdateArrived)
+      else if (pioneerOrder2.get().isDefined && !order2Validated.isArrived)
+        watchOrder(pioneerOrder2.get().get, (r, o) => validateFilledPioneerOrder(r, o), order2Validated)
+      else if (pioneerOrder1.get().isDefined && order2Validated.isArrived && !order2BalanceUpdateArrived.isArrived && afterPioneerOrder2BalanceExpected.get().isDefined)
+        watchBalance(afterPioneerOrder2BalanceExpected.get().get, order2BalanceUpdateArrived)
+      else if (pioneerOrder3.get().isDefined && !order3Validated.isArrived)
+        watchOrder(pioneerOrder3.get().get, (r, o) => validateCanceledPioneerOrder(r, o), order3Validated)
+      else
+        log.trace(s"nothing to watch: orders: [\n${pioneerOrder1.get()}, \n${pioneerOrder2.get()}, \n${pioneerOrder3.get()}] \n" +
+          s"validated: [${order1Validated.isArrived}, ${order2Validated.isArrived}, ${order3Validated.isArrived}]")
+    } catch {
+      case e:Throwable =>
+        log.error(s"[$exchangeName] PioneerOrderRUnner failed", e)
+        exchange ! PioneerOrderFailed(e)
+        stop()
+    }
   }
 
 
