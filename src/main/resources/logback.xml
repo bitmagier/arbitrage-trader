@@ -10,8 +10,6 @@
     </appender>
 
     <logger name="org.purevalue.arbitrage" level="INFO"/>
-    <logger name="org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel" level="TRACE"/>
-<!--    <logger name="org.purevalue.arbitrage.traderoom.exchange.PioneerOrderRunner" level="TRACE"/>-->
 
     <root level="INFO">
         <appender-ref ref="STDOUT"/>

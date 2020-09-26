@@ -12,7 +12,7 @@ import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager._
-import org.purevalue.arbitrage.adapter.bitfinex.BitfinexAccountDataChannel.Connect
+import org.purevalue.arbitrage.adapter.bitfinex.BitfinexAccountDataChannel.{Connect, OnStreamsRunning}
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexOrderUpdateJson.{toOrderStatus, toOrderType}
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.{GetBitfinexAssets, GetBitfinexTradePairs}
 import org.purevalue.arbitrage.adapter.{Balance, ExchangeAccountStreamData, WalletAssetUpdate}
@@ -276,6 +276,7 @@ object BitfinexAccountDataJsonProtocoll extends DefaultJsonProtocol {
 
 object BitfinexAccountDataChannel {
   private case class Connect()
+  private case class OnStreamsRunning()
 
   def props(globalConfig: GlobalConfig,
             exchangeConfig: ExchangeConfig,
@@ -325,7 +326,7 @@ class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
         j.fields("event").convertTo[String] match {
           case "auth" if j.fields("status").convertTo[String] == "OK" =>
             log.trace(s"received auth response: $j")
-            onStreamsRunning()
+            self ! OnStreamsRunning()
             None
           case "auth" =>
             throw new RuntimeException(s"bitfinex account WebSocket authentification failed with: $j")
@@ -347,7 +348,7 @@ class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
 
           case "hb" =>
             if (log.isTraceEnabled) log.trace(s"received heartbeat event")
-            Seq()
+            Nil
 
           case "os" => // order snapshot
             if (log.isTraceEnabled) log.trace(s"received event 'order snaphot': $s")
@@ -360,16 +361,16 @@ class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
 
           case streamType: String if Seq("ps", "pn", "pu", "pc").contains(streamType) =>
             log.debug(s"ignoring 'Position' data: $s")
-            Seq()
+            Nil
 
           case "tu" =>
             if (log.isTraceEnabled) log.trace(s"watching trade update event: $s")
-            Seq() // ignoring trade updates (prefering order updates, which have more details)
+            Nil // ignoring trade updates (prefering order updates, which have more details)
 
           case "te" =>
             if (log.isTraceEnabled) log.trace(s"watching event 'trade executed': $s")
             //Seq(BitfinexTradeExecutedJson(dataArray(2).convertTo[Vector[JsValue]]))
-            Seq()
+            Nil
 
           case "ws" =>
             if (log.isTraceEnabled) log.trace(s"received event 'wallet snapshot': $s")
@@ -381,23 +382,23 @@ class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
 
           case "bu" =>
             if (log.isTraceEnabled) log.trace(s"watching event 'balance update': $s")
-            Seq() // we ignore that event, we can calculate balance from wallet
+            Nil // we ignore that event, we can calculate balance from wallet
 
           case "miu" =>
             if (log.isTraceEnabled) log.trace(s"watching event 'margin info update': $s")
-            Seq() // ignore margin info update
+            Nil // ignore margin info update
 
           case "fiu" =>
             if (log.isTraceEnabled) log.trace(s"watching event 'funding info': $s")
-            Seq() // ignore funding info
+            Nil // ignore funding info
 
           case s: String if Seq("fte", "ftu").contains(s) =>
             if (log.isTraceEnabled) log.trace(s"watching event 'funding trade': $s")
-            Seq() // ignore funding trades
+            Nil // ignore funding trades
 
           case "n" =>
             if (log.isTraceEnabled) log.trace(s"received notification event: $s")
-            Seq() // ignore notifications
+            Nil // ignore notifications
 
           case x => throw new RuntimeException(s"bitfinex: received data of unidentified stream type '$x': $s")
         }
@@ -565,6 +566,7 @@ class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
   // @formatter:off
   override def receive: Receive = {
     case Connect()                               => connect()
+    case OnStreamsRunning()                      => onStreamsRunning()
     case CancelOrder(tradePair, externalOrderId) => cancelOrder(tradePair, externalOrderId.toLong).pipeTo(sender())
     case NewLimitOrder(o)                        => newLimitOrder(o).pipeTo(sender())
   }

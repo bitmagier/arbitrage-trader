@@ -151,9 +151,8 @@ case class Exchange(exchangeName: String,
       tradeRoomConfig,
       exchangeName,
       self,
-      publicData,
-      (orderRef: OrderRef) => accountData.activeOrders.get(orderRef)
-    ), s"PioneerOrderRunner-$exchangeName")
+      accountData,
+      publicData), s"PioneerOrderRunner-$exchangeName")
   }
 
   def joinTradeRoom(j: JoinTradeRoom): Unit = {
@@ -194,7 +193,7 @@ case class Exchange(exchangeName: String,
         InitStep("wait until wallet data arrives", () => {walletInitialized.await(maxWaitTime); Thread.sleep(2000)}), // wait another 2 seconds for all wallet entries to arrive (bitfinex)
         InitStep("wait until public-data-manager initialized", () => publicDataManagerInitialized.await(maxWaitTime)),
         InitStep("check if balance is sufficient for trading", () => checkIfBalanceIsSufficientForTrading()),
-        InitStep("warmup channels for 5 seconds", () => Thread.sleep(5000)),
+        InitStep("warmup channels for 3 seconds", () => Thread.sleep(3000)),
         InitStep(s"initiate pioneer order (${tradeRoomConfig.pioneerOrderValueUSDT} USDT -> Bitcoin)", () => initiatePioneerOrder()),
         InitStep("waiting for pioneer order to succeed", () => pioneerOrderSucceeded.await(pioneerOrderMaxWaitTime)),
         InitStep("send streaming-started", () => sendStreamingStartedResponseTo ! StreamingStarted(exchangeName)),

@@ -9,7 +9,7 @@ import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
 import org.purevalue.arbitrage.adapter.ExchangePublicDataManager.IncomingData
-import org.purevalue.arbitrage.adapter.binance.BinancePublicDataChannel.Connect
+import org.purevalue.arbitrage.adapter.binance.BinancePublicDataChannel.{Connect, OnStreamsRunning}
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.GetBinanceTradePairs
 import org.purevalue.arbitrage.adapter.{ExchangePublicStreamData, Ticker}
 import org.purevalue.arbitrage.traderoom.TradePair
@@ -25,6 +25,7 @@ import scala.util.{Failure, Success}
 
 object BinancePublicDataChannel {
   private case class Connect()
+  private case class OnStreamsRunning()
 
   def props(globalConfig: GlobalConfig, exchangeConfig: ExchangeConfig, publicDataManager: ActorRef, binancePublicDataChannel: ActorRef): Props =
     Props(new BinancePublicDataChannel(globalConfig, exchangeConfig, publicDataManager, binancePublicDataChannel))
@@ -55,14 +56,14 @@ class BinancePublicDataChannel(globalConfig: GlobalConfig,
   val resolveTradePairSymbol: String => TradePair =
     symbol => binanceTradePairBySymbol(symbol).toTradePair
 
-  def streamSubscribeResponse(j: JsObject): Unit = {
+  def onStreamSubscribeResponse(j: JsObject): Unit = {
     if (log.isTraceEnabled) log.trace(s"received $j")
     val channelId = j.fields("id").convertTo[Int]
     synchronized {
       outstandingStreamSubscribeResponses = outstandingStreamSubscribeResponses - channelId
     }
     if (outstandingStreamSubscribeResponses.isEmpty) {
-      onStreamsRunning()
+      self ! OnStreamsRunning()
     }
   }
 
@@ -97,7 +98,7 @@ class BinancePublicDataChannel(globalConfig: GlobalConfig,
         .map(_.getStrictText)
         .map(s => JsonParser(s).asJsObject() match {
           case j: JsObject if j.fields.contains("result") =>
-            streamSubscribeResponse(j)
+            onStreamSubscribeResponse(j)
             Nil
           case j: JsObject if j.fields.contains("stream") =>
             decodeDataMessage(j)
@@ -196,6 +197,7 @@ class BinancePublicDataChannel(globalConfig: GlobalConfig,
   // @formatter:off
   override def receive: Receive = {
     case Connect()             => connect()
+    case OnStreamsRunning()    => onStreamsRunning()
     case Status.Failure(cause) => log.error("received failure", cause)
   }
   // @formatter:on
@@ -231,3 +233,5 @@ object WebSocketJsonProtocol extends DefaultJsonProtocol {
   implicit val rawBookTickerRest: RootJsonFormat[RawBookTickerRestJson] = jsonFormat5(RawBookTickerRestJson)
   implicit val rawBookTickerStream: RootJsonFormat[RawBookTickerStreamJson] = jsonFormat6(RawBookTickerStreamJson)
 }
+
+// A single connection to stream.binance.com is only valid for 24 hours; expect to be disconnected at the 24 hour mark

@@ -4,7 +4,7 @@ import java.time.Instant
 import java.util.UUID
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props}
+import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props, Status}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{HttpMethods, StatusCodes, Uri}
@@ -13,7 +13,7 @@ import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
 import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager._
 import org.purevalue.arbitrage.adapter._
-import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.{Connect, SendPing}
+import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.{Connect, OnStreamsRunning, SendPing}
 import org.purevalue.arbitrage.adapter.binance.BinanceOrder.{toOrderStatus, toOrderType, toTradeSide}
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.{BinanceBaseRestEndpoint, GetBinanceTradePairs}
 import org.purevalue.arbitrage.traderoom._
@@ -32,6 +32,7 @@ object BinanceAccountDataChannel {
   private case class Connect()
   private case class SendPing()
   private case class QueryAccountInformation()
+  private case class OnStreamsRunning()
 
   def props(globalConfig: GlobalConfig,
             exchangeConfig: ExchangeConfig,
@@ -66,7 +67,8 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
 
   val pingSchedule: Cancellable = system.scheduler.scheduleAtFixedRate(30.minutes, 30.minutes, self, SendPing())
 
-  var listenKey: String = _
+  @volatile var listenKey: String = _
+
   var binanceTradePairsBySymbol: Map[String, BinanceTradePair] = _
   var binanceTradePairsByTradePair: Map[TradePair, BinanceTradePair] = _
 
@@ -78,7 +80,7 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
     case a: AccountInformationJson      => a.toWalletAssetUpdate // deprecated
     case a: OutboundAccountPositionJson => a.toWalletAssetUpdate
     case b: BalanceUpdateJson           => b.toWalletBalanceUpdate
-    case o: NewOrderResponseFullJson    => o.toOrderUpdate(exchangeConfig.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair) // expecting, that we have all relevant trade pairs
+    // case o: NewOrderResponseFullJson    => o.toOrderUpdate(exchangeConfig.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair) // expecting, that we have all relevant trade pairs
     case o: OrderExecutionReportJson    => o.toOrderUpdate(exchangeConfig.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair)
     case o: OpenOrderJson               => o.toOrderUpdate(exchangeConfig.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair)
     case o: CancelOrderResponseJson     => o.toOrderUpdate(exchangeConfig.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair)
@@ -86,7 +88,7 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
     // @formatter:on
   }
 
-  def streamSubscribeResponse(j: JsObject): Unit = {
+  def onStreamSubscribeResponse(j: JsObject): Unit = {
     if (log.isTraceEnabled) log.trace(s"received $j")
     val channelId = j.fields("id").convertTo[Int]
 
@@ -97,35 +99,48 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
 
     if (initialized) {
       log.debug("all streams running")
-      onStreamsRunning()
+      self ! OnStreamsRunning()
     }
   }
 
   def decodeMessage(message: Message): Future[Seq[IncomingBinanceAccountJson]] = message match {
     case msg: TextMessage =>
-      msg.toStrict(globalConfig.httpTimeout)
-        .map(_.getStrictText)
-        .map(s => JsonParser(s).asJsObject())
-        .map {
-          case j: JsObject if j.fields.contains("result") =>
-            streamSubscribeResponse(j: JsObject)
-            Nil
-          case j: JsObject if j.fields.contains("e") =>
-            if (log.isTraceEnabled) log.trace(s"received $j")
-            j.fields("e").convertTo[String] match {
-              case OutboundAccountPositionStreamName => List(j.convertTo[OutboundAccountPositionJson])
-              case BalanceUpdateStreamName => List(j.convertTo[BalanceUpdateJson])
-              case OrderExecutionReportStreamName => List(j.convertTo[OrderExecutionReportJson])
-              case name: String =>
-                log.error(s"Unknown data stream '$name' received: $j")
-                Nil
-            }
-          case j: JsObject =>
-            log.warn(s"Unknown json object received: $j")
-            Nil
-        }
-    case _ =>
-      log.warn(s"Received non TextMessage")
+      try {
+        msg.toStrict(globalConfig.httpTimeout)
+          .map(_.getStrictText)
+          .map(s => JsonParser(s).asJsObject())
+          .map {
+            case j: JsObject if j.fields.contains("result") =>
+              onStreamSubscribeResponse(j)
+              Nil
+            case j: JsObject if j.fields.contains("e") =>
+              j.fields("e").convertTo[String] match {
+                case OutboundAccountPositionStreamName =>
+                  if (log.isTraceEnabled) log.trace(s"received $j")
+                  List(j.convertTo[OutboundAccountPositionJson])
+                case BalanceUpdateStreamName =>
+                  if (log.isTraceEnabled) log.trace(s"received $j")
+                  List(j.convertTo[BalanceUpdateJson])
+                case OrderExecutionReportStreamName =>
+                  if (log.isTraceEnabled) log.trace(s"received $j")
+                  List(j.convertTo[OrderExecutionReportJson])
+                case "outboundAccountInfo" =>
+                  if (log.isTraceEnabled) log.trace(s"watching obsolete outboundAccountInfo: $j")
+                  Nil
+                case name =>
+                  log.error(s"Unknown data stream '$name' received: $j")
+                  Nil
+              }
+            case j: JsObject =>
+              log.warn(s"Unknown json object received: $j")
+              Nil
+          }
+      } catch {
+        case e: Throwable => log.error("decodeMessage failed", e)
+          Future.failed(e)
+      }
+    case x =>
+      log.warn(s"Received non TextMessage: $x")
       Future.successful(Nil)
   }
 
@@ -148,7 +163,7 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
       ).concatMat(Source.maybe[Message])(Keep.right))(Keep.right)
   }
 
-  val WebSocketEndpoint: Uri = Uri(s"wss://stream.binance.com:9443/ws/$listenKey")
+  lazy val WebSocketEndpoint: Uri = Uri(s"wss://stream.binance.com:9443/ws/$listenKey")
   var ws: (Future[WebSocketUpgradeResponse], Promise[Option[Message]]) = _
   var connected: Future[Done.type] = _
 
@@ -166,7 +181,9 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
     import BinanceAccountDataJsonProtocoll._
     httpRequestJsonBinanceAccount[AccountInformationJson, JsValue](HttpMethods.GET, s"$BinanceBaseRestEndpoint/api/v3/account", None, exchangeConfig.secrets, sign = true)
       .map {
-        case Left(response) => IncomingData(exchangeDataMapping(Seq(response)))
+        case Left(response) =>
+          if (log.isTraceEnabled) log.trace(s"received initial account information: $response")
+          IncomingData(exchangeDataMapping(Seq(response)))
         case Right(errorResponse) => throw new RuntimeException(s"deliverAccountInformation failed: $errorResponse")
       }.pipeTo(exchangeAccountDataManager)
   }
@@ -175,7 +192,9 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
     import BinanceAccountDataJsonProtocoll._
     httpRequestJsonBinanceAccount[List[OpenOrderJson], JsValue](HttpMethods.GET, s"$BinanceBaseRestEndpoint/api/v3/openOrders", None, exchangeConfig.secrets, sign = true)
       .map {
-        case Left(response) => IncomingData(exchangeDataMapping(response))
+        case Left(response) =>
+          if (log.isTraceEnabled) log.trace(s"received initial open orders: $response")
+          IncomingData(exchangeDataMapping(response))
         case Right(errorResponse) => throw new RuntimeException(s"deliverOpenOrders failed: $errorResponse")
       }.pipeTo(exchangeAccountDataManager)
   }
@@ -229,7 +248,7 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
         newQuantity
       case q: Double => q
     }
-    // saftey check
+    // safety check
     if (quantity > o.amountBaseAsset * 2)
       throw new BadCalculationError(s"Trade amount was much to small: ${o.shortDesc}. Required min-notional is " +
         s"${formatDecimal(binanceTradePair.minNotional)}, so for that limit we need a minimum quantity of ${formatDecimal(quantity)} (next time)!")
@@ -244,9 +263,9 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
         s"&quantity=${formatDecimalWithFixPrecision(quantity, binanceTradePair.baseAssetPrecision)}" +
         s"&price=${formatDecimalWithFixPrecision(price, binanceTradePair.quotePrecision)}" +
         s"&newClientOrderId=${o.id.toString}" +
-        s"&newOrderRespType=FULL"
+        s"&newOrderRespType=ACK"
 
-    val response: Future[NewOrderResponseFullJson] = httpRequestJsonBinanceAccount[NewOrderResponseFullJson, JsValue](
+    val response: Future[NewOrderResponseAckJson] = httpRequestJsonBinanceAccount[NewOrderResponseAckJson, JsValue](
       HttpMethods.POST,
       s"$BinanceBaseRestEndpoint/api/v3/order",
       Some(requestBody),
@@ -255,14 +274,14 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
     ).map {
       case Left(response) => response
       case Right(errorResponse) => throw new RuntimeException(s"newLimitOrder failed: $errorResponse")
-    }.recover {
+    } recover {
       case e: Exception =>
         log.error(s"NewLimitOrder failed. Request body:\n$requestBody\nbinanceTradePair:$binanceTradePair\n", e)
         throw e
     }
 
-    response.map(e => IncomingData(exchangeDataMapping(Seq(e)))).pipeTo(exchangeAccountDataManager)
-    response.map(_.toNewOrderAck(exchangeConfig.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair, o.id))
+    // response type FULL: response.map(e => IncomingData(exchangeDataMapping(Seq(e)))).pipeTo(exchangeAccountDataManager)
+    response.map(_.toNewOrderAck(exchangeConfig.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair))
   }
 
   def createListenKey(): Unit = {
@@ -299,7 +318,7 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
   }
 
   def connect(): Unit = {
-    log.trace("starting WebSocket stream")
+    log.trace(s"starting WebSocket stream using $WebSocketEndpoint")
     ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow)
     ws._2.future.onComplete(e => log.info(s"connection closed: ${e.get}"))
     connected = createConnected
@@ -319,9 +338,11 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
   // @formatter:off
   override def receive: Receive = {
     case Connect()                               => connect()
+    case OnStreamsRunning()                      => onStreamsRunning()
     case SendPing()                              => pingUserStream()
     case CancelOrder(tradePair, externalOrderId) => cancelOrder(tradePair, externalOrderId.toLong).pipeTo(sender())
     case NewLimitOrder(o)                        => newLimitOrder(o).pipeTo(sender())
+    case Status.Failure(e)                       => log.error("failure", e)
   }
   // @formatter:oon
 }
@@ -366,28 +387,15 @@ case class AccountInformationJson(makerCommission: Int,
   )
 }
 
-case class OutboundAccountInfoBalanceJson(a: String, f: String, l: String) {
+case class OutboundAccountBalanceJson(a: String, f: String, l: String) {
   def toBalance: Option[Balance] = BalanceJson(a, f, l).toBalance
 }
 
-case class OutboundAccountInfoJson(e: String, // event type
-                                   E: Long, // event time
-                                   m: Int, // make commision rate (bips)
-                                   t: Int, // taker commission rate (bips)
-                                   b: Int, // buyer commission rate (bips)
-                                   s: Int, // seller commission rate (bips)
-                                   T: Boolean, // can trade?
-                                   W: Boolean, // can withdraw?
-                                   D: Boolean, // can deposit?
-                                   u: Long, // time of last account update
-                                   B: Vector[OutboundAccountInfoBalanceJson], // balances array
-                                   P: Vector[String] // account permissions (e.g. SPOT)
-                                  ) extends IncomingBinanceAccountJson
-
+// {"B":[{"a":"BTC","f":"0.00933255","l":"0.00000000"},{"a":"BNB","f":"10.49918278","l":"0.00000000"},{"a":"USDT","f":"782.25814525","l":"0.00000000"}],"E":1601137542661,"e":"outboundAccountPosition","u":1601137542660}
 case class OutboundAccountPositionJson(e: String, // event type
                                        E: Long, // event time
                                        u: Long, // time of last account update
-                                       B: Vector[OutboundAccountInfoBalanceJson] // balances
+                                       B: Vector[OutboundAccountBalanceJson] // balances
                                       ) extends IncomingBinanceAccountJson {
   def toWalletAssetUpdate: WalletAssetUpdate = WalletAssetUpdate(
     B.flatMap(_.toBalance)
@@ -546,48 +554,55 @@ object BinanceOrder {
   }
 }
 
-
-case class NewOrderResponseFillJson(price: String, qty: String, commission: String, commissionAsset: String)
-case class NewOrderResponseFullJson(symbol: String,
-                                    orderId: Long,
-                                    orderListId: Long,
-                                    clientOrderId: String,
-                                    transactTime: Long,
-                                    price: String,
-                                    origQty: String,
-                                    executedQty: String,
-                                    cummulativeQuoteQty: String,
-                                    status: String,
-                                    timeInForce: String,
-                                    `type`: String,
-                                    side: String,
-                                    fills: Vector[NewOrderResponseFillJson]
-                                   ) extends IncomingBinanceAccountJson {
-
-  def priceAverage(qtyPricePairs: Seq[Tuple2[Double, Double]]): Double =
-    qtyPricePairs.map(e => e._1 * e._2).sum / qtyPricePairs.map(_._1).sum
-
-  def toOrderUpdate(exchangeName: String, resolveTradePair: String => TradePair): OrderUpdate = {
-    val ts = Instant.ofEpochMilli(transactTime)
-    OrderUpdate(
-      orderId.toString,
-      exchangeName,
-      resolveTradePair(symbol),
-      BinanceOrder.toTradeSide(side),
-      BinanceOrder.toOrderType(`type`),
-      price.toDouble,
-      None,
-      Some(origQty.toDouble),
-      Some(ts),
-      Some(BinanceOrder.toOrderStatus(status)),
-      fills.map(_.qty.toDouble).sum,
-      Some(priceAverage(fills.map(e => (e.qty.toDouble, e.price.toDouble)))), // Seq(qty, price)
-      ts)
-  }
-
-  def toNewOrderAck(exchange: String, symbolToTradePair: String => TradePair, ourOrderId: UUID): NewOrderAck =
-    NewOrderAck(exchange, symbolToTradePair(symbol), orderId.toString, ourOrderId)
+case class NewOrderResponseAckJson(symbol: String,
+                                   orderId: Long,
+                                   orderListId: Long,
+                                   clientOrderId: String,
+                                   transactTime: Long) {
+  def toNewOrderAck(exchange: String, symbolToTradePair: String => TradePair): NewOrderAck =
+    NewOrderAck(exchange, symbolToTradePair(symbol), orderId.toString, UUID.fromString(clientOrderId))
 }
+//case class NewOrderResponseFillJson(price: String, qty: String, commission: String, commissionAsset: String)
+//case class NewOrderResponseFullJson(symbol: String,
+//                                    orderId: Long,
+//                                    orderListId: Long,
+//                                    clientOrderId: String,
+//                                    transactTime: Long,
+//                                    price: String,
+//                                    origQty: String,
+//                                    executedQty: String,
+//                                    cummulativeQuoteQty: String,
+//                                    status: String,
+//                                    timeInForce: String,
+//                                    `type`: String,
+//                                    side: String,
+//                                    fills: Vector[NewOrderResponseFillJson]
+//                                   ) extends IncomingBinanceAccountJson {
+//
+//  def priceAverage(qtyPricePairs: Seq[Tuple2[Double, Double]]): Double =
+//    qtyPricePairs.map(e => e._1 * e._2).sum / qtyPricePairs.map(_._1).sum
+//
+//  def toOrderUpdate(exchangeName: String, resolveTradePair: String => TradePair): OrderUpdate = {
+//    val ts = Instant.ofEpochMilli(transactTime)
+//    OrderUpdate(
+//      orderId.toString,
+//      exchangeName,
+//      resolveTradePair(symbol),
+//      BinanceOrder.toTradeSide(side),
+//      BinanceOrder.toOrderType(`type`),
+//      price.toDouble,
+//      None,
+//      Some(origQty.toDouble),
+//      Some(ts),
+//      Some(BinanceOrder.toOrderStatus(status)),
+//      fills.map(_.qty.toDouble).sum,
+//      Some(priceAverage(fills.map(e => (e.qty.toDouble, e.price.toDouble)))), // Seq(qty, price)
+//      ts)
+//  }
+//
+//  def toNewOrderAck(exchange: String, symbolToTradePair: String => TradePair, ourOrderId: UUID): NewOrderAck =
+//    NewOrderAck(exchange, symbolToTradePair(symbol), orderId.toString, ourOrderId)
+//}
 
 case class CancelOrderResponseJson(symbol: String,
                                    origClientOrderId: String,
@@ -624,13 +639,15 @@ object BinanceAccountDataJsonProtocoll extends DefaultJsonProtocol {
   implicit val subscribeMsg: RootJsonFormat[AccountStreamSubscribeRequestJson] = jsonFormat3(AccountStreamSubscribeRequestJson)
   implicit val balanceJson: RootJsonFormat[BalanceJson] = jsonFormat3(BalanceJson)
   implicit val accountInformationJson: RootJsonFormat[AccountInformationJson] = jsonFormat11(AccountInformationJson)
-  implicit val outboundAccountInfoBalanceJson: RootJsonFormat[OutboundAccountInfoBalanceJson] = jsonFormat3(OutboundAccountInfoBalanceJson)
-  implicit val outboundAccountInfoJson: RootJsonFormat[OutboundAccountInfoJson] = jsonFormat12(OutboundAccountInfoJson)
+  implicit val outboundAccountInfoBalanceJson: RootJsonFormat[OutboundAccountBalanceJson] = jsonFormat3(OutboundAccountBalanceJson)
   implicit val outboundAccountPositionJson: RootJsonFormat[OutboundAccountPositionJson] = jsonFormat4(OutboundAccountPositionJson)
   implicit val balanceUpdateJson: RootJsonFormat[BalanceUpdateJson] = jsonFormat5(BalanceUpdateJson)
   implicit val orderExecutionReportJson: RootJsonFormat[OrderExecutionReportJson] = jsonFormat22(OrderExecutionReportJson)
   implicit val openOrderJson: RootJsonFormat[OpenOrderJson] = jsonFormat14(OpenOrderJson)
-  implicit val newOrderResponseFillJson: RootJsonFormat[NewOrderResponseFillJson] = jsonFormat4(NewOrderResponseFillJson)
-  implicit val newOrderResponseResultJson: RootJsonFormat[NewOrderResponseFullJson] = jsonFormat14(NewOrderResponseFullJson)
+  implicit val newOrderResponseAckJson: RootJsonFormat[NewOrderResponseAckJson] = jsonFormat5(NewOrderResponseAckJson)
+  //  implicit val newOrderResponseFillJson: RootJsonFormat[NewOrderResponseFillJson] = jsonFormat4(NewOrderResponseFillJson)
+  //  implicit val newOrderResponseResultJson: RootJsonFormat[NewOrderResponseFullJson] = jsonFormat14(NewOrderResponseFullJson)
   implicit val cancelOrderResponseJson: RootJsonFormat[CancelOrderResponseJson] = jsonFormat13(CancelOrderResponseJson)
 }
+
+// A single connection to stream.binance.com is only valid for 24 hours; expect to be disconnected at the 24 hour mark

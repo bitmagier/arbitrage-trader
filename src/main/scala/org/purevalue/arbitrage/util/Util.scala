@@ -3,7 +3,16 @@ package org.purevalue.arbitrage.util
 import java.text.{DecimalFormat, DecimalFormatSymbols}
 import java.util.Locale
 
+import akka.parboiled2.RuleTrace.NotPredicate.Base
+import org.purevalue.arbitrage.traderoom.CryptoValue
+
 object Util {
+  def applyBalanceDiff(balance: Iterable[CryptoValue], diff: Iterable[CryptoValue]): Iterable[CryptoValue] = {
+    balance.map {
+      v => CryptoValue(v.asset, v.amount + diff.filter(_.asset == v.asset).map(_.amount).sum)
+    } ++ diff.filter(e => !balance.exists(_.asset == e.asset))
+  }
+
 
   def formatDecimal(d: Double): String = formatDecimal(d, 8)
 

@@ -51,7 +51,7 @@ class ExchangeAccountDataManager(globalConfig: GlobalConfig,
 
     data match {
       case w: WalletAssetUpdate =>
-        accountData.wallet.balance = accountData.wallet.balance -- w.balance.keys ++ w.balance
+        accountData.wallet.balance = accountData.wallet.balance ++ w.balance
         exchange ! WalletUpdateTrigger()
 
       case w: WalletBalanceUpdate =>
@@ -116,6 +116,9 @@ case class Balance(asset: Asset, amountAvailable: Double, amountLocked: Double) 
 }
 // we use a [var immutable map] instead of mutable one here, to be able to update the whole map at once without a race condition
 case class Wallet(exchange: String, var balance: Map[Asset, Balance], exchangeConfig: ExchangeConfig) {
+
+  def asCryptoValues: Iterable[CryptoValue] = balance.values.map(e => CryptoValue(e.asset, e.amountAvailable))
+
   def toOverviewString(aggregateAsset: Asset, ticker: collection.Map[TradePair, Ticker]): String = {
     val liquidity = this.liquidCryptoValueSum(aggregateAsset, ticker)
     val inconvertible = this.inconvertibleCryptoValues(aggregateAsset, ticker)

@@ -8,17 +8,17 @@ import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, PoisonPill, Props}
 import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager.{CancelOrder, CancelOrderResult, NewLimitOrder, NewOrderAck}
-import org.purevalue.arbitrage.adapter.{ExchangePublicData, Fee}
+import org.purevalue.arbitrage.adapter.{ExchangeAccountData, ExchangePublicData, Fee}
 import org.purevalue.arbitrage.traderoom.Asset.{Bitcoin, USDT}
 import org.purevalue.arbitrage.traderoom.TradeRoom._
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.PioneerOrderRunner.{PioneerOrder, PioneerOrderFailed, PioneerOrderSucceeded, Watch}
 import org.purevalue.arbitrage.util.Util.formatDecimal
-import org.purevalue.arbitrage.util.{InitSequence, InitStep, WaitingFor}
+import org.purevalue.arbitrage.util.{InitSequence, InitStep, Util, WaitingFor}
 import org.purevalue.arbitrage.{GlobalConfig, Main, TradeRoomConfig}
 import org.slf4j.LoggerFactory
 
-import scala.concurrent.duration.DurationInt
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.concurrent.{Await, ExecutionContextExecutor, Future}
 import scala.util.{Failure, Success}
 
@@ -35,18 +35,16 @@ object PioneerOrderRunner {
             tradeRoomConfig: TradeRoomConfig,
             exchangeName: String,
             exchange: ActorRef,
-            publicData: ExchangePublicData,
-            activeOrderLookup: OrderRef => Option[Order]
-           ): Props =
-    Props(new PioneerOrderRunner(globalConfig, tradeRoomConfig, exchangeName, exchange, publicData, activeOrderLookup))
+            accountData: ExchangeAccountData,
+            publicData: ExchangePublicData): Props =
+    Props(new PioneerOrderRunner(globalConfig, tradeRoomConfig, exchangeName, exchange, accountData, publicData))
 }
 class PioneerOrderRunner(globalConfig: GlobalConfig,
                          tradeRoomConfig: TradeRoomConfig,
                          exchangeName: String,
                          exchange: ActorRef,
-                         publicData: ExchangePublicData,
-                         activeOrderLookup: OrderRef => Option[Order]
-                        ) extends Actor {
+                         accountData: ExchangeAccountData,
+                         publicData: ExchangePublicData) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[PioneerOrderRunner])
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
@@ -61,6 +59,12 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
   private val order1Validated = WaitingFor()
   private val order2Validated = WaitingFor()
   private val order3Validated = WaitingFor()
+
+  private val order1BalanceUpdateArrived = WaitingFor()
+  private val order2BalanceUpdateArrived = WaitingFor()
+
+  private val afterPioneerOrder1BalanceExpected: AtomicReference[Option[Iterable[CryptoValue]]] = new AtomicReference(None)
+  private val afterPioneerOrder2BalanceExpected: AtomicReference[Option[Iterable[CryptoValue]]] = new AtomicReference(None)
 
 
   def diffMoreThan(a: Double, b: Double, maxDiffRate: Double): Boolean = ((a - b).abs / a.abs) > maxDiffRate
@@ -129,30 +133,59 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
   }
 
 
-  def watchOrderTillFinalStatus(o: PioneerOrder, validationMethod: (OrderRequest, Order) => Unit, arrival: WaitingFor): Unit = {
+  def watchOrder(o: PioneerOrder, validationMethod: (OrderRequest, Order) => Unit, arrival: WaitingFor): Unit = {
     if (Instant.now.isAfter(deadline)) {
       throw new RuntimeException("Timeout while waiting for pioneer order to complete")
     }
 
-    activeOrderLookup(o.ref) match {
+    accountData.activeOrders.get(o.ref) match {
       case Some(order) if order.orderStatus.isFinal =>
         validationMethod(o.request, order)
         log.info(s"[$exchangeName]  pioneer order ${o.request.shortDesc} succeeded")
         arrival.arrived()
 
       case Some(order) =>
-        if (log.isTraceEnabled) log.trace(s"[$exchangeName] pioneer order in progress: $order")
+        log.trace(s"[$exchangeName] pioneer order in progress: $order")
         validationMethod(o.request, order)
 
       case None => // nop
     }
   }
 
-  def watchNextPioneerOrder(): Unit = {
-    if (pioneerOrder1.get().isDefined && !order1Validated.isArrived) watchOrderTillFinalStatus(pioneerOrder1.get().get, (r, o) => validateFilledPioneerOrder(r, o), order1Validated)
-    else if (pioneerOrder2.get().isDefined && !order2Validated.isArrived) watchOrderTillFinalStatus(pioneerOrder2.get().get, (r, o) => validateFilledPioneerOrder(r, o), order2Validated)
-    else if (pioneerOrder3.get().isDefined && !order3Validated.isArrived) watchOrderTillFinalStatus(pioneerOrder3.get().get, (r, o) => validateCanceledPioneerOrder(r, o), order3Validated)
-    else if (log.isTraceEnabled) log.trace(s"nothing to watch: orders: [$pioneerOrder1, $pioneerOrder2, $pioneerOrder3] validated: [${order1Validated.isArrived}, ${order2Validated.isArrived}, ${order3Validated.isArrived}]")
+  def watchBalance(expectedBalance: Iterable[CryptoValue], arrival: WaitingFor): Unit = {
+    val SignificantBalanceDeviationInUSDT: Double = 0.50
+
+    var diff: Map[Asset, Double] = expectedBalance.map(e => e.asset -> e.amount).toMap
+    for (walletCryptoValue <- accountData.wallet.asCryptoValues) {
+      val diffAmount = diff.getOrElse(walletCryptoValue.asset, 0.0) - walletCryptoValue.amount
+      diff = diff + (walletCryptoValue.asset -> diffAmount)
+    }
+
+    val balanceArrived = !diff.map(e => CryptoValue(e._1, e._2))
+      .exists(_.convertTo(USDT, publicData.ticker).amount > SignificantBalanceDeviationInUSDT)
+    if (balanceArrived) {
+      log.info(s"expected wallet balance arrived")
+      arrival.arrived()
+    } else {
+      log.trace(s"diff between expected minus actual balance is $diff")
+    }
+  }
+
+
+  def watchNextEvent(): Unit = {
+    if (pioneerOrder1.get().isDefined && !order1Validated.isArrived)
+      watchOrder(pioneerOrder1.get().get, (r, o) => validateFilledPioneerOrder(r, o), order1Validated)
+    else if (pioneerOrder1.get().isDefined && order1Validated.isArrived && !order1BalanceUpdateArrived.isArrived && afterPioneerOrder1BalanceExpected.get().isDefined)
+      watchBalance(afterPioneerOrder1BalanceExpected.get().get, order1BalanceUpdateArrived)
+    else if (pioneerOrder2.get().isDefined && !order2Validated.isArrived)
+      watchOrder(pioneerOrder2.get().get, (r, o) => validateFilledPioneerOrder(r, o), order2Validated)
+    else if (pioneerOrder1.get().isDefined && order2Validated.isArrived && !order2BalanceUpdateArrived.isArrived && afterPioneerOrder2BalanceExpected.get().isDefined)
+      watchBalance(afterPioneerOrder2BalanceExpected.get().get, order2BalanceUpdateArrived)
+    else if (pioneerOrder3.get().isDefined && !order3Validated.isArrived)
+      watchOrder(pioneerOrder3.get().get, (r, o) => validateCanceledPioneerOrder(r, o), order3Validated)
+    else
+      log.trace(s"nothing to watch: orders: [\n${pioneerOrder1.get()}, \n${pioneerOrder2.get()}, \n${pioneerOrder3.get()}] \n" +
+        s"validated: [${order1Validated.isArrived}, ${order2Validated.isArrived}, ${order3Validated.isArrived}]")
   }
 
 
@@ -171,7 +204,9 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
       realisticLimit
     }
 
-    val orderRequest = OrderRequest(UUID.randomUUID(), None, exchangeName, tradePair, tradeSide, tradeRoomConfig.exchanges(exchangeName).fee, amountBaseAsset, limit)
+    val orderRequest = OrderRequest(UUID.randomUUID(), None, exchangeName, tradePair, tradeSide, tradeRoomConfig.exchanges(exchangeName).fee,
+      amountBaseAsset, limit)
+
     log.debug(s"[$exchangeName] pioneer order: ${orderRequest.shortDesc}")
 
     implicit val timeout: Timeout = globalConfig.internalCommunicationTimeoutDuringInit
@@ -190,18 +225,26 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
       (exchange ? CancelOrder(o.ref.tradePair, o.ref.externalOrderId)).mapTo[CancelOrderResult],
       timeout.duration.plus(1.second))
     if (!cancelOrderResult.success) {
-      throw new RuntimeException(s"Intended cancel of PioneerOrder ${o.request.shortDesc} failed: $cancelOrderResult")
+      throw new RuntimeException(s"Intended cancel of PioneerOrder ${
+        o.request.shortDesc
+      } failed: $cancelOrderResult")
     }
   }
 
   def submitFirstPioneerOrder(): Unit = {
+    val balanceBeforeOrder: Iterable[CryptoValue] = accountData.wallet.asCryptoValues
     val amountBitcoin = CryptoValue(USDT, tradeRoomConfig.pioneerOrderValueUSDT).convertTo(Bitcoin, publicData.ticker).amount
     pioneerOrder1.set(Some(submitPioneerOrder(TradePair(Bitcoin, USDT), TradeSide.Buy, amountBitcoin, unrealisticGoodlimit = false)))
+    val expectedBalanceDiff: Seq[CryptoValue] = OrderBill.calcBalanceSheet(pioneerOrder1.get().get.request).map(e => CryptoValue(e.asset, e.amount))
+    afterPioneerOrder1BalanceExpected.set(Some(Util.applyBalanceDiff(balanceBeforeOrder, expectedBalanceDiff)))
   }
 
   def submitSecondPioneerOrder(): Unit = {
+    val balanceBeforeOrder = accountData.wallet.asCryptoValues
     val amountBitcoin = CryptoValue(USDT, tradeRoomConfig.pioneerOrderValueUSDT).convertTo(Bitcoin, publicData.ticker).amount
     pioneerOrder2.set(Some(submitPioneerOrder(TradePair(Bitcoin, USDT), TradeSide.Sell, amountBitcoin, unrealisticGoodlimit = false)))
+    val expectedBalanceDiff: Seq[CryptoValue] = OrderBill.calcBalanceSheet(pioneerOrder2.get().get.request).map(e => CryptoValue(e.asset, e.amount))
+    afterPioneerOrder2BalanceExpected.set(Some(Util.applyBalanceDiff(balanceBeforeOrder, expectedBalanceDiff)))
   }
 
   def submitBuyToCancelPioneerOrder(): Unit = {
@@ -215,17 +258,23 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
     log.info(s"running pioneer order for $exchangeName")
 
     val maxWaitTime = globalConfig.internalCommunicationTimeoutDuringInit.duration
+    val balanceUpdateMaxWaitTime: FiniteDuration = 5.seconds
     val InitSequence = new InitSequence(log, s"$exchangeName  PioneerOrderRunner", List(
       InitStep("Submit pioneer order 1 (buy Bitcoin from USDT)", () => submitFirstPioneerOrder()),
       InitStep("Waiting until Pioneer order 1 is validated", () => order1Validated.await(maxWaitTime)),
+      InitStep("Waiting until wallet balance reflects update from order 1", () => order1BalanceUpdateArrived.await(balanceUpdateMaxWaitTime)),
       InitStep("Submit pioneer order 2 (sell Bitcoin to USDT)", () => submitSecondPioneerOrder()),
       InitStep("Waiting until Pioneer order 2 is validated", () => order2Validated.await(maxWaitTime)),
+      InitStep("Waiting until wallet balance reflects update from order 2", () => order2BalanceUpdateArrived.await(balanceUpdateMaxWaitTime)),
       InitStep("Submit pioneer order 3 (cancel another buy Bitcoin order)", () => submitBuyToCancelPioneerOrder()),
       InitStep("Waiting until Pioneer order 3 is validated", () => order3Validated.await(maxWaitTime))
     ))
 
     Future(InitSequence.run()).onComplete {
-      case Success(_) => exchange ! PioneerOrderSucceeded()
+      case Success(_) =>
+        log.info(s"[$exchangeName] PioneerOrderRunner successful completed")
+        exchange ! PioneerOrderSucceeded()
+        stop()
       case Failure(e) =>
         log.error(s"[$exchangeName] PioneerOrderRunner failed", e)
         exchange ! PioneerOrderFailed(e)
@@ -239,7 +288,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
   } // TODO coordinated shutdown
 
   override def receive: Receive = {
-    case Watch() => watchNextPioneerOrder()
+    case Watch() => watchNextEvent()
     case Failure(e) =>
       log.error(s"PioneerOrderRunner failed", e)
       exchange ! PioneerOrderFailed(e)
