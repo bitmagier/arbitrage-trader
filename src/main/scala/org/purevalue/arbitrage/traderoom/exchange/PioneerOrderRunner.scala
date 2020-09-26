@@ -156,7 +156,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
     val SignificantBalanceDeviationInUSDT: Double = 0.50
 
     var diff: Map[Asset, Double] = expectedBalance.map(e => e.asset -> e.amount).toMap
-    for (walletCryptoValue <- accountData.wallet.asCryptoValues) {
+    for (walletCryptoValue <- accountData.wallet.liquidCryptoValues(USDT, publicData.ticker)) {
       val diffAmount = diff.getOrElse(walletCryptoValue.asset, 0.0) - walletCryptoValue.amount
       diff = diff + (walletCryptoValue.asset -> diffAmount)
     }
@@ -232,7 +232,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
   }
 
   def submitFirstPioneerOrder(): Unit = {
-    val balanceBeforeOrder: Iterable[CryptoValue] = accountData.wallet.asCryptoValues
+    val balanceBeforeOrder: Iterable[CryptoValue] = accountData.wallet.liquidCryptoValues(USDT, publicData.ticker)
     val amountBitcoin = CryptoValue(USDT, tradeRoomConfig.pioneerOrderValueUSDT).convertTo(Bitcoin, publicData.ticker).amount
     pioneerOrder1.set(Some(submitPioneerOrder(TradePair(Bitcoin, USDT), TradeSide.Buy, amountBitcoin, unrealisticGoodlimit = false)))
     val expectedBalanceDiff: Seq[CryptoValue] = OrderBill.calcBalanceSheet(pioneerOrder1.get().get.request).map(e => CryptoValue(e.asset, e.amount))
@@ -240,7 +240,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
   }
 
   def submitSecondPioneerOrder(): Unit = {
-    val balanceBeforeOrder = accountData.wallet.asCryptoValues
+    val balanceBeforeOrder = accountData.wallet.liquidCryptoValues(USDT, publicData.ticker)
     val amountBitcoin = CryptoValue(USDT, tradeRoomConfig.pioneerOrderValueUSDT).convertTo(Bitcoin, publicData.ticker).amount
     pioneerOrder2.set(Some(submitPioneerOrder(TradePair(Bitcoin, USDT), TradeSide.Sell, amountBitcoin, unrealisticGoodlimit = false)))
     val expectedBalanceDiff: Seq[CryptoValue] = OrderBill.calcBalanceSheet(pioneerOrder2.get().get.request).map(e => CryptoValue(e.asset, e.amount))
