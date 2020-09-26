@@ -401,23 +401,32 @@ class TradeRoom(val config: Config,
     }
   }
 
-  def onOrderUpdate(ref: OrderRef, finalTry: Boolean = false): Unit = {
-    activeOrderBundles.values.find(e => e.ordersRefs.contains(ref)) match {
+  def onOrderUpdate(t: OrderUpdateTrigger): Unit = {
+    val maxTries = 3
+    activeOrderBundles.values.find(e => e.ordersRefs.contains(t.ref)) match {
       case Some(orderBundle) =>
         cleanupFinishedOrderBundle(orderBundle)
         return
       case None => // proceed to next statement
     }
 
-    activeLiquidityTx.get(ref) match {
+    activeLiquidityTx.get(t.ref) match {
       case Some(liquidityTx) => cleanupPossiblyFinishedLiquidityTxOrder(liquidityTx)
       case None =>
-        // wait 200ms once and try again, before giving up - sometimes the real order-filled-update is faster than our registering of the acknowledge
-        if (!finalTry) {
-          onOrderUpdate(ref, finalTry = true)
+
+        if (t.resendCounter < maxTries) {
+          // wait 200ms and try again, before giving up - sometimes the real order-filled-update is faster than our registering of the acknowledge
+          Future({
+            Thread.sleep(200)
+            self ! OrderUpdateTrigger(t.ref, t.resendCounter + 1)
+          })
         } else {
-          log.error(s"Got order-update (${ref.exchange}: ${ref.externalOrderId}) but cannot find active order bundle or liquidity tx for it." +
-            s" Corresponding order is: ${activeOrders(ref.exchange).get(ref)}")
+          val activeOrder = activeOrders(t.ref.exchange).get(t.ref)
+          if (activeOrder.isDefined)
+            log.warn(s"Got order-update (${t.ref.exchange}: ${t.ref.externalOrderId}) but cannot find active order bundle or liquidity tx for it." +
+              s" Corresponding order is: ${activeOrder.get}")
+          // otherwise, when the active order is already gone, we can just drop that update-trigger, because it comes too late.
+          // Then the order from activeOrderBundles/activeLiquidityTx was already cleaned-up by a previous trigger
         }
     }
   }
@@ -532,7 +541,7 @@ class TradeRoom(val config: Config,
     case TradeRoomJoined(exchange)                  => onExchangeJoined(exchange)
     case bundle: OrderRequestBundle                 => tryToPlaceOrderBundle(bundle)
     case LiquidityTransformationOrder(orderRequest) => placeLiquidityTransformationOrder(orderRequest)
-    case OrderUpdateTrigger(orderRef)               => onOrderUpdate(orderRef)
+    case t: OrderUpdateTrigger                      => onOrderUpdate(t)
     case c: CancelOrderResult                       => onCancelOrderResult(c)
     case LogStats()                                 => logStats()
     case HouseKeeping()                             => houseKeeping()

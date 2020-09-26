@@ -444,8 +444,10 @@ class LiquidityManager(val config: LiquidityManagerConfig,
     var liquiditySourcesBuckets: Map[Asset, Int] = currentReserveAssetsBalance // we can take coin only from currently really existing balance
       .filter(_.canConvertTo(USDT, tpData.ticker))
       .map(e => (e.asset, e.convertTo(USDT, referenceTicker()).amount)) // amount in USDT
-      .filter(_._2 >= config.minimumKeepReserveLiquidityPerAssetInUSDT + config.rebalanceTxGranularityInUSDT) // having more than the minimum limit + tx-granularity
-      .map(e => (e._1, ((e._2 - config.minimumKeepReserveLiquidityPerAssetInUSDT) / config.rebalanceTxGranularityInUSDT).floor.toInt)) // buckets to provide
+      // having more than the minimum limit + 150% tx-granularity (to avoid useless there-and-back transfers because of exchange rate fluctuations)
+      .filter(_._2 >= config.minimumKeepReserveLiquidityPerAssetInUSDT + config.rebalanceTxGranularityInUSDT * 1.5)
+      // keep minimum reserve liquidity + 50% bucket value (we don't sell our last half-full extra bucket ^^^)
+      .map(e => (e._1, ((e._2 - config.minimumKeepReserveLiquidityPerAssetInUSDT - config.rebalanceTxGranularityInUSDT * 0.5) / config.rebalanceTxGranularityInUSDT).floor.toInt)) // buckets to provide
       .toMap
 
     def removeBuckets(liquidityBuckets: Map[Asset, Int], asset: Asset, numBuckets: Int): Map[Asset, Int] = {
@@ -527,7 +529,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
     }
 
     log.trace(s"Re-balance (unsquashed) tx orders:\n${liquidityTransactions.mkString("\n")}\n Remaining sinks: $liquiditySinkBuckets")
-    // merge possible splitted orders towards primary reserve asset
+    // merge possible split orders towards primary reserve asset
     liquidityTransactions = liquidityTransactions
       .groupBy(e => (e.tradePair, e.tradeSide))
       .map { e =>

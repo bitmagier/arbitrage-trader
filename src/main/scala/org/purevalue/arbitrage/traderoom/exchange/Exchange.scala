@@ -32,7 +32,7 @@ object Exchange {
   case class StartStreaming()
   case class StreamingStarted(exchange: String)
   case class WalletUpdateTrigger()
-  case class OrderUpdateTrigger(ref: OrderRef) // status of an order has changed
+  case class OrderUpdateTrigger(ref: OrderRef, resendCounter:Int = 0) // status of an order has changed
   case class HouseKeeping()
   case class SwitchToInitializedMode()
 
