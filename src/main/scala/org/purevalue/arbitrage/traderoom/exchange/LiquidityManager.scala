@@ -53,6 +53,8 @@ import scala.concurrent.duration.DurationInt
 
 object LiquidityManager {
 
+  private class OrderBookTooFlatException(val tradePair:TradePair, val side:TradeSide) extends Exception
+
   case class LiquidityRequest(id: UUID,
                               createTime: Instant,
                               exchange: String,
@@ -226,7 +228,10 @@ class LiquidityManager(val config: LiquidityManagerConfig,
 
   def determineRealisticLimit(tradePair: TradePair, tradeSide: TradeSide, amountBaseAsset: Double): Double = {
     new OrderLimitChooser(tpData.orderBook.get(tradePair), tpData.ticker(tradePair))
-      .determineRealisticOrderLimit(tradeSide, amountBaseAsset, config.txLimitAwayFromEdgeLimit)
+      .determineRealisticOrderLimit(tradeSide, amountBaseAsset, config.txLimitAwayFromEdgeLimit) match {
+      case Some(limit) => limit
+      case None => throw new OrderBookTooFlatException(tradePair, tradeSide)
+    }
   }
 
   /**
@@ -554,12 +559,17 @@ class LiquidityManager(val config: LiquidityManagerConfig,
 
     clearObsoleteLocks()
     clearObsoleteDemands()
-    val demanded: List[CryptoValue] = provideDemandedLiquidity()
-    val incomingReserveLiquidity = convertBackNotNeededNoneReserveAssetLiquidity()
-    val totalIncomingReserveLiquidity = incomingReserveLiquidity ::: demanded.filter(e => exchangeConfig.reserveAssets.contains(e.asset))
+    try {
+      val demanded: List[CryptoValue] = provideDemandedLiquidity()
+      val incomingReserveLiquidity = convertBackNotNeededNoneReserveAssetLiquidity()
+      val totalIncomingReserveLiquidity = incomingReserveLiquidity ::: demanded.filter(e => exchangeConfig.reserveAssets.contains(e.asset))
 
-    rebalanceReserveAssetsAmountOrders(totalIncomingReserveLiquidity).foreach { o =>
-      tradeRoom ! LiquidityTransformationOrder(o)
+      rebalanceReserveAssetsAmountOrders(totalIncomingReserveLiquidity).foreach { o =>
+        tradeRoom ! LiquidityTransformationOrder(o)
+      }
+    } catch {
+      case e:OrderBookTooFlatException =>
+        log.warn(s"[to be improved] Cannot perform liquidity housekeeping on ${exchangeConfig.exchangeName} because the order book of tradepair ${e.tradePair} was too flat")
     }
   }
 

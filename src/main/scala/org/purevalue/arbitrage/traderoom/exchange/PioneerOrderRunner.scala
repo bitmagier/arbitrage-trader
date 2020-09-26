@@ -143,6 +143,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
         validationMethod(o.request, order)
         log.info(s"[$exchangeName]  pioneer order ${o.request.shortDesc} succeeded")
         arrival.arrived()
+        accountData.activeOrders.remove(o.ref)
 
       case Some(order) =>
         log.trace(s"[$exchangeName] pioneer order in progress: $order")
@@ -193,7 +194,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
     val realisticLimit = new OrderLimitChooser(
       publicData.orderBook.get(tradePair),
       publicData.ticker(tradePair)
-    ).determineRealisticOrderLimit(tradeSide, amountBaseAsset * 5.0, tradeRoomConfig.liquidityManager.txLimitAwayFromEdgeLimit)
+    ).determineRealisticOrderLimit(tradeSide, amountBaseAsset * 5.0, tradeRoomConfig.liquidityManager.txLimitAwayFromEdgeLimit).get
 
     val limit = if (unrealisticGoodlimit) {
       tradeSide match {

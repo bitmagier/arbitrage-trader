@@ -74,7 +74,7 @@ class FooTrader(traderConfig: Config, tradeRoom: ActorRef, tc: TradeContext) ext
     _findPrice(exchangesInOrder)
   }
 
-  def findLimit(exchange:String, tradePair:TradePair, tradeSide:TradeSide, amountBaseAsset:Double): Double = {
+  def findLimit(exchange:String, tradePair:TradePair, tradeSide:TradeSide, amountBaseAsset:Double): Option[Double] = {
     new OrderLimitChooser(tc.orderBooks(exchange).get(tradePair), tc.tickers(exchange)(tradePair))
       .determineRealisticOrderLimit(tradeSide, amountBaseAsset, OrderLimitRealityAdjustmentRate)
   }
@@ -92,10 +92,14 @@ class FooTrader(traderConfig: Config, tradeRoom: ActorRef, tc: TradeContext) ext
 
     val buyLimits: Map[String, Double] = availableExchanges
       .map(exchange => exchange -> findLimit(exchange, tradePair, TradeSide.Buy, tradeAmountBaseAsset))
+      .filter(_._2.isDefined)
+      .map(e => e._1 -> e._2.get)
       .toMap
 
     val sellLimits: Map[String, Double] = availableExchanges
       .map(exchange => exchange -> findLimit(exchange, tradePair, TradeSide.Sell, tradeAmountBaseAsset))
+      .filter(_._2.isDefined)
+      .map(e => e._1 -> e._2.get)
       .toMap
 
     val buyExchange: String = buyLimits.minBy(_._2)._1
@@ -103,15 +107,12 @@ class FooTrader(traderConfig: Config, tradeRoom: ActorRef, tc: TradeContext) ext
     val buyLimit: Double = buyLimits(buyExchange)
     val sellLimit: Double = sellLimits(sellExchange)
 
-    val calculatedPureWinUsdt: Double = TradeAmountInUsdt * sellLimit - TradeAmountInUsdt * buyLimit
     val minGainInUsdt:Double = OrderBundleMinGainInUsdt
-    // TODO if (calculatedPureWinUsdt < minGainInUsdt) return (None, Some(MinGainTooLow()))
 
-    val realCalculatedPureWinUsdt: Double = CryptoValue(tradePair.baseAsset, tradeAmountBaseAsset * sellLimit - tradeAmountBaseAsset * buyLimit)
+    val calculatedPureWinUsdt: Double = CryptoValue(tradePair.baseAsset, tradeAmountBaseAsset * sellLimit - tradeAmountBaseAsset * buyLimit)
       .convertTo(USDT, tp => findPrice(tp, availableExchanges)).amount
-    if (Math.abs(calculatedPureWinUsdt/realCalculatedPureWinUsdt) > 0.00001) throw new WrongAssumption("trade win calculation shortcut")
 
-    if (realCalculatedPureWinUsdt < minGainInUsdt) return Right(MinGainTooLow())
+    if (calculatedPureWinUsdt < minGainInUsdt) return Right(MinGainTooLow())
 
     val orderBundleId = UUID.randomUUID()
     val ourBuyBaseAssetOrder =

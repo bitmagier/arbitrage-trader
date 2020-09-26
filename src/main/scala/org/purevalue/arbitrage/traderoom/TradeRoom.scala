@@ -24,7 +24,7 @@ import org.slf4j.LoggerFactory
 
 import scala.collection.concurrent.TrieMap
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
-import scala.concurrent.{ExecutionContextExecutor, Future}
+import scala.concurrent.{Await, ExecutionContextExecutor, Future}
 import scala.util.{Failure, Success}
 
 object TradeRoom {
@@ -196,14 +196,12 @@ class TradeRoom(val config: Config,
     }
 
     implicit val timeout: Timeout = config.global.httpTimeout.plus(config.global.internalCommunicationTimeout.duration)
-    (exchanges(request.exchange) ? NewLimitOrder(request)).mapTo[NewOrderAck].onComplete {
-      case Success(ack) =>
-        if (log.isTraceEnabled) log.trace(s"successfully placed liquidity tx order $ack")
-        val ref = ack.toOrderRef
-        activeLiquidityTx.update(ref, LiquidityTx(request, ref, Instant.now))
-      case Failure(e) =>
-        log.error("placing liquidity order failed", e)
-    }
+    val ack = Await.result(
+      (exchanges(request.exchange) ? NewLimitOrder(request)).mapTo[NewOrderAck],
+      timeout.duration.plus(1.second))
+    if (log.isTraceEnabled) log.trace(s"successfully placed liquidity tx order $ack")
+    val ref = ack.toOrderRef
+    activeLiquidityTx.update(ref, LiquidityTx(request, ref, Instant.now))
   }
 
   def registerOrderBundle(b: OrderRequestBundle, lockedLiquidity: Seq[LiquidityLock], orders: Seq[OrderRef]) {
@@ -403,7 +401,7 @@ class TradeRoom(val config: Config,
     }
   }
 
-  def onOrderUpdate(ref: OrderRef): Unit = {
+  def onOrderUpdate(ref: OrderRef, finalTry: Boolean = false): Unit = {
     activeOrderBundles.values.find(e => e.ordersRefs.contains(ref)) match {
       case Some(orderBundle) =>
         cleanupFinishedOrderBundle(orderBundle)
@@ -413,7 +411,14 @@ class TradeRoom(val config: Config,
 
     activeLiquidityTx.get(ref) match {
       case Some(liquidityTx) => cleanupPossiblyFinishedLiquidityTxOrder(liquidityTx)
-      case None => log.error(s"Got order-update (${ref.exchange}: ${ref.externalOrderId}) but cannot find active order bundle or liquidity tx with that id")
+      case None =>
+        // wait 200ms once and try again, before giving up - sometimes the real order-filled-update is faster than our registering of the acknowledge
+        if (!finalTry) {
+          onOrderUpdate(ref, finalTry = true)
+        } else {
+          log.error(s"Got order-update (${ref.exchange}: ${ref.externalOrderId}) but cannot find active order bundle or liquidity tx for it." +
+            s" Corresponding order is: ${activeOrders(ref.exchange).get(ref)}")
+        }
     }
   }
 
