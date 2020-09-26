@@ -3,7 +3,7 @@ package org.purevalue.arbitrage.adapter.bitfinex
 import java.time.Instant
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Kill, PoisonPill, Props, Status}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{StatusCodes, Uri}
@@ -368,7 +368,10 @@ class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
       val subscribeMessages: List[SubscribeRequestJson] = partition.map(e => subscribeOrderBookMessage(e)).toList
       connectionId += 1
       val ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow(connectionId, subscribeMessages))
-      ws._2.future.onComplete(e => log.info(s"connection closed: ${e.get}"))
+      ws._2.future.onComplete { e =>
+        log.info(s"connection closed: ${e.get}")
+        self ! PoisonPill // TODO restart exchange
+      }
       wsList = ws :: wsList
       connectedList = createConnected(ws._1) :: connectedList
     }

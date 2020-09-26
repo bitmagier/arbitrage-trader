@@ -4,7 +4,7 @@ import java.time.Instant
 import java.util.UUID
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, PoisonPill, Props, Status}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{HttpMethods, StatusCodes, Uri}
@@ -320,7 +320,10 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
   def connect(): Unit = {
     log.trace(s"starting WebSocket stream using $WebSocketEndpoint")
     ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow)
-    ws._2.future.onComplete(e => log.info(s"connection closed: ${e.get}"))
+    ws._2.future.onComplete{e =>
+      log.info(s"connection closed: ${e.get}")
+      self ! PoisonPill
+    }
     connected = createConnected
   }
 
