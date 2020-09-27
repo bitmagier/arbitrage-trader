@@ -163,7 +163,7 @@ case class Exchange(exchangeName: String,
   def switchToInitializedMode(): Unit = {
     context.become(initializedModeReceive)
     houseKeepingSchedule = actorSystem.scheduler.scheduleAtFixedRate(20.seconds, 1.minute, self, HouseKeeping())
-    log.info(s"${Emoji.Excited}  [$exchangeName]: completely initialized and running")
+    log.info(s"${Emoji.Excited}  [$exchangeName] completely initialized and running")
     tradeRoom.get ! TradeRoomJoined(exchangeName)
   }
 

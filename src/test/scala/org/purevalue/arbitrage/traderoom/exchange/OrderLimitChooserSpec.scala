@@ -23,7 +23,7 @@ class OrderLimitChooserSpec extends TestKit(ActorSystem("ExchangeLiquidityManage
         Ticker("e1", TradePair(Bitcoin, USDT), 9999.0, None, 10001.0, None, Some(10000.0))
       )
 
-      limitChooser.determineEdgeOrderLimit(TradeSide.Buy, 1.0) shouldBe 10000.0 +- 0.000001
+      limitChooser.determineEdgeOrderLimit(TradeSide.Buy, 1.0).get shouldBe 10000.0 +- 0.000001
     }
 
     "find optimal limit for Sell and Buy" in {

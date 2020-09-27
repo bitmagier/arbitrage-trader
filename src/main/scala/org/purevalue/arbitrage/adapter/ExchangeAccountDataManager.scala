@@ -122,7 +122,7 @@ case class Wallet(exchange: String, var balance: Map[Asset, Balance], exchangeCo
     val inconvertible = this.inconvertibleCryptoValues(aggregateAsset, ticker)
     s"Wallet [$exchange]: Liquid crypto total: $liquidity" +
       (if (inconvertible.nonEmpty) s""", Inconvertible to ${aggregateAsset.officialSymbol}: ${inconvertible.mkString(", ")}""" else "") +
-      s""", Fiat Money: ${this.fiatMoney.mkString(", ")}""" +
+      (if (this.fiatMoney.nonEmpty) s""", Fiat Money: ${this.fiatMoney.mkString(", ")}""" else "") +
       (if (this.notTouchValues.nonEmpty) s""", Not-touching: ${this.notTouchValues.mkString(", ")}""" else "")
   }
 
