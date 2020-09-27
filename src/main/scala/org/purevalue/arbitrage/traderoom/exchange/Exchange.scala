@@ -4,8 +4,7 @@ import java.time.{Duration, Instant}
 import java.util.concurrent.TimeUnit
 
 import akka.Done
-import akka.actor.SupervisorStrategy.Restart
-import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, OneForOneStrategy, PoisonPill, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, PoisonPill, Props, Status}
 import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage._
@@ -167,11 +166,6 @@ case class Exchange(exchangeName: String,
     log.info(s"${Emoji.Excited}  [$exchangeName]: completely initialized and running")
     tradeRoom.get ! TradeRoomJoined(exchangeName)
   }
-
-  override val supervisorStrategy: OneForOneStrategy =
-    OneForOneStrategy(maxNrOfRetries = 5, withinTimeRange = 10.minutes, loggingEnabled = true) {
-      case _ => Restart
-    }
 
   val accountDataManagerInitialized: WaitingFor = WaitingFor()
   val publicDataManagerInitialized: WaitingFor = WaitingFor()

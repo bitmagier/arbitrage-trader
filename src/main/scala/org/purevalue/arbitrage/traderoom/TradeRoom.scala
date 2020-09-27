@@ -5,8 +5,7 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 import akka.Done
-import akka.actor.SupervisorStrategy.Restart
-import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, OneForOneStrategy, PoisonPill, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, PoisonPill, Props, Status}
 import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage._
@@ -497,11 +496,6 @@ class TradeRoom(val config: Config,
       log.warn(s"${Emoji.NoSupport}  These orders did not finish: [${openOrders.map(_.shortDesc).mkString(", ")}]")
     }
   }
-
-  override val supervisorStrategy: OneForOneStrategy =
-    OneForOneStrategy(maxNrOfRetries = 3, withinTimeRange = 90.minutes, loggingEnabled = true) {
-      case _ => Restart
-    }
 
   var exchangesJoined: Set[String] = Set()
 

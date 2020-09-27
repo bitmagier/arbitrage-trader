@@ -12,7 +12,6 @@ import org.purevalue.arbitrage.traderoom.Asset.USDT
 import org.purevalue.arbitrage.traderoom.TradeRoom.TradeContext
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.OrderLimitChooser
-import org.purevalue.arbitrage.util.WrongAssumption
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.ExecutionContextExecutor

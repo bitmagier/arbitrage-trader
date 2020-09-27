@@ -35,7 +35,7 @@ import scala.concurrent.duration.DurationInt
 
    - Every completed trade (no matter if succeeded or canceled) will result in a clearance of it's previously acquired Liquidity-Locks,
    - Clearance of a Liquidity-Lock means removal of that lock (the underlying coins should be gone into a transaction in between anyway):
-   - In case, that the maximum lifetime of a liquidity-lock is reached, it will be cleared automatically by the [TradeRoomSupervisor]
+   - In case, that the maximum lifetime of a liquidity-lock is reached, it will be cleared automatically by housekeeping
 
    [Concept Liquidity-Demand]
      - The Liquidity-Demand can only be fulfilled, when enough amount of one of the configured Reserve-Assets is available
@@ -53,7 +53,7 @@ import scala.concurrent.duration.DurationInt
 
 object LiquidityManager {
 
-  private class OrderBookTooFlatException(val tradePair:TradePair, val side:TradeSide) extends Exception
+  class OrderBookTooFlatException(val tradePair: TradePair, val side: TradeSide) extends Exception
 
   case class LiquidityRequest(id: UUID,
                               createTime: Instant,
@@ -74,10 +74,47 @@ object LiquidityManager {
                                      dontUseTheseReserveAssets: Set[Asset]) {
     if (coins.exists(_.asset.isFiat)) throw new IllegalArgumentException("Seriously, you demand for Fiat Money?")
   }
+
   private object LiquidityDemand {
     def apply(r: LiquidityRequest): LiquidityDemand =
       LiquidityDemand(r.exchange, r.tradePattern, r.coins, r.dontUseTheseReserveAssets)
   }
+
+  def determineRealisticLimit(orderBook: collection.Map[TradePair, OrderBook],
+                              ticker: collection.Map[TradePair, Ticker],
+                              tradePair: TradePair,
+                              tradeSide: TradeSide,
+                              amountBaseAsset: Double,
+                              txLimitAwayFromEdgeLimit: Double): Double = {
+    new OrderLimitChooser(orderBook.get(tradePair), ticker(tradePair))
+      .determineRealisticOrderLimit(tradeSide, amountBaseAsset, txLimitAwayFromEdgeLimit) match {
+      case Some(limit) => limit
+      case None => throw new OrderBookTooFlatException(tradePair, tradeSide)
+    }
+  }
+
+  /**
+   * Gives back a rating for trading a amount on that tradepair on the local exchange - compared to reference ticker
+   * Ratings can be interpreted as a percentage of the local limit needed to fulfill a local trade compared to the reference ticker.
+   * A result rate > 0 indicates a positive rating - being better than the reference ticker, a negative rate the opposite
+   */
+  def localExchangeRateRating(orderBook: collection.Map[TradePair, OrderBook],
+                              ticker: collection.Map[TradePair, Ticker],
+                              referenceTicker: collection.Map[TradePair, Ticker],
+                              tradePair: TradePair, tradeSide:
+                              TradeSide, amountBaseAsset: Double,
+                              txLimitAwayFromEdgeLimit: Double): Double = {
+    val localLimit: Double = determineRealisticLimit(orderBook, ticker, tradePair, tradeSide, amountBaseAsset, txLimitAwayFromEdgeLimit)
+    val referenceTickerPrice: Option[Double] = referenceTicker.get(tradePair).map(_.priceEstimate)
+    referenceTickerPrice match {
+      case Some(referencePrice) => tradeSide match {
+        case TradeSide.Buy => 1.0 - localLimit / referencePrice // 1 - x/R
+        case TradeSide.Sell => localLimit / referencePrice - 1.0 // x/R - 1
+      }
+      case None => 0.0 // we can not judge it, because no reference ticker available
+    }
+  }
+
 
   def props(config: LiquidityManagerConfig,
             exchangeConfig: ExchangeConfig,
@@ -93,7 +130,7 @@ object LiquidityManager {
 class LiquidityManager(val config: LiquidityManagerConfig,
                        val exchangeConfig: ExchangeConfig,
                        val tradePairs: Set[TradePair],
-                       val tpData: ExchangePublicDataReadonly,
+                       val publicData: ExchangePublicDataReadonly,
                        val wallet: Wallet,
                        val tradeRoom: ActorRef,
                        val findOpenLiquidityTx: (LiquidityTx => Boolean) => Option[LiquidityTx],
@@ -208,35 +245,17 @@ class LiquidityManager(val config: LiquidityManagerConfig,
       .amount
   }
 
-  /**
-   * Gives back a rating for trading a amount on that tradepair on the local exchange - compared to reference ticker
-   * Ratings can be interpreted as a percentage of the local limit needed to fulfill a local trade compared to the reference ticker.
-   * A result rate > 0 indicates a positive rating - being better than the reference ticker, a negative rate the opposite
-   */
-  def localExchangeRateRating(tradePair: TradePair, tradeSide: TradeSide, amountBaseAsset:Double): Double = {
-    val localLimit: Double = determineRealisticLimit(tradePair, tradeSide, amountBaseAsset)
-    val referenceTickerPrice: Option[Double] = referenceTicker().get(tradePair).map(_.priceEstimate)
-    referenceTickerPrice match {
-      case Some(referencePrice) => tradeSide match {
-        case TradeSide.Buy => 1.0 - localLimit / referencePrice // 1 - x/R
-        case TradeSide.Sell => localLimit / referencePrice - 1.0 // x/R - 1
-      }
-      case None => 0.0 // we can not judge it, because no reference ticker available
-    }
-  }
-
-
   def determineRealisticLimit(tradePair: TradePair, tradeSide: TradeSide, amountBaseAsset: Double): Double = {
-    new OrderLimitChooser(tpData.orderBook.get(tradePair), tpData.ticker(tradePair))
-      .determineRealisticOrderLimit(tradeSide, amountBaseAsset, config.txLimitAwayFromEdgeLimit) match {
-      case Some(limit) => limit
-      case None => throw new OrderBookTooFlatException(tradePair, tradeSide)
-    }
+    LiquidityManager.determineRealisticLimit(publicData.orderBook, publicData.ticker, tradePair, tradeSide, amountBaseAsset, config.txLimitAwayFromEdgeLimit)
+  }
+
+  def localExchangeRateRating(tradePair: TradePair, tradeSide: TradeSide, amountBaseAsset: Double): Double = {
+    LiquidityManager.localExchangeRateRating(publicData.orderBook, publicData.ticker, referenceTicker(), tradePair, tradeSide, amountBaseAsset, config.txLimitAwayFromEdgeLimit)
   }
 
   /**
-   * Try to find an order to place for satisfying the demanded value
-   * If that order was found and placed, the expected incoming value is returned, otherwise None is returned
+   * Try to find the optimal order to place, for satisfying the demanded value from a reserve asset.
+   * If that one was found and placed, the expected incoming value is returned, otherwise None is returned
    */
   def tryToPlaceALiquidityProvidingOrder(demand: UniqueDemand): Option[CryptoValue] = {
     val bestReserveAssets: Option[Tuple2[Asset, Double]] =
@@ -259,6 +278,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
       val limit = determineRealisticLimit(tradePair, TradeSide.Buy, orderAmount)
       val orderRequest = OrderRequest(UUID.randomUUID(), None, exchangeConfig.exchangeName, tradePair, TradeSide.Buy, exchangeConfig.fee, orderAmount, limit)
 
+      log.info(s"${Emoji.Robot}  placing liquidity providing order: ${orderRequest.shortDesc}")
       tradeRoom ! LiquidityTransformationOrder(orderRequest)
 
       Some(CryptoValue(tradePair.baseAsset, orderAmount))
@@ -296,8 +316,8 @@ class LiquidityManager(val config: LiquidityManagerConfig,
           .filter(e => exchangeConfig.reserveAssets.contains(e._1))
           .filterNot(e => exchangeConfig.doNotTouchTheseAssets.contains(e._1))
           .filterNot(_._1.isFiat)
-          .filter(_._1.canConvertTo(USDT, tpData.ticker))
-          .map(e => (e, CryptoValue(e._1, e._2.amountAvailable).convertTo(USDT, tpData.ticker))) // + USDT value - we expect we can convert a reserve asset to USDT always
+          .filter(_._1.canConvertTo(USDT, publicData.ticker))
+          .map(e => (e, CryptoValue(e._1, e._2.amountAvailable).convertTo(USDT, publicData.ticker))) // + USDT value - we expect we can convert a reserve asset to USDT always
           .filter(e => e._2.amount < config.minimumKeepReserveLiquidityPerAssetInUSDT) // value below minimum asset liquidity value
           .map(_._1._1)
           .toSet
@@ -319,7 +339,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
   def convertBackToReserveAsset(coins: CryptoValue): Option[CryptoValue] = {
     val possibleReserveAssets: List[Tuple2[Asset, Double]] =
       exchangeConfig.reserveAssets
-        .filter(e => tpData.ticker.contains(TradePair(coins.asset, e))) // filter available TradePairs only (with a local ticker)
+        .filter(e => publicData.ticker.contains(TradePair(coins.asset, e))) // filter available TradePairs only (with a local ticker)
         .map(e => (e, localExchangeRateRating(TradePair(coins.asset, e), TradeSide.Sell, coins.amount))) // add local exchange rate rating
 
     val availableReserveAssets: List[Tuple2[Asset, Double]] =
@@ -394,8 +414,8 @@ class LiquidityManager(val config: LiquidityManagerConfig,
               .sum
           )))
         .filter(_._2 > 0.0) // remove empty values
-        .filter(_._1.canConvertTo(USDT, tpData.ticker))
-        .map(e => (e._1, e._2, CryptoValue(e._1, e._2).convertTo(USDT, tpData.ticker))) // join USDT value
+        .filter(_._1.canConvertTo(USDT, publicData.ticker))
+        .map(e => (e._1, e._2, CryptoValue(e._1, e._2).convertTo(USDT, publicData.ticker))) // join USDT value
         .filter(e => e._3.amount >= config.dustLevelInUsdt) // ignore values below the dust level
         .map(e => (e._1, e._2))
         .toMap
@@ -426,7 +446,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
         .groupBy(_.asset)
         .map(e => CryptoValue(e._1, e._2.map(_.amount).sum))
 
-    val unableToConvert = virtualReserveAssetsAggregated.filter(e => !e.canConvertTo(USDT, tpData.ticker))
+    val unableToConvert = virtualReserveAssetsAggregated.filter(e => !e.canConvertTo(USDT, publicData.ticker))
     if (unableToConvert.nonEmpty) {
       log.warn(s"${Emoji.EyeRoll}  Some reserve assets cannot be judged, because we cannot convert them to USDT, so no liquidity transformation is possible for them: $unableToConvert")
     }
@@ -435,14 +455,14 @@ class LiquidityManager(val config: LiquidityManagerConfig,
 
     // all reserve assets, that need more value : Map(Asset -> liquidity buckets missing)
     var liquiditySinkBuckets: Map[Asset, Int] = virtualReserveAssetsAggregated
-      .filter(_.canConvertTo(USDT, tpData.ticker))
+      .filter(_.canConvertTo(USDT, publicData.ticker))
       .map(e => (e.asset, e.convertTo(USDT, referenceTicker()).amount)) // amount in USDT
       .filter(_._2 < config.minimumKeepReserveLiquidityPerAssetInUSDT) // below min keep amount?
       .map(e => (e._1, ((config.minimumKeepReserveLiquidityPerAssetInUSDT - e._2) / config.rebalanceTxGranularityInUSDT).ceil.toInt)) // buckets needed
       .toMap
     // all reserve assets, that have extra liquidity to distribute : Map(Asset -> liquidity buckets available for distribution)
     var liquiditySourcesBuckets: Map[Asset, Int] = currentReserveAssetsBalance // we can take coin only from currently really existing balance
-      .filter(_.canConvertTo(USDT, tpData.ticker))
+      .filter(_.canConvertTo(USDT, publicData.ticker))
       .map(e => (e.asset, e.convertTo(USDT, referenceTicker()).amount)) // amount in USDT
       // having more than the minimum limit + 150% tx-granularity (to avoid useless there-and-back transfers because of exchange rate fluctuations)
       .filter(_._2 >= config.minimumKeepReserveLiquidityPerAssetInUSDT + config.rebalanceTxGranularityInUSDT * 1.5)
@@ -501,19 +521,19 @@ class LiquidityManager(val config: LiquidityManagerConfig,
         val tx: OrderRequest =
           TradePair(sinkAsset, sourceAsset.get) match {
 
-            case tp if tpData.ticker.contains(tp) =>
+            case tp if publicData.ticker.contains(tp) =>
               val tradePair = tp
               val tradeSide = TradeSide.Buy
-              val baseAssetBucketValue: Double = CryptoValue(USDT, config.rebalanceTxGranularityInUSDT).convertTo(tradePair.baseAsset, tpData.ticker).amount
+              val baseAssetBucketValue: Double = CryptoValue(USDT, config.rebalanceTxGranularityInUSDT).convertTo(tradePair.baseAsset, publicData.ticker).amount
               val orderAmountBaseAsset = bucketsToTransfer * baseAssetBucketValue
               val limit = determineRealisticLimit(tradePair, tradeSide, orderAmountBaseAsset)
               OrderRequest(UUID.randomUUID(), None, exchangeConfig.exchangeName, tradePair, tradeSide, exchangeConfig.fee, orderAmountBaseAsset, limit)
 
-            case tp if tpData.ticker.contains(tp.reverse) =>
+            case tp if publicData.ticker.contains(tp.reverse) =>
               val tradePair = tp.reverse
               val tradeSide = TradeSide.Sell
-              val quoteAssetBucketValue: Double = CryptoValue(USDT, config.rebalanceTxGranularityInUSDT).convertTo(tradePair.quoteAsset, tpData.ticker).amount
-              val amountBaseAssetEstimate = bucketsToTransfer * quoteAssetBucketValue / tpData.ticker(tradePair).priceEstimate
+              val quoteAssetBucketValue: Double = CryptoValue(USDT, config.rebalanceTxGranularityInUSDT).convertTo(tradePair.quoteAsset, publicData.ticker).amount
+              val amountBaseAssetEstimate = bucketsToTransfer * quoteAssetBucketValue / publicData.ticker(tradePair).priceEstimate
               val limit = determineRealisticLimit(tradePair, tradeSide, amountBaseAssetEstimate)
               val orderAmountBaseAsset = bucketsToTransfer * quoteAssetBucketValue / limit
               OrderRequest(UUID.randomUUID(), None, exchangeConfig.exchangeName, tradePair, tradeSide, exchangeConfig.fee, orderAmountBaseAsset, limit)
@@ -570,7 +590,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
         tradeRoom ! LiquidityTransformationOrder(o)
       }
     } catch {
-      case e:OrderBookTooFlatException =>
+      case e: OrderBookTooFlatException =>
         log.warn(s"[to be improved] Cannot perform liquidity housekeeping on ${exchangeConfig.exchangeName} because the order book of tradepair ${e.tradePair} was too flat")
     }
   }

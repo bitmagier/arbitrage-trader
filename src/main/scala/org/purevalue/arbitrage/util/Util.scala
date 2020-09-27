@@ -3,7 +3,6 @@ package org.purevalue.arbitrage.util
 import java.text.{DecimalFormat, DecimalFormatSymbols}
 import java.util.Locale
 
-import akka.parboiled2.RuleTrace.NotPredicate.Base
 import org.purevalue.arbitrage.traderoom.CryptoValue
 
 object Util {

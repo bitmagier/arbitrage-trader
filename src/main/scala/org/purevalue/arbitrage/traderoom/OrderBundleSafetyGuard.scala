@@ -5,6 +5,8 @@ import java.time.{Duration, Instant}
 import org.purevalue.arbitrage.adapter.PublicDataTimestamps
 import org.purevalue.arbitrage.traderoom.Asset.USDT
 import org.purevalue.arbitrage.traderoom.TradeRoom.{ActiveOrderBundlesReadonly, TradeContext}
+import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager
+import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.OrderBookTooFlatException
 import org.purevalue.arbitrage.util.Emoji
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.{ExchangeConfig, OrderBundleSafetyGuardConfig}
@@ -25,6 +27,7 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
                              val dataAge: collection.Map[String, PublicDataTimestamps],
                              val activeOrderBundles: ActiveOrderBundlesReadonly) {
   private val log = LoggerFactory.getLogger(classOf[OrderBundleSafetyGuard])
+  private var warningAlreadyWritten: Set[String] = Set()
   private var stats: Map[SafetyGuardDecision, Int] = Map()
 
   def unsafeStats: Map[SafetyGuardDecision, Int] = stats
@@ -69,7 +72,7 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
    *
    * It is possible to use different Liquidity reserve assets for different involved assets/trades
    */
-  def balanceOfLiquidityTransformationCompensationTransactionsInUSDT(t: OrderRequestBundle): Option[Double] = {
+  private def balanceOfLiquidityTransformationCompensationTransactionsInUSDT(t: OrderRequestBundle): Option[Double] = {
     val involvedAssetsPerExchange: Map[String, Set[Asset]] =
       t.orderRequests
         .groupBy(_.exchange)
@@ -100,21 +103,47 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
         .map(_.calcIncomingLiquidity)
         .filterNot(e => exchangesConfig(e.exchange).reserveAssets.contains(e.asset))
 
-    def findUsableReserveAsset(exchange: String, coin: Asset, possibleReserveAssets: Set[Asset]): Option[Asset] = {
-      possibleReserveAssets.find(r => tc.tickers(exchange).contains(TradePair(coin, r)))
+    def findBestReserveAssetToProvide(exchange: String, assetToProvide: Asset, amountToProvide: Double, availableReserveAssets: Set[Asset]): Option[Asset] = {
+      val usableReserveAssets = availableReserveAssets.filter(r => tc.tradePairs(exchange).contains(TradePair(assetToProvide, r)))
+      var reserveAssetRatings: Map[Asset, Double] = Map()
+      for (r <- usableReserveAssets) {
+        try {
+          val rating = LiquidityManager.localExchangeRateRating(
+            tc.orderBooks(exchange),
+            tc.tickers(exchange),
+            tc.referenceTicker,
+            TradePair(assetToProvide, r),
+            TradeSide.Buy, // TODO [later, maybe] try other way around too - also in LiquidityManager
+            amountToProvide,
+            config.txLimitAwayFromEdgeLimit,
+          )
+          reserveAssetRatings = reserveAssetRatings + (r -> rating)
+        } catch {
+          case e: OrderBookTooFlatException => // so cannot use that reserve asset
+        }
+      }
+
+      if (reserveAssetRatings.isEmpty) None
+      else Some(reserveAssetRatings.maxBy(_._2)._1)
     }
 
     val unableToProvideConversionForCoin: Option[LocalCryptoValue] = {
-      (toProvide ++ toConvertBack).find(v => findUsableReserveAsset(v.exchange, v.asset, uninvolvedReserveAssetsPerExchange(v.exchange)).isEmpty)
+      (toProvide ++ toConvertBack).find(v => findBestReserveAssetToProvide(v.exchange, v.asset, v.amount, uninvolvedReserveAssetsPerExchange(v.exchange)).isEmpty)
     }
     if (unableToProvideConversionForCoin.isDefined) {
-      log.warn(s"${Emoji.EyeRoll}  Sorry, no suitable reserve asset found to support reserve liquidity conversion from/to ${unableToProvideConversionForCoin.get.asset} on ${unableToProvideConversionForCoin.get.exchange}. Concerns $t")
+      val msg = s"${Emoji.EyeRoll}  Sorry, no suitable reserve asset found to support reserve liquidity conversion from/to ${unableToProvideConversionForCoin.get.asset} on ${unableToProvideConversionForCoin.get.exchange}."
+      if (!warningAlreadyWritten.contains(msg)) {
+        log.warn(s"${Emoji.EyeRoll}  Sorry, no suitable reserve asset found to support reserve liquidity conversion from/to ${unableToProvideConversionForCoin.get.asset} on ${unableToProvideConversionForCoin.get.exchange}.")
+        log.debug(s"^^^ Regarding $t")
+        warningAlreadyWritten = warningAlreadyWritten + msg
+      }
       return None
     }
 
     val transactions: Iterable[OrderRequest] =
       toProvide.map(e => {
-        val tradePair = TradePair(e.asset, findUsableReserveAsset(e.exchange, e.asset, uninvolvedReserveAssetsPerExchange(e.exchange)).get)
+        val reserveAsset = findBestReserveAssetToProvide(e.exchange, e.asset, e.amount, uninvolvedReserveAssetsPerExchange(e.exchange)).get
+        val tradePair = TradePair(e.asset, reserveAsset)
         OrderRequest(null, null,
           e.exchange,
           tradePair,
@@ -124,7 +153,8 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
           tc.tickers(e.exchange)(tradePair).priceEstimate
         )
       }) ++ toConvertBack.map(e => {
-        val tradePair = TradePair(e.asset, findUsableReserveAsset(e.exchange, e.asset, uninvolvedReserveAssetsPerExchange(e.exchange)).get)
+        val reserveAsset = findBestReserveAssetToProvide(e.exchange, e.asset, e.amount, uninvolvedReserveAssetsPerExchange(e.exchange)).get
+        val tradePair = TradePair(e.asset, reserveAsset)
         OrderRequest(null, null,
           e.exchange,
           tradePair,
@@ -146,7 +176,7 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
 
 
   // returns decision-result and the total win in case the decision-result is true
-  def totalTransactionsWinInRage(t: OrderRequestBundle): (Boolean, Option[Double]) = {
+  private def totalTransactionsWinInRage(t: OrderRequestBundle): (Boolean, Option[Double]) = {
     val b: Option[Double] = balanceOfLiquidityTransformationCompensationTransactionsInUSDT(t)
     if (b.isEmpty) return (false, None)
     if ((t.bill.sumUSDTAtCalcTime + b.get) < config.minTotalGainInUSDT) {
@@ -156,22 +186,8 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
     } else (true, Some(t.bill.sumUSDTAtCalcTime))
   }
 
-  // ^^^ TODO instead of taking only the first possible one, better try all alternatives of reserve liquidity asset conversion before giving up here
-
-
-  // returns decision result and the total win. in case of a positive decision result
-  def isSafe(bundle: OrderRequestBundle): (Boolean, Option[Double]) = {
-    _isSafe(bundle) match {
-      case (result, reason, win) =>
-        this.synchronized {
-          stats = stats + (reason -> (stats.getOrElse(reason, 0) + 1))
-        }
-        (result, win)
-    }
-  }
-
   // reject OrderBundles, when there is another active order of the same exchange+tradepair still active
-  def sameTradePairOrdersStillActive(bundle: OrderRequestBundle): Boolean = {
+  private def sameTradePairOrdersStillActive(bundle: OrderRequestBundle): Boolean = {
     val activeExchangeOrderPairs: Set[(String, TradePair)] = activeOrderBundles.values
       .flatMap(_.ordersRefs.map(o =>
         (o.exchange, o.tradePair))).toSet
@@ -208,6 +224,15 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
       else (true, Okay, r._2)
     }
   }
-}
 
-// TODO check if enough trading volume (or order book entries) are available to fulfill our trade plan
+  // returns decision result and the total win. in case of a positive decision result
+  def isSafe(bundle: OrderRequestBundle): (Boolean, Option[Double]) = {
+    _isSafe(bundle) match {
+      case (result, reason, win) =>
+        this.synchronized {
+          stats = stats + (reason -> (stats.getOrElse(reason, 0) + 1))
+        }
+        (result, win)
+    }
+  }
+}

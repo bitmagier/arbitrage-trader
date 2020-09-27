@@ -6,7 +6,7 @@ import akka.util.Timeout
 import org.purevalue.arbitrage.adapter._
 import org.purevalue.arbitrage.traderoom.Asset.{Bitcoin, USDT}
 import org.purevalue.arbitrage.traderoom.TradeRoom.{ConcurrentMap, OrderRef}
-import org.purevalue.arbitrage.traderoom.TradeRoomInitializer.InitializedTradeRoom
+import org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator.InitializedTradeRoom
 import org.purevalue.arbitrage.traderoom.exchange.Exchange
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.{GetTradePairs, RemoveTradePair, StartStreaming}
 import org.purevalue.arbitrage.util.Emoji
@@ -17,14 +17,14 @@ import scala.collection.concurrent.TrieMap
 import scala.concurrent.Await
 import scala.concurrent.duration.DurationInt
 
-object TradeRoomInitializer {
+object TradeRoomInitCoordinator {
   case class InitializedTradeRoom(tradeRoom: ActorRef)
-  def props(config: Config, parent: ActorRef): Props = Props(new TradeRoomInitializer(config, parent))
+  def props(config: Config, parent: ActorRef): Props = Props(new TradeRoomInitCoordinator(config, parent))
 }
-class TradeRoomInitializer(val config: Config,
-                           val parent: ActorRef) extends Actor {
+class TradeRoomInitCoordinator(val config: Config,
+                               val parent: ActorRef) extends Actor {
 
-  private val log = LoggerFactory.getLogger(classOf[TradeRoomInitializer])
+  private val log = LoggerFactory.getLogger(classOf[TradeRoomInitCoordinator])
 
   // @formatter:off
   var tradePairs:   Map[String, Set[TradePair]] = Map()

@@ -1,8 +1,8 @@
 package org.purevalue.arbitrage
 
 import akka.actor.SupervisorStrategy.Restart
-import akka.actor.{Actor, ActorRef, ActorSystem, OneForOneStrategy, Props, Status}
-import org.purevalue.arbitrage.traderoom.TradeRoomInitializer
+import akka.actor.{Actor, ActorRef, ActorSystem, AllForOneStrategy, Props, Status}
+import org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator
 import org.slf4j.{Logger, LoggerFactory}
 
 import scala.concurrent.duration.DurationInt
@@ -14,22 +14,31 @@ object RootGuardian {
 class RootGuardian(val config: Config) extends Actor {
   private val log: Logger = LoggerFactory.getLogger(classOf[RootGuardian])
 
-  var initCoordinator: ActorRef = _
+  val tradeRoomInitCoordinator: ActorRef = context.actorOf(TradeRoomInitCoordinator.props(config, self), "TradeRoomInitCoordinator")
   var tradeRoom: ActorRef = _
 
-  override val supervisorStrategy: OneForOneStrategy = {
-    OneForOneStrategy(maxNrOfRetries = 5, withinTimeRange = 20.minutes, loggingEnabled = true) {
-      case _ => Restart
-    }
-  }
+  /*
+  From Akka 2.5 Documentation:
 
-  override def preStart(): Unit = {
-    initCoordinator = context.actorOf(TradeRoomInitializer.props(config, self), "TradeRoomInitCoordinator")
+  The precise sequence of events during a restart is the following:
+
+  - suspend the actor (which means that it will not process normal messages until resumed), and recursively suspend all children
+  - call the old instance’s preRestart hook (defaults to sending termination requests to all children and calling postStop)
+  - wait for all children which were requested to terminate (using context.stop()) during preRestart to actually terminate; this—like all actor operations—is non-blocking, the termination notice from the last killed child will effect the progression to the next step
+  - create new actor instance by invoking the originally provided factory again
+  - invoke postRestart on the new instance (which by default also calls preStart)
+  - send restart request to all children which were not killed in step 3; restarted children will follow the same process recursively, from step 2
+  - resume the actor
+*/
+  override val supervisorStrategy: AllForOneStrategy = {
+    AllForOneStrategy(maxNrOfRetries = 5, withinTimeRange = 20.minutes, loggingEnabled = true) {
+      case _:Throwable => Restart
+    }
   }
 
   override def receive: Receive = {
     // @formatter:off
-    case TradeRoomInitializer.InitializedTradeRoom(tradeRoom) => this.tradeRoom = tradeRoom
+    case TradeRoomInitCoordinator.InitializedTradeRoom(tradeRoom) => this.tradeRoom = tradeRoom
     case Status.Failure(cause)                                    => log.error("received failure", cause)
     // @formatter:on
   }
