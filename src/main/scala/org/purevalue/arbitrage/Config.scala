@@ -12,7 +12,8 @@ import scala.collection.JavaConverters._
 import scala.concurrent.duration.FiniteDuration
 
 case class SecretsConfig(apiKey: String,
-                         apiSecretKey: String)
+                         apiSecretKey: String,
+                         apiKeyPassphrase: Option[String])
 
 case class ExchangeConfig(exchangeName: String,
                           secrets: SecretsConfig,
@@ -47,7 +48,8 @@ object ExchangeConfig {
 
   private def secretsConfig(c: com.typesafe.config.Config) = SecretsConfig(
     c.getString("api-key"),
-    c.getString("api-secret-key")
+    c.getString("api-secret-key"),
+    if (c.getConfig("api-key-passphrase").isEmpty) None else Some(c.getString("api-key-passphrase"))
   )
 }
 

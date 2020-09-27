@@ -74,8 +74,8 @@ class BinancePublicDataInquirer(globalConfig: GlobalConfig,
   implicit val system: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = system.dispatcher
 
-  private var exchangeInfo: RawBinanceExchangeInformationJson = _
-  private var binanceTradePairs: Set[BinanceTradePair] = _
+  var exchangeInfo: RawBinanceExchangeInformationJson = _
+  var binanceTradePairs: Set[BinanceTradePair] = _
 
   def tradePairs: Set[TradePair] = binanceTradePairs.map(_.toTradePair)
 

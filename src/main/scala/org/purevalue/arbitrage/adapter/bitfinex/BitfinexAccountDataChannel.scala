@@ -13,12 +13,14 @@ import akka.util.Timeout
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager._
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexAccountDataChannel.{Connect, OnStreamsRunning}
+import org.purevalue.arbitrage.adapter.bitfinex.BitfinexHttpUtil.httpRequestJsonBitfinexAccount
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexOrderUpdateJson.{toOrderStatus, toOrderType}
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.{GetBitfinexAssets, GetBitfinexTradePairs}
 import org.purevalue.arbitrage.adapter.{Balance, ExchangeAccountStreamData, WalletAssetUpdate}
 import org.purevalue.arbitrage.traderoom._
-import org.purevalue.arbitrage.util.Util.formatDecimal
-import org.purevalue.arbitrage.util.{HttpUtil, WrongAssumption}
+import org.purevalue.arbitrage.util.HttpUtil.hmacSha384Signature
+import org.purevalue.arbitrage.util.Util.{convertBytesToLowerCaseHex, formatDecimal}
+import org.purevalue.arbitrage.util.{HttpUtil, Util, WrongAssumption}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsNumber, JsObject, JsString, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
@@ -424,7 +426,7 @@ class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
     val authPayload = "AUTH" + authNonce
     BitfinexAuthMessage(
       apiKey = exchangeConfig.secrets.apiKey,
-      HttpUtil.hmacSha384Signature(authPayload, exchangeConfig.secrets.apiSecretKey),
+      convertBytesToLowerCaseHex(hmacSha384Signature(authPayload, exchangeConfig.secrets.apiSecretKey.getBytes)),
       authNonce,
       authPayload,
       filter = Vector("trading", "trading-tBTCUSD", "wallet", "wallet-exchange-BTC", "balance", "notify")
@@ -510,7 +512,7 @@ class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
     if (o.amountBaseAsset < 0.0) throw new WrongAssumption("our order amount is not positive")
 
     val requestBody = toSubmitLimitOrderJson(o, tp => bitfinexTradePairByTradePair(tp).apiSymbol, exchangeConfig.refCode).toJson.compactPrint
-    HttpUtil.httpRequestJsonBitfinexAccount[SubmitOrderResponseJson, JsValue](
+    httpRequestJsonBitfinexAccount[SubmitOrderResponseJson, JsValue](
       HttpMethods.POST,
       s"$BaseRestEndpoint/v2/auth/w/order/submit",
       Some(requestBody),
@@ -533,7 +535,7 @@ class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
     import BitfinexAccountDataJsonProtocoll._
 
     val requestBody = JsObject("id" -> JsNumber(externalOrderId))
-    HttpUtil.httpRequestJsonBitfinexAccount[CancelOrderResponseJson, JsValue](
+    httpRequestJsonBitfinexAccount[CancelOrderResponseJson, JsValue](
       HttpMethods.POST,
       s"$BaseRestEndpoint/v2/auth/w/order/cancel",
       Some(requestBody.compactPrint),

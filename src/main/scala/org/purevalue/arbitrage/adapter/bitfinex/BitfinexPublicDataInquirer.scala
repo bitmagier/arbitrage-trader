@@ -33,8 +33,8 @@ object BitfinexPublicDataInquirer {
 class BitfinexPublicDataInquirer(globalConfig: GlobalConfig,
                                  exchangeConfig: ExchangeConfig) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BitfinexPublicDataInquirer])
-  implicit val system: ActorSystem = Main.actorSystem
-  implicit val executor: ExecutionContextExecutor = system.dispatcher
+  private implicit val system: ActorSystem = Main.actorSystem
+  private implicit val executor: ExecutionContextExecutor = system.dispatcher
 
   val BaseRestEndpointPublic = "https://api-pub.bitfinex.com"
 

@@ -23,12 +23,48 @@ import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor, Future, Promise}
 import scala.util.{Failure, Success}
 
+
+case class StreamSubscribeRequestJson(method: String = "SUBSCRIBE", params: Seq[String], id: Int)
+
+trait IncomingPublicBinanceJson
+
+case class RawBookTickerRestJson(symbol: String,
+                                 bidPrice: String,
+                                 bidQty: String,
+                                 askPrice: String,
+                                 askQty: String) extends IncomingPublicBinanceJson {
+  def toTicker(exchange: String, resolveSymbol: String => TradePair): Ticker = {
+    adapter.Ticker(exchange, resolveSymbol(symbol), bidPrice.toDouble, Some(bidQty.toDouble), askPrice.toDouble, Some(askQty.toDouble), None)
+  }
+}
+
+case class RawBookTickerStreamJson(u: Long, // order book updateId
+                                   s: String, // symbol
+                                   b: String, // best bid price
+                                   B: String, // best bid quantity
+                                   a: String, // best ask price
+                                   A: String // best ask quantity
+                                  ) extends IncomingPublicBinanceJson {
+  def toTicker(exchange: String, resolveSymbol: String => TradePair): Ticker =
+    adapter.Ticker(exchange, resolveSymbol(s), b.toDouble, Some(B.toDouble), a.toDouble, Some(A.toDouble), None)
+}
+
+object WebSocketJsonProtocol extends DefaultJsonProtocol {
+  implicit val subscribeMsg: RootJsonFormat[StreamSubscribeRequestJson] = jsonFormat3(StreamSubscribeRequestJson)
+  implicit val rawBookTickerRest: RootJsonFormat[RawBookTickerRestJson] = jsonFormat5(RawBookTickerRestJson)
+  implicit val rawBookTickerStream: RootJsonFormat[RawBookTickerStreamJson] = jsonFormat6(RawBookTickerStreamJson)
+}
+
+
 object BinancePublicDataChannel {
   private case class Connect()
   private case class OnStreamsRunning()
 
-  def props(globalConfig: GlobalConfig, exchangeConfig: ExchangeConfig, publicDataManager: ActorRef, binancePublicDataChannel: ActorRef): Props =
-    Props(new BinancePublicDataChannel(globalConfig, exchangeConfig, publicDataManager, binancePublicDataChannel))
+  def props(globalConfig: GlobalConfig,
+            exchangeConfig: ExchangeConfig,
+            publicDataManager: ActorRef,
+            binancePublicDataInquirer: ActorRef): Props =
+    Props(new BinancePublicDataChannel(globalConfig, exchangeConfig, publicDataManager, binancePublicDataInquirer))
 }
 /**
  * Binance TradePair-based data channel
@@ -111,7 +147,7 @@ class BinancePublicDataChannel(globalConfig: GlobalConfig,
       Future.successful(Nil)
   }
 
-  def subscribeMessages: List[StreamSubscribeRequestJson] = List(
+  val SubscribeMessages: List[StreamSubscribeRequestJson] = List(
     StreamSubscribeRequestJson(params = Seq(BookTickerStreamName), id = IdBookTickerStream),
   )
 
@@ -126,7 +162,7 @@ class BinancePublicDataChannel(globalConfig: GlobalConfig,
           .pipeTo(publicDataManager)
       ),
       Source(
-        subscribeMessages.map(msg => TextMessage(msg.toJson.compactPrint))
+        SubscribeMessages.map(msg => TextMessage(msg.toJson.compactPrint))
       ).concatMat(Source.maybe[Message])(Keep.right))(Keep.right)
   }
 
@@ -204,37 +240,6 @@ class BinancePublicDataChannel(globalConfig: GlobalConfig,
     case Status.Failure(cause) => log.error("received failure", cause)
   }
   // @formatter:on
-}
-
-case class StreamSubscribeRequestJson(method: String = "SUBSCRIBE", params: Seq[String], id: Int)
-
-trait IncomingPublicBinanceJson
-
-case class RawBookTickerRestJson(symbol: String,
-                                 bidPrice: String,
-                                 bidQty: String,
-                                 askPrice: String,
-                                 askQty: String) extends IncomingPublicBinanceJson {
-  def toTicker(exchange: String, resolveSymbol: String => TradePair): Ticker = {
-    adapter.Ticker(exchange, resolveSymbol(symbol), bidPrice.toDouble, Some(bidQty.toDouble), askPrice.toDouble, Some(askQty.toDouble), None)
-  }
-}
-
-case class RawBookTickerStreamJson(u: Long, // order book updateId
-                                   s: String, // symbol
-                                   b: String, // best bid price
-                                   B: String, // best bid quantity
-                                   a: String, // best ask price
-                                   A: String // best ask quantity
-                                  ) extends IncomingPublicBinanceJson {
-  def toTicker(exchange: String, resolveSymbol: String => TradePair): Ticker =
-    adapter.Ticker(exchange, resolveSymbol(s), b.toDouble, Some(B.toDouble), a.toDouble, Some(A.toDouble), None)
-}
-
-object WebSocketJsonProtocol extends DefaultJsonProtocol {
-  implicit val subscribeMsg: RootJsonFormat[StreamSubscribeRequestJson] = jsonFormat3(StreamSubscribeRequestJson)
-  implicit val rawBookTickerRest: RootJsonFormat[RawBookTickerRestJson] = jsonFormat5(RawBookTickerRestJson)
-  implicit val rawBookTickerStream: RootJsonFormat[RawBookTickerStreamJson] = jsonFormat6(RawBookTickerStreamJson)
 }
 
 // A single connection to stream.binance.com is only valid for 24 hours; expect to be disconnected at the 24 hour mark
