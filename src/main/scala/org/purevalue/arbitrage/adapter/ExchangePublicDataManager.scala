@@ -2,7 +2,8 @@ package org.purevalue.arbitrage.adapter
 
 import java.time.Instant
 
-import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, Props, Status}
+import akka.actor.SupervisorStrategy.Restart
+import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, OneForOneStrategy, Props, Status}
 import org.purevalue.arbitrage.adapter.ExchangePublicDataManager._
 import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.ExchangePublicDataChannelInit
@@ -64,7 +65,7 @@ case class OrderBook(exchange: String,
   def lowestAsk: Ask = asks(asks.keySet.min)
 }
 
-case class OrderBookUpdate(exchange:String,
+case class OrderBookUpdate(exchange: String,
                            tradePair: TradePair,
                            bidUpdates: List[Bid], // quantity == 0.0 means: remove position from our OrderBook
                            askUpdates: List[Ask]) extends ExchangePublicStreamData
@@ -117,6 +118,7 @@ case class ExchangePublicDataManager(globalConfig: GlobalConfig,
   private val initCheckSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(1.seconds, 1.seconds, self, InitTimeoutCheck())
 
   private var tickerCompletelyInitialized: Boolean = false
+
   def onTickerUpdate(): Unit = {
     if (!tickerCompletelyInitialized) {
       tickerCompletelyInitialized = tradePairs.subsetOf(publicData.ticker.keySet)
@@ -125,7 +127,6 @@ case class ExchangePublicDataManager(globalConfig: GlobalConfig,
       }
     }
   }
-
 
   private def applyDataset(data: Seq[ExchangePublicStreamData]): Unit = {
     data.foreach {
@@ -161,6 +162,12 @@ case class ExchangePublicDataManager(globalConfig: GlobalConfig,
         log.info(s"Init timeout -> killing actor")
         self ! Kill
       }
+    }
+  }
+
+  override val supervisorStrategy: OneForOneStrategy = {
+    OneForOneStrategy(maxNrOfRetries = 6, withinTimeRange = 30.minutes, loggingEnabled = true) {
+      case _: Throwable => Restart
     }
   }
 

@@ -3,7 +3,7 @@ package org.purevalue.arbitrage.adapter.bitfinex
 import java.time.Instant
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, PoisonPill, Props}
+import akka.actor.{Actor, ActorRef, ActorSystem, Kill, PoisonPill, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{HttpMethods, StatusCodes, Uri}
@@ -480,7 +480,7 @@ class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
     ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow)
     ws._2.future.onComplete { e =>
       log.info(s"connection closed: ${e.get}")
-      self ! PoisonPill
+      self ! Kill // trigger restart
     }
     connected = createConnected
   }

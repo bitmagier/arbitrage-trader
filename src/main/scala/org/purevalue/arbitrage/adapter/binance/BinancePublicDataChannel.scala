@@ -1,7 +1,7 @@
 package org.purevalue.arbitrage.adapter.binance
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, PoisonPill, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Kill, PoisonPill, Props, Status}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{StatusCodes, Uri}
@@ -156,7 +156,7 @@ class BinancePublicDataChannel(globalConfig: GlobalConfig,
     ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow)
     ws._2.future.onComplete{e =>
       log.info(s"connection closed: ${e.get}")
-      self ! PoisonPill
+      self ! Kill // trigger restart
     }
     connected = createConnected
   }
