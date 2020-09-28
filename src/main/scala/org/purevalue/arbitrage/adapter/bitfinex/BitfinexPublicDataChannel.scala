@@ -340,7 +340,6 @@ class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
     futureResponse.flatMap {
       upgrade =>
         if (upgrade.response.status == StatusCodes.SwitchingProtocols) {
-          if (log.isTraceEnabled) log.trace("WebSocket connected")
           Future.successful(Done)
         } else {
           throw new RuntimeException(s"Connection failed: ${upgrade.response.status}")
@@ -375,6 +374,7 @@ class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
       wsList = ws :: wsList
       connectedList = createConnected(ws._1) :: connectedList
     }
+    log.info(s"${wsList.size} WebSockets connected")
   }
 
   def initBitfinexTradePairBySymbol(): Unit = {

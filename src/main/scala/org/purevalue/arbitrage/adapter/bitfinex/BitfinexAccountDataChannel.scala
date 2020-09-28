@@ -450,7 +450,6 @@ class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
   def createConnected: Future[Done.type] =
     ws._1.flatMap { upgrade =>
       if (upgrade.response.status == StatusCodes.SwitchingProtocols) {
-        if (log.isTraceEnabled) log.trace("WebSocket connected")
         Future.successful(Done)
       } else {
         throw new RuntimeException(s"Connection failed: ${upgrade.response.status}")
@@ -483,6 +482,7 @@ class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
       self ! Kill // trigger restart
     }
     connected = createConnected
+    log.info("WebSocket connected")
   }
 
   def newLimitOrder(o: OrderRequest): Future[NewOrderAck] = {

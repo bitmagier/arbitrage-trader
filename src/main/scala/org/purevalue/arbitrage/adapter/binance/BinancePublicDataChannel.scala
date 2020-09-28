@@ -143,7 +143,6 @@ class BinancePublicDataChannel(globalConfig: GlobalConfig,
   def createConnected: Future[Done.type] =
     ws._1.flatMap { upgrade =>
       if (upgrade.response.status == StatusCodes.SwitchingProtocols) {
-        if (log.isTraceEnabled) log.trace("WebSocket connected")
         Future.successful(Done)
       } else {
         throw new RuntimeException(s"Connection failed: ${upgrade.response.status}")
@@ -159,6 +158,7 @@ class BinancePublicDataChannel(globalConfig: GlobalConfig,
       self ! Kill // trigger restart
     }
     connected = createConnected
+    log.info("WebSocket connected")
   }
 
   // to disconnect:
