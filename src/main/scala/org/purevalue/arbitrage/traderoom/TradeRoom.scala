@@ -347,7 +347,9 @@ class TradeRoom(val config: Config,
 
     clearLockedLiquidity(bundle.lockedLiquidity)
 
-    if (bill.sumUSDTAtCalcTime >= 0) {
+    if (orders.exists(_.orderStatus != OrderStatus.FILLED)) {
+      log.warn(s"${Emoji.Questionable}  ${finishedOrderBundle.shortDesc} did not complete. Orders: \n${orders.mkString("\n")}")
+    } else if (bill.sumUSDTAtCalcTime >= 0) {
       val emoji = if (bill.sumUSDTAtCalcTime >= 1.0) Emoji.Opera else Emoji.Winning
       log.info(s"$emoji  ${finishedOrderBundle.shortDesc} completed with a win of ${formatDecimal(bill.sumUSDTAtCalcTime, 2)} USDT")
     } else {

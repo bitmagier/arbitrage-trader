@@ -240,6 +240,7 @@ object OrderBill {
     OrderBill(balanceSheet, sumUSDT)
   }
 
+  // TODO handle non-FILLED orders correctly
   def calc(orders: Seq[Order],
            tickers: TickersReadonly,
            fees: Map[String, Fee]): OrderBill = {
