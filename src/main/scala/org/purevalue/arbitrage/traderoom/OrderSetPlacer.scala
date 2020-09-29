@@ -37,7 +37,7 @@ case class OrderSetPlacer(exchanges: Map[String, ActorRef]) extends Actor {
           requestSender ! answers
         } else { // try to cancel the other orders
           answers.foreach { e =>
-            exchanges(e.exchange) ! CancelOrder(e.tradePair, e.externalOrderId)
+            exchanges(e.exchange) ! CancelOrder(e.toOrderRef)
           }
           expectedCancelOrderResults = answers.size
           requestSender ! answers

@@ -230,7 +230,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
     log.debug(s"[$exchangeName] performing intended cancel of ${o.request.shortDesc}")
     implicit val timeout: Timeout = globalConfig.internalCommunicationTimeoutDuringInit
     val cancelOrderResult = Await.result(
-      (exchange ? CancelOrder(o.ref.tradePair, o.ref.externalOrderId)).mapTo[CancelOrderResult],
+      (exchange ? CancelOrder(o.ref)).mapTo[CancelOrderResult],
       timeout.duration.plus(1.second))
     if (!cancelOrderResult.success) {
       throw new RuntimeException(s"Intended cancel of PioneerOrder ${

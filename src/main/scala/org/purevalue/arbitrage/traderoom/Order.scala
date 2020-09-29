@@ -32,7 +32,7 @@ case class Order(externalId: String,
       case TradeSide.Buy => "<-"
       case TradeSide.Sell => "->"
     }
-    s"[$side ${formatDecimal(cumulativeFilledQuantity, tradePair.baseAsset.defaultPrecision)} " +
+    s"[$exchange: $side ${formatDecimal(cumulativeFilledQuantity, tradePair.baseAsset.defaultPrecision)} " +
       s"${tradePair.baseAsset.officialSymbol}$direction${tradePair.quoteAsset.officialSymbol} " +
       s"${priceAverage.map(p => formatDecimal(cumulativeFilledQuantity * p, tradePair.quoteAsset.defaultPrecision))} " +
       s"price ${formatDecimal(orderPrice, tradePair.quoteAsset.defaultPrecision)} $orderStatus]"

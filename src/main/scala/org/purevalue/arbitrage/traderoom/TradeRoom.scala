@@ -453,7 +453,7 @@ class TradeRoom(val config: Config,
       }
 
       log.warn(s"${Emoji.Judgemental}  Canceling aged order from $source")
-      exchanges(o.exchange) ! CancelOrder(o.tradePair, o.externalId)
+      exchanges(o.exchange) ! CancelOrder(o.ref)
     }
   }
 

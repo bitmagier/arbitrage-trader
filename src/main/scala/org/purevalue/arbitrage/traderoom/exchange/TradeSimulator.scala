@@ -69,7 +69,7 @@ class TradeSimulator(exchangeConfig: ExchangeConfig,
   }
 
   override def receive: Receive = {
-    case CancelOrder(tradePair, externalOrderId) => cancelOrder(tradePair, externalOrderId).pipeTo(sender())
+    case CancelOrder(ref)            => cancelOrder(ref.tradePair, ref.externalOrderId).pipeTo(sender())
     case NewLimitOrder(orderRequest) => newLimitOrder(orderRequest).pipeTo(sender())
   }
 }

@@ -548,7 +548,9 @@ class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
           log.debug(s"Cancel order failed. Response: $r")
           CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = false, Some(r.text))
       }
-      case Right(errorResponse) => throw new RuntimeException(s"CancelOrder id=$externalOrderId failed: $errorResponse")
+      case Right(errorResponse) =>
+        log.warn(s"CancelOrder id=$externalOrderId failed: $errorResponse")
+        CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = false, Some(errorResponse.compactPrint))
     }
   }
 
@@ -570,7 +572,7 @@ class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
   override def receive: Receive = {
     case Connect()                               => connect()
     case OnStreamsRunning()                      => onStreamsRunning()
-    case CancelOrder(tradePair, externalOrderId) => cancelOrder(tradePair, externalOrderId.toLong).pipeTo(sender())
+    case CancelOrder(ref)                        => cancelOrder(ref.tradePair, ref.externalOrderId.toLong).pipeTo(sender())
     case NewLimitOrder(o)                        => newLimitOrder(o).pipeTo(sender())
   }
   // @formatter:on

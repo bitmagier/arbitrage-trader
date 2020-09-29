@@ -343,7 +343,7 @@ class BinanceAccountDataChannel(globalConfig: GlobalConfig,
     case Connect()                               => connect()
     case OnStreamsRunning()                      => onStreamsRunning()
     case SendPing()                              => pingUserStream()
-    case CancelOrder(tradePair, externalOrderId) => cancelOrder(tradePair, externalOrderId.toLong).pipeTo(sender())
+    case CancelOrder(ref)                        => cancelOrder(ref.tradePair, ref.externalOrderId.toLong).pipeTo(sender())
     case NewLimitOrder(o)                        => newLimitOrder(o).pipeTo(sender())
     case Status.Failure(e)                       => log.error("failure", e)
   }

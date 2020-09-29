@@ -20,7 +20,7 @@ import scala.concurrent.duration.DurationInt
 object ExchangeAccountDataManager {
   case class IncomingData(data: Seq[ExchangeAccountStreamData])
   case class Initialized()
-  case class CancelOrder(tradePair: TradePair, externalOrderId: String)
+  case class CancelOrder(ref:OrderRef)
   case class CancelOrderResult(exchange: String, tradePair: TradePair, externalOrderId: String, success: Boolean, text: Option[String])
   case class NewLimitOrder(orderRequest: OrderRequest) // response is NewOrderAck
   case class NewOrderAck(exchange: String, tradePair: TradePair, externalOrderId: String, orderId: UUID) {
@@ -83,6 +83,12 @@ class ExchangeAccountDataManager(globalConfig: GlobalConfig,
     applyData(dataset)
   }
 
+  def cancelOrderIfStillExist(c:CancelOrder): Unit = {
+    if (accountData.activeOrders.contains(c.ref)) {
+      accountDataChannel.forward(c)
+    }
+  }
+
   override val supervisorStrategy: OneForOneStrategy = {
     OneForOneStrategy(maxNrOfRetries = 6, withinTimeRange = 30.minutes, loggingEnabled = true) {
       case _: Throwable => Restart
@@ -106,7 +112,7 @@ class ExchangeAccountDataManager(globalConfig: GlobalConfig,
   // @formatter:off
   def initializedModeReceive: Receive = {
     case IncomingData(data)     => data.foreach(applyData)
-    case c: CancelOrder         => accountDataChannel.forward(c)
+    case c: CancelOrder         => cancelOrderIfStillExist(c)
     case o: NewLimitOrder       => accountDataChannel.forward(o)
     case SimulatedData(dataset) => applySimulatedData(dataset)
     case Failure(e)             => log.error("received failure", e)
