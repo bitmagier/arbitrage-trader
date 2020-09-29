@@ -19,12 +19,12 @@ case class Order(externalId: String,
                  tradePair: TradePair,
                  side: TradeSide,
                  orderType: OrderType,
-                 orderPrice: Double,
-                 stopPrice: Option[Double], // for STOP_LIMIT
-                 quantity: Double,
+                 orderPrice: Option[Double], // may not be there for MARKET orders
+                 stopPrice: Option[Double], // [candidate for removal] for STOP_LIMIT - but i've not found that attribute on all exchanges
                  creationTime: Instant,
+                 @volatile var quantity: Double,
                  @volatile var orderStatus: OrderStatus,
-                 @volatile var cumulativeFilledQuantity: Double,
+                 @volatile var cumulativeFilledQuantity: Option[Double],
                  @volatile var priceAverage: Option[Double],
                  @volatile var lastUpdateTime: Instant) {
   def shortDesc: String = {
@@ -32,10 +32,10 @@ case class Order(externalId: String,
       case TradeSide.Buy => "<-"
       case TradeSide.Sell => "->"
     }
-    s"[$exchange: $side ${formatDecimal(cumulativeFilledQuantity, tradePair.baseAsset.defaultPrecision)} " +
+    s"[$exchange side ${cumulativeFilledQuantity.map(formatDecimal(_, tradePair.baseAsset.defaultPrecision))} " +
       s"${tradePair.baseAsset.officialSymbol}$direction${tradePair.quoteAsset.officialSymbol} " +
-      s"${priceAverage.map(p => formatDecimal(cumulativeFilledQuantity * p, tradePair.quoteAsset.defaultPrecision))} " +
-      s"price ${formatDecimal(orderPrice, tradePair.quoteAsset.defaultPrecision)} $orderStatus]"
+      s"""filled ${if (cumulativeFilledQuantity.isDefined && priceAverage.isDefined) formatDecimal(cumulativeFilledQuantity.get * priceAverage.get, tradePair.quoteAsset.defaultPrecision) else "n/a"} """ +
+      s"price ${orderPrice.map(formatDecimal(_, tradePair.quoteAsset.defaultPrecision))} $orderStatus]"
   }
 
 
@@ -45,14 +45,37 @@ case class Order(externalId: String,
 
   // absolute (positive) amount minus fees
   def calcOutgoingLiquidity(fee: Fee): LocalCryptoValue = side match {
-    case TradeSide.Buy => LocalCryptoValue(exchange, tradePair.quoteAsset, priceAverage.map(_ * cumulativeFilledQuantity).getOrElse(0.0))
-    case TradeSide.Sell => LocalCryptoValue(exchange, tradePair.baseAsset, cumulativeFilledQuantity * (1.0 + fee.average))
+    case TradeSide.Buy => LocalCryptoValue(
+      exchange,
+      tradePair.quoteAsset,
+      (priceAverage, cumulativeFilledQuantity) match {
+        case (Some(p), Some(q)) => p * q
+        case _ => 0.0
+      })
+    case TradeSide.Sell => LocalCryptoValue(
+      exchange,
+      tradePair.baseAsset,
+      cumulativeFilledQuantity match {
+        case Some(q) => q * (1.0 + fee.average)
+        case None => 0.0
+      })
   }
 
   // absolute (positive) amount minus fees
   def calcIncomingLiquidity(fee: Fee): LocalCryptoValue = side match {
-    case TradeSide.Buy => LocalCryptoValue(exchange, tradePair.baseAsset, cumulativeFilledQuantity * (1.0 - fee.average))
-    case TradeSide.Sell => LocalCryptoValue(exchange, tradePair.quoteAsset, priceAverage.map(_ * cumulativeFilledQuantity).getOrElse(0.0))
+    case TradeSide.Buy => LocalCryptoValue(exchange,
+      tradePair.baseAsset,
+      cumulativeFilledQuantity match {
+        case Some(q) => q * (1.0 - fee.average)
+        case None => 0.0
+      })
+    case TradeSide.Sell => LocalCryptoValue(
+      exchange,
+      tradePair.quoteAsset,
+      (priceAverage, cumulativeFilledQuantity) match {
+        case (Some(p), Some(q)) => p * q
+        case _ => 0.0
+      })
   }
 
   def ref: TradeRoom.OrderRef = OrderRef(exchange, tradePair, externalId)
@@ -60,17 +83,24 @@ case class Order(externalId: String,
   private val log = LoggerFactory.getLogger(classOf[Order])
 
   def applyUpdate(u: OrderUpdate): Unit = {
-    if (u.exchange != exchange || u.externalOrderId != externalId || u.tradePair != tradePair || u.side != side || u.orderType != orderType)
+    if (u.exchange != exchange ||
+      u.externalOrderId != externalId ||
+      u.tradePair != tradePair ||
+      u.side != side ||
+      (u.orderType.isDefined && u.orderType.get != orderType))
       throw new IllegalArgumentException(s"$u does not match \n$this")
 
     if (u.updateTime.isBefore(lastUpdateTime)) {
       log.warn(s"Ignoring $u, because updateTime is not after order's lastUpdateTime: $this")
     } else if (u.updateTime.equals(lastUpdateTime) && orderStatus.isFinal) log.info(s"Ignoring $u, because it has same timestamp and we already have a final order-status here")
-    else if (u.updateTime.equals(lastUpdateTime) && u.cumulativeFilledQuantity < cumulativeFilledQuantity) log.info(s"Ignoring $u, because it has same timestamp and we have alread higher filled quantity here")
+    else if (u.updateTime.equals(lastUpdateTime) && cumulativeFilledQuantity.isDefined &&
+      (u.cumulativeFilledQuantity.isEmpty || u.cumulativeFilledQuantity.get < cumulativeFilledQuantity.get))
+      log.info(s"Ignoring $u, because it has same timestamp and we have alread higher filled quantity here")
     else {
       if (u.orderStatus.isDefined) orderStatus = u.orderStatus.get
       if (u.priceAverage.isDefined) priceAverage = u.priceAverage
-      cumulativeFilledQuantity = u.cumulativeFilledQuantity
+      if (u.originalQuantity.isDefined) quantity = u.originalQuantity.get
+      if (u.cumulativeFilledQuantity.isDefined) cumulativeFilledQuantity = u.cumulativeFilledQuantity
       lastUpdateTime = u.updateTime
     }
   }
@@ -120,31 +150,37 @@ case class OrderUpdate(externalOrderId: String,
                        exchange: String,
                        tradePair: TradePair,
                        side: TradeSide,
-                       orderType: OrderType,
-                       orderPrice: Double, // may be the original price or a rounded one from the exchange
+                       orderType: Option[OrderType],
+                       orderPrice: Option[Double], // may be the original price or a rounded one from the exchange. May not be there for market orders
                        stopPrice: Option[Double],
                        originalQuantity: Option[Double],
                        orderCreationTime: Option[Instant],
                        orderStatus: Option[OrderStatus],
-                       cumulativeFilledQuantity: Double,
+                       cumulativeFilledQuantity: Option[Double],
                        priceAverage: Option[Double],
                        updateTime: Instant) extends ExchangeAccountStreamData {
 
-  if ((originalQuantity.nonEmpty && originalQuantity.get < 0.0) || cumulativeFilledQuantity < 0.0) throw new IncomingDataError("quantity negative")
+  if ((originalQuantity.isDefined && originalQuantity.get < 0.0) ||
+    cumulativeFilledQuantity.isDefined && cumulativeFilledQuantity.get < 0.0)
+    throw new IncomingDataError("quantity negative")
 
   def toOrder: Order = Order(
     externalOrderId,
     exchange,
     tradePair,
     side,
-    orderType,
+    orderType.get, // shall and will fail when an OrderUpdate without orderType is used for toOrder
     orderPrice,
     stopPrice,
-    originalQuantity.getOrElse(if (orderStatus.exists(_.isFinal)) cumulativeFilledQuantity else 0.0),
     orderCreationTime.getOrElse(Instant.now),
+    (originalQuantity, cumulativeFilledQuantity) match {
+      case (Some(oq), _) => oq
+      case (_, Some(cq)) if orderStatus.exists(_.isFinal) => cq
+      case _ => 0.0
+    },
     orderStatus.getOrElse(originalQuantity match { // defaults in case not order status is available
-      case Some(originalQuantity) if cumulativeFilledQuantity == originalQuantity => OrderStatus.FILLED
-      case Some(originalQuantity) if cumulativeFilledQuantity < originalQuantity => OrderStatus.PARTIALLY_FILLED
+      case Some(originalQuantity) if cumulativeFilledQuantity.isDefined && cumulativeFilledQuantity.get == originalQuantity => OrderStatus.FILLED
+      case Some(originalQuantity) if cumulativeFilledQuantity.isDefined && cumulativeFilledQuantity.get < originalQuantity => OrderStatus.PARTIALLY_FILLED
       case Some(_) => OrderStatus.NEW
       case None => OrderStatus.NEW
     }),

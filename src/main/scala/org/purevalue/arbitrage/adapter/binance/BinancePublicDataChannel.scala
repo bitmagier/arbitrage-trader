@@ -1,7 +1,7 @@
 package org.purevalue.arbitrage.adapter.binance
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, Kill, PoisonPill, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Kill, Props, Status}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{StatusCodes, Uri}
@@ -24,32 +24,32 @@ import scala.concurrent.{Await, ExecutionContextExecutor, Future, Promise}
 import scala.util.{Failure, Success}
 
 
-case class StreamSubscribeRequestJson(method: String = "SUBSCRIBE", params: Seq[String], id: Int)
+private[binance] case class StreamSubscribeRequestJson(method: String = "SUBSCRIBE", params: Seq[String], id: Int)
 
-trait IncomingPublicBinanceJson
+private[binance] trait IncomingPublicBinanceJson
 
-case class RawBookTickerRestJson(symbol: String,
-                                 bidPrice: String,
-                                 bidQty: String,
-                                 askPrice: String,
-                                 askQty: String) extends IncomingPublicBinanceJson {
+private[binance] case class RawBookTickerRestJson(symbol: String,
+                                                  bidPrice: String,
+                                                  bidQty: String,
+                                                  askPrice: String,
+                                                  askQty: String) extends IncomingPublicBinanceJson {
   def toTicker(exchange: String, resolveSymbol: String => TradePair): Ticker = {
     adapter.Ticker(exchange, resolveSymbol(symbol), bidPrice.toDouble, Some(bidQty.toDouble), askPrice.toDouble, Some(askQty.toDouble), None)
   }
 }
 
-case class RawBookTickerStreamJson(u: Long, // order book updateId
-                                   s: String, // symbol
-                                   b: String, // best bid price
-                                   B: String, // best bid quantity
-                                   a: String, // best ask price
-                                   A: String // best ask quantity
-                                  ) extends IncomingPublicBinanceJson {
+private[binance] case class RawBookTickerStreamJson(u: Long, // order book updateId
+                                                    s: String, // symbol
+                                                    b: String, // best bid price
+                                                    B: String, // best bid quantity
+                                                    a: String, // best ask price
+                                                    A: String // best ask quantity
+                                                   ) extends IncomingPublicBinanceJson {
   def toTicker(exchange: String, resolveSymbol: String => TradePair): Ticker =
     adapter.Ticker(exchange, resolveSymbol(s), b.toDouble, Some(B.toDouble), a.toDouble, Some(A.toDouble), None)
 }
 
-object WebSocketJsonProtocol extends DefaultJsonProtocol {
+private[binance] object WebSocketJsonProtocol extends DefaultJsonProtocol {
   implicit val subscribeMsg: RootJsonFormat[StreamSubscribeRequestJson] = jsonFormat3(StreamSubscribeRequestJson)
   implicit val rawBookTickerRest: RootJsonFormat[RawBookTickerRestJson] = jsonFormat5(RawBookTickerRestJson)
   implicit val rawBookTickerStream: RootJsonFormat[RawBookTickerStreamJson] = jsonFormat6(RawBookTickerStreamJson)
@@ -70,7 +70,7 @@ object BinancePublicDataChannel {
  * Binance TradePair-based data channel
  * Converts Raw TradePair-based data to unified ExchangeTPStreamData
  */
-class BinancePublicDataChannel(globalConfig: GlobalConfig,
+private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
                                exchangeConfig: ExchangeConfig,
                                publicDataManager: ActorRef,
                                binancePublicDataInquirer: ActorRef) extends Actor {
@@ -189,7 +189,7 @@ class BinancePublicDataChannel(globalConfig: GlobalConfig,
     log.trace("open WebSocket stream...")
 
     ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow)
-    ws._2.future.onComplete{e =>
+    ws._2.future.onComplete { e =>
       log.info(s"connection closed: ${e.get}")
       self ! Kill // trigger restart
     }

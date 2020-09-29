@@ -14,6 +14,31 @@ import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor}
 
 
+// The LOT_SIZE filter defines the quantity rules for the symbol
+private[binance] case class LotSize(minQty: Double,
+                                    maxQty: Double,
+                                    stepSize: Double) // stepSize defines the intervals that a quantity/icebergQty can be increased/decreased by
+private[binance] case class LotSizeJson(minQty: String,
+                                        maxQty: String,
+                                        stepSize: String) {
+  def toLotSize: LotSize = LotSize(minQty.toDouble, maxQty.toDouble, stepSize.toDouble)
+}
+
+private[binance] case class RawBinanceTradePairJson(symbol: String, status: String, baseAsset: String, baseAssetPrecision: Int, quoteAsset: String,
+                                                    quotePrecision: Int, baseCommissionPrecision: Int, quoteCommissionPrecision: Int,
+                                                    orderTypes: Seq[String], icebergAllowed: Boolean, ocoAllowed: Boolean,
+                                                    quoteOrderQtyMarketAllowed: Boolean, isSpotTradingAllowed: Boolean,
+                                                    isMarginTradingAllowed: Boolean, filters: Seq[JsObject], permissions: Seq[String])
+
+private[binance] case class RawBinanceExchangeInformationJson(timezone: String, serverTime: Long, rateLimits: Seq[JsObject], exchangeFilters: Seq[JsObject], symbols: Seq[RawBinanceTradePairJson])
+
+private[binance] object BinanceJsonProtocol extends DefaultJsonProtocol {
+  implicit val rawSymbolFormat: RootJsonFormat[RawBinanceTradePairJson] = jsonFormat16(RawBinanceTradePairJson)
+  implicit val rawExchangeInformationFormat: RootJsonFormat[RawBinanceExchangeInformationJson] = jsonFormat5(RawBinanceExchangeInformationJson)
+  implicit val lotSizeJsonFormat: RootJsonFormat[LotSizeJson] = jsonFormat3(LotSizeJson)
+}
+
+
 /*
  * Binance General API Information
  * The base endpoint is: https://api.binance.com
@@ -29,14 +54,14 @@ import scala.concurrent.{Await, ExecutionContextExecutor}
  * HTTP 5XX return codes are used for internal errors; the issue is on Binance's side. It is important to NOT treat this as a failure operation; the execution status is UNKNOWN and could have been a success.
  */
 
-case class BinanceTradePair(baseAsset: Asset,
-                            quoteAsset: Asset,
-                            symbol: String,
-                            baseAssetPrecision: Int,
-                            quotePrecision: Int,
-                            tickSize: Double, // price_filter: tickSize defines the intervals that a price/stopPrice can be increased/decreased by; disabled on tickSize == 0.
-                            lotSize: LotSize,
-                            minNotional: Double) {
+private[binance] case class BinanceTradePair(baseAsset: Asset,
+                                             quoteAsset: Asset,
+                                             symbol: String,
+                                             baseAssetPrecision: Int,
+                                             quotePrecision: Int,
+                                             tickSize: Double, // price_filter: tickSize defines the intervals that a price/stopPrice can be increased/decreased by; disabled on tickSize == 0.
+                                             lotSize: LotSize,
+                                             minNotional: Double) {
   def toTradePair: TradePair = TradePair(baseAsset, quoteAsset)
 }
 
@@ -68,7 +93,7 @@ object BinancePublicDataInquirer {
 /**
  * Binance exchange - account data channel
  */
-class BinancePublicDataInquirer(globalConfig: GlobalConfig,
+private[binance] class BinancePublicDataInquirer(globalConfig: GlobalConfig,
                                 exchangeConfig: ExchangeConfig) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BinancePublicDataInquirer])
   implicit val system: ActorSystem = Main.actorSystem
@@ -103,7 +128,7 @@ class BinancePublicDataInquirer(globalConfig: GlobalConfig,
           s.filters.find(_.fields("filterType") == JsString("LOT_SIZE")).get.convertTo[LotSizeJson].toLotSize,
           s.filters.find(_.fields("filterType") == JsString("MIN_NOTIONAL")).get.fields("minNotional").convertTo[String].toDouble
         ))
-        .filter(e => exchangeConfig.tradeAssets.contains(e.baseAsset) && exchangeConfig.tradeAssets.contains(e.quoteAsset))
+        .filterNot(e => exchangeConfig.assetBlocklist.contains(e.baseAsset) || exchangeConfig.assetBlocklist.contains(e.quoteAsset))
         .toSet
 
       log.debug("received ExchangeInfo")
@@ -122,29 +147,6 @@ class BinancePublicDataInquirer(globalConfig: GlobalConfig,
   }
 }
 
-// The LOT_SIZE filter defines the quantity rules for the symbol
-case class LotSize(minQty: Double,
-                   maxQty: Double,
-                   stepSize: Double) // stepSize defines the intervals that a quantity/icebergQty can be increased/decreased by
-case class LotSizeJson(minQty: String,
-                       maxQty: String,
-                       stepSize: String) {
-  def toLotSize: LotSize = LotSize(minQty.toDouble, maxQty.toDouble, stepSize.toDouble)
-}
-
-case class RawBinanceTradePairJson(symbol: String, status: String, baseAsset: String, baseAssetPrecision: Int, quoteAsset: String,
-                                   quotePrecision: Int, baseCommissionPrecision: Int, quoteCommissionPrecision: Int,
-                                   orderTypes: Seq[String], icebergAllowed: Boolean, ocoAllowed: Boolean,
-                                   quoteOrderQtyMarketAllowed: Boolean, isSpotTradingAllowed: Boolean,
-                                   isMarginTradingAllowed: Boolean, filters: Seq[JsObject], permissions: Seq[String])
-
-case class RawBinanceExchangeInformationJson(timezone: String, serverTime: Long, rateLimits: Seq[JsObject], exchangeFilters: Seq[JsObject], symbols: Seq[RawBinanceTradePairJson])
-
-object BinanceJsonProtocol extends DefaultJsonProtocol {
-  implicit val rawSymbolFormat: RootJsonFormat[RawBinanceTradePairJson] = jsonFormat16(RawBinanceTradePairJson)
-  implicit val rawExchangeInformationFormat: RootJsonFormat[RawBinanceExchangeInformationJson] = jsonFormat5(RawBinanceExchangeInformationJson)
-  implicit val lotSizeJsonFormat: RootJsonFormat[LotSizeJson] = jsonFormat3(LotSizeJson)
-}
 
 /* sample RawBinanceTradePairJson for symbol=BTCUSDT:
 {

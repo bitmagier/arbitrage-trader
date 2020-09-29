@@ -67,8 +67,8 @@ case class OrderBook(exchange: String,
 
 case class OrderBookUpdate(exchange: String,
                            tradePair: TradePair,
-                           bidUpdates: List[Bid], // quantity == 0.0 means: remove position from our OrderBook
-                           askUpdates: List[Ask]) extends ExchangePublicStreamData
+                           bidUpdates: Seq[Bid], // quantity == 0.0 means: remove position from our OrderBook
+                           askUpdates: Seq[Ask]) extends ExchangePublicStreamData
 
 case class PublicDataTimestamps(@volatile var heartbeatTS: Option[Instant],
                                 @volatile var tickerTS: Option[Instant],

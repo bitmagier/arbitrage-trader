@@ -16,7 +16,7 @@ import spray.json.{JsValue, JsonParser, JsonReader}
 
 import scala.concurrent.{ExecutionContext, Future}
 
-object BitfinexHttpUtil {
+private[bitfinex] object BitfinexHttpUtil {
   private val log = LoggerFactory.getLogger(BitfinexHttpUtil.getClass)
   private val globalConfig: GlobalConfig = Main.config().global
   private var lastBitfinexNonce: Option[Long] = None

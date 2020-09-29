@@ -76,13 +76,15 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
     if (order.side != request.tradeSide) failed("trade side mismatch")
     if (order.tradePair != request.tradePair) failed("trade pair mismatch")
     if (order.orderType != OrderType.LIMIT) failed("order type mismatch")
-    if (diffMoreThan(order.orderPrice, request.limit, 0.001)) failed("order price mismatch")
     if (diffMoreThan(order.quantity, request.amountBaseAsset, 0.001)) failed("quantity mismatch")
 
     if (order.orderStatus.isFinal) {
+      if (order.orderPrice.isEmpty) failed("order price not set")
+      if (diffMoreThan(order.orderPrice.get, request.limit, 0.001)) failed("order price mismatch")
       if (order.orderStatus != OrderStatus.FILLED) failed("order status mismatch")
 
-      if (diffMoreThan(order.cumulativeFilledQuantity, request.amountBaseAsset, 0.003)) failed("cumulative filled quantity mismatch") // in most cases the fee is substracted from the amount we get
+      if (order.cumulativeFilledQuantity.isEmpty) failed("cumulativeFilledQuantity not set")
+      if (diffMoreThan(order.cumulativeFilledQuantity.get, request.amountBaseAsset, 0.003)) failed("cumulative filled quantity mismatch") // in most cases the fee is substracted from the amount we get
       if (request.tradeSide == TradeSide.Buy && (order.priceAverage.isDefined && order.priceAverage.get > request.limit)) failed("price average above limit")
       if (request.tradeSide == TradeSide.Sell && (order.priceAverage.isDefined && order.priceAverage.get < request.limit)) failed("price average below limit")
 
@@ -124,7 +126,8 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
     if (order.side != request.tradeSide) failed("trade side mismatch")
     if (order.tradePair != request.tradePair) failed("trade pair mismatch")
     if (order.orderType != OrderType.LIMIT) failed("order type mismatch")
-    if (diffMoreThan(order.orderPrice, request.limit, 0.001)) failed("order price mismatch")
+    if (order.orderPrice.isEmpty) failed("orderPrice not set")
+    if (diffMoreThan(order.orderPrice.get, request.limit, 0.001)) failed("order price mismatch")
     if (diffMoreThan(order.quantity, request.amountBaseAsset, 0.001)) failed("quantity mismatch")
 
     if (order.orderStatus.isFinal) {

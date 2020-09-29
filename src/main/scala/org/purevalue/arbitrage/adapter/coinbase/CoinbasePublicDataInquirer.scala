@@ -11,28 +11,28 @@ import spray.json.{DefaultJsonProtocol, RootJsonFormat}
 
 import scala.concurrent.{Await, ExecutionContextExecutor}
 
-case class CoinbaseTradePair(id: String,
-                             baseAsset: Asset,
-                             quoteAsset: Asset,
-                             baseIncrement: Double,
-                             quoteIncrement: Double,
-                             baseMinSize: Double) {
+private[coinbase] case class CoinbaseTradePair(id: String,
+                                               baseAsset: Asset,
+                                               quoteAsset: Asset,
+                                               baseIncrement: Double,
+                                               quoteIncrement: Double,
+                                               baseMinSize: Double) {
   def toTradePair: TradePair = TradePair(baseAsset, quoteAsset)
 }
 
-case class ProductJson(id: String,
-                       base_currency: String,
-                       quote_currency: String,
-                       base_increment: String,
-                       quote_increment: String,
-                       base_min_size: String,
-                       base_max_size: String,
-                       status: String, // "online"
-                       status_message: String,
-                       cancel_only: Boolean,
-                       limit_only: Boolean,
-                       post_only: Boolean,
-                       trading_disabled: Boolean) {
+private[coinbase] case class ProductJson(id: String,
+                                         base_currency: String,
+                                         quote_currency: String,
+                                         base_increment: String,
+                                         quote_increment: String,
+                                         base_min_size: String,
+                                         base_max_size: String,
+                                         status: String, // "online"
+                                         status_message: String,
+                                         cancel_only: Boolean,
+                                         limit_only: Boolean,
+                                         post_only: Boolean,
+                                         trading_disabled: Boolean) {
   def toCoinbaseTradePair: CoinbaseTradePair = CoinbaseTradePair(
     id,
     Asset(base_currency),
@@ -43,7 +43,7 @@ case class ProductJson(id: String,
   )
 }
 
-object CoinbaseJsonProtocol extends DefaultJsonProtocol {
+private[coinbase] object CoinbaseJsonProtocol extends DefaultJsonProtocol {
   implicit val productJson: RootJsonFormat[ProductJson] = jsonFormat13(ProductJson)
 }
 
@@ -55,7 +55,7 @@ object CoinbasePublicDataInquirer {
   def props(globalConfig: GlobalConfig,
             exchangeConfig: ExchangeConfig): Props = Props(new CoinbasePublicDataInquirer(globalConfig, exchangeConfig))
 }
-class CoinbasePublicDataInquirer(globalConfig: GlobalConfig,
+private[coinbase] class CoinbasePublicDataInquirer(globalConfig: GlobalConfig,
                                  exchangeConfig: ExchangeConfig) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[CoinbasePublicDataInquirer])
   implicit val system: ActorSystem = Main.actorSystem
@@ -76,6 +76,7 @@ class CoinbasePublicDataInquirer(globalConfig: GlobalConfig,
           case Left(products: Vector[ProductJson]) => products
             .filter(e => e.status == "online" && !e.trading_disabled && !e.cancel_only && !e.post_only)
             .map(_.toCoinbaseTradePair)
+            .filterNot(e => exchangeConfig.assetBlocklist.contains(e.baseAsset) || exchangeConfig.assetBlocklist.contains(e.quoteAsset))
           case Right(error) => throw new RuntimeException(s"query products failed with: $error")
         },
         globalConfig.httpTimeout).toSet

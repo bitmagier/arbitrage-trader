@@ -15,7 +15,7 @@ import spray.json.{JsValue, JsonParser, JsonReader}
 
 import scala.concurrent.{ExecutionContext, Future}
 
-object BinanceHttpUtil {
+private[binance] object BinanceHttpUtil {
   private val log = LoggerFactory.getLogger(BinanceHttpUtil.getClass)
   private val globalConfig: GlobalConfig = Main.config().global
 

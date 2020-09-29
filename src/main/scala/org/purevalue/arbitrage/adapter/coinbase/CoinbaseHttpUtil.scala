@@ -15,8 +15,8 @@ import spray.json.{JsValue, JsonParser, JsonReader}
 
 import scala.concurrent.{ExecutionContext, Future}
 
-object CoinbaseHttpUtil {
-  private val log = LoggerFactory.getLogger(classOf[CoinbaseHttpUtil.type])
+private[coinbase] object CoinbaseHttpUtil {
+  private val log = LoggerFactory.getLogger("org.purevalue.arbitrage.adapter.coinbase.CoinbaseHttpUtil")
   private val globalConfig: GlobalConfig = Main.config().global
 
   // https://docs.pro.coinbase.com/#api-key-permissions

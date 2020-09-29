@@ -3,14 +3,14 @@ package org.purevalue.arbitrage.adapter.bitfinex
 import java.text.ParseException
 
 
-class BitfinexDataArrayMessageParser(private val s:String) {
-  private var pos:Int = 0
+class BitfinexDataArrayMessageParser(private val s: String) {
+  private var pos: Int = 0
 
-  private def skipWhitespaces():Unit = {
+  private def skipWhitespaces(): Unit = {
     while (s.charAt(pos).isWhitespace) pos += 1
   }
 
-  private def skip(char:Char): Unit = {
+  private def skip(char: Char): Unit = {
     skipWhitespaces()
     if (s.charAt(pos) == char) pos += 1
     else throw new ParseException(s"char $char not found in '$s'", pos)
@@ -22,17 +22,17 @@ class BitfinexDataArrayMessageParser(private val s:String) {
       pos += 1
       intLength += 1
     }
-    s.substring(pos-intLength, pos).toInt
+    s.substring(pos - intLength, pos).toInt
   }
 
   def decode: (Int, String) = {
     skip('[')
     skipWhitespaces()
-    val channelId:Int = readInt()
+    val channelId: Int = readInt()
     skip(',')
-    if (s.last != ']') throw new ParseException(s"data array does not end with ']': $s", s.length-1)
+    if (s.last != ']') throw new ParseException(s"data array does not end with ']': $s", s.length - 1)
     skipWhitespaces()
-    val payload = s.substring(pos, s.length-1)
+    val payload = s.substring(pos, s.length - 1)
     (channelId, payload)
   }
 }

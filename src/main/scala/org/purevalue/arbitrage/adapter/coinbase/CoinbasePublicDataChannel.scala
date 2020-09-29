@@ -10,8 +10,8 @@ import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
 import jdk.jshell.spi.ExecutionControl.NotImplementedException
 import org.purevalue.arbitrage.adapter.ExchangePublicDataManager.IncomingData
-import org.purevalue.arbitrage.adapter.{ExchangePublicStreamData, Ticker}
-import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataChannel.{Connect, OnStreamsRunning}
+import org.purevalue.arbitrage.adapter._
+import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataChannel.Connect
 import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataInquirer.GetCoinbaseTradePairs
 import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig, Main}
@@ -21,22 +21,23 @@ import spray.json.{DefaultJsonProtocol, JsObject, JsonParser, RootJsonFormat, en
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor, Future, Promise}
 
-case class ChannelJson(name: String)
-case class SubscribeRequestJson(`type`: String = "subscribe",
-                                channels: Seq[ChannelJson])
+private[coinbase] case class ChannelJson(name: String)
+private[coinbase] case class SubscribeRequestJson(`type`: String = "subscribe",
+                                                  channels: Seq[ChannelJson])
 
-trait IncomingPublicCoinbaseJson
+private[coinbase] trait IncomingPublicCoinbaseJson
 
-case class TickerJson(`type`: String,
-                      trade_id: Long,
-                      sequence: Long,
-                      time: String,
-                      product_id: String,
-                      price: Double,
-                      side: String,
-                      last_size: Double,
-                      best_bid: Double,
-                      best_ask: Double) extends IncomingPublicCoinbaseJson {
+private[coinbase] case class TickerJson(`type`: String,
+                                        trade_id: Long,
+                                        sequence: Long,
+                                        time: String,
+                                        product_id: String,
+                                        price: Double,
+                                        side: String,
+                                        last_size: Double,
+                                        best_bid: Double,
+                                        best_ask: Double
+                                       ) extends IncomingPublicCoinbaseJson {
   def toTicker(exchange: String, resolveProductId: String => TradePair): Ticker = Ticker(
     exchange,
     resolveProductId(product_id),
@@ -44,26 +45,60 @@ case class TickerJson(`type`: String,
     None,
     best_ask.toDouble,
     None,
-    Some(price)
+    Some(price))
+}
+
+private[coinbase] case class OrderBookSnapshotJson(`type`: String,
+                                                   product_id: String,
+                                                   bids: Vector[Tuple2[String, String]], // price,size
+                                                   asks: Vector[Tuple2[String, String]] // price,size
+                                                  ) extends IncomingPublicCoinbaseJson {
+  def toOrderBook(exchange: String, resolveProductId: String => TradePair): OrderBook = OrderBook(
+    exchange,
+    resolveProductId(product_id),
+    bids.map(e => Bid(e._1.toDouble, e._2.toDouble))
+      .map(e => e.price -> e)
+      .toMap,
+    asks.map(e => Ask(e._1.toDouble, e._2.toDouble))
+      .map(e => e.price -> e)
+      .toMap
   )
 }
 
-object CoinbasePublicJsonProtocol extends DefaultJsonProtocol {
+private[coinbase] case class OrderBookUpdateJson(`type`: String,
+                                                 product_id: String,
+                                                 time: String, // 2019-08-14T20:42:27.265Z"
+                                                 changes: Vector[Tuple3[String, String, String]] // side, price, side
+                                                ) extends IncomingPublicCoinbaseJson {
+  def toOrderBookUpdate(exchange: String, resolveProductId: String => TradePair): OrderBookUpdate = OrderBookUpdate(
+    exchange,
+    resolveProductId(product_id),
+    changes
+      .filter(_._1 == "buy")
+      .map(e => Bid(e._2.toDouble, e._3.toDouble)),
+    changes
+      .filter(_._1 == "sell")
+      .map(e => Ask(e._2.toDouble, e._3.toDouble))
+  )
+}
+
+private[coinbase] object CoinbasePublicJsonProtocol extends DefaultJsonProtocol {
   implicit val channelJson: RootJsonFormat[ChannelJson] = jsonFormat1(ChannelJson)
   implicit val subscribeRequestJson: RootJsonFormat[SubscribeRequestJson] = jsonFormat2(SubscribeRequestJson)
   implicit val tickerJson: RootJsonFormat[TickerJson] = jsonFormat10(TickerJson)
+  implicit val orderBookSnapshotJson: RootJsonFormat[OrderBookSnapshotJson] = jsonFormat4(OrderBookSnapshotJson)
+  implicit val orderBookUpdateJson: RootJsonFormat[OrderBookUpdateJson] = jsonFormat4(OrderBookUpdateJson)
 }
 
 object CoinbasePublicDataChannel {
   private case class Connect()
-  private case class OnStreamsRunning()
 
   def props(globalConfig: GlobalConfig,
             exchangeConfig: ExchangeConfig,
             publicDataManager: ActorRef,
             coinbasePublicDataInquirer: ActorRef): Props = Props(new CoinbasePublicDataChannel(globalConfig, exchangeConfig, publicDataManager, coinbasePublicDataInquirer))
 }
-class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
+private [coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
                                 exchangeConfig: ExchangeConfig,
                                 publicDataManager: ActorRef,
                                 coinbasePublicDataInquirer: ActorRef) extends Actor {
@@ -75,24 +110,32 @@ class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
   // The websocket feed is publicly available, but connections to it are rate-limited to 1 per 4 seconds per IP.
   val WebSocketEndpoint: String = "wss://ws-feed-public.sandbox.pro.coinbase.com" // wss://ws-feed.pro.coinbase.com
 
-  val TickerStreamName: String = "ticker"
-
+  val TickerChannelName: String = "ticker"
+  val OrderBookChannelname: String = "level2"
 
   var coinbaseTradePairByProductId: Map[String, CoinbaseTradePair] = _
 
   import CoinbasePublicJsonProtocol._
 
+  // @formatter:off
   def exchangeDataMapping(in: IncomingPublicCoinbaseJson): ExchangePublicStreamData = {
-    case t: TickerJson => t.toTicker(exchangeConfig.exchangeName, id => coinbaseTradePairByProductId(id).toTradePair)
-  }
+    in match {
+      case t: TickerJson            => t.toTicker(exchangeConfig.exchangeName, id => coinbaseTradePairByProductId(id).toTradePair)
+      case o: OrderBookSnapshotJson => o.toOrderBook(exchangeConfig.exchangeName, id => coinbaseTradePairByProductId(id).toTradePair)
+      case o: OrderBookUpdateJson   => o.toOrderBookUpdate(exchangeConfig.exchangeName, id => coinbaseTradePairByProductId(id).toTradePair)
+    }
+  } // @formatter:on
 
 
+  // @formatter:off
   def decodeJsObject(messageType: String, j: JsObject): IncomingPublicCoinbaseJson = {
     messageType match {
-      case TickerStreamName => j.convertTo[TickerJson]
-      case other => throw new NotImplementedException(other)
+      case TickerChannelName => j.convertTo[TickerJson]
+      case "snapshot"        => j.convertTo[OrderBookSnapshotJson]
+      case "l2update"        => j.convertTo[OrderBookUpdateJson]
+      case other             => throw new NotImplementedException(other)
     }
-  }
+  } // @formatter:on
 
   def decodeMessage(message: Message): Future[Option[IncomingPublicCoinbaseJson]] = message match {
     case msg: TextMessage =>
@@ -111,8 +154,8 @@ class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
   }
 
   val SubscribeMessage: SubscribeRequestJson = SubscribeRequestJson(channels = Seq(
-    ChannelJson(TickerStreamName),
-    // TODO
+    ChannelJson(TickerChannelName),
+    ChannelJson(OrderBookChannelname)
   ))
 
   // flow to us
@@ -137,7 +180,6 @@ class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
   def createConnected: Future[Done.type] =
     ws._1.flatMap { upgrade =>
       if (upgrade.response.status == StatusCodes.SwitchingProtocols) {
-        if (log.isTraceEnabled) log.trace("WebSocket connected")
         Future.successful(Done)
       } else {
         throw new RuntimeException(s"Connection failed: ${upgrade.response.status}")
@@ -153,6 +195,7 @@ class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
       self ! Kill
     }
     connected = createConnected
+    log.info("WebSocket connected")
   }
 
 
@@ -163,10 +206,6 @@ class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
       globalConfig.internalCommunicationTimeout.duration.plus(500.millis))
       .map(e => (e.id, e))
       .toMap
-  }
-
-  def onStreamsRunning(): Unit = {
-
   }
 
   override def preStart() {
@@ -182,11 +221,9 @@ class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
   // @formatter:off
   override def receive: Receive = {
     case Connect()             => connect()
-    case OnStreamsRunning()    => onStreamsRunning()
     case Status.Failure(cause) => log.error("received failure", cause)
-  }
-  // @formatter:on
+  } // @formatter:on
 
 }
 
-// TODO subscribe to status channel: The status channel will send all products and currencies on a preset interval.
+// TODO [later] subscribe to status channel: The status channel will send all products and currencies on a preset interval.

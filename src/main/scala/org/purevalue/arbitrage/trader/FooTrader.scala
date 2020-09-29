@@ -56,12 +56,12 @@ class FooTrader(traderConfig: Config, tradeRoom: ActorRef, tc: TradeContext) ext
   case class NoUSDTConversion(asses: Asset) extends NoResultReason
   case class MinGainTooLow() extends NoResultReason
 
-  def canTrade(exchange:String, tradePair:TradePair): Boolean = !tc.doNotTouch(exchange).contains(tradePair.involvedAssets)
+  def canTrade(exchange:String, tradePair:TradePair): Boolean =
+    !tc.doNotTouch(exchange).contains(tradePair.baseAsset) && !tc.doNotTouch(exchange).contains(tradePair.quoteAsset)
 
   // finds (average) exchange rate based on reference ticker, if tradepair is available there
   // otherwise ticker rate is retrieved from fallBackTickerExchanges
   def findPrice(tradePair: TradePair, fallBackTickerExchanges: Iterable[String]): Option[Double] = {
-
     def _findPrice(exchangeOptions: List[String]): Option[Double] = {
       if (exchangeOptions.isEmpty) None
       else tc.tickers(exchangeOptions.head).get(tradePair)

@@ -2,6 +2,12 @@
 - coinbase adapter
 
 #TODO
+
+
+
+
+- init list of assets from binance tradepairs
+
 - steering-man actor: taking care, that we keep going into the profit zone
   - provides/analyzes overall statistics
   - proposes adjustments / fine-tuning of configuration [later] 

@@ -3,7 +3,7 @@ package org.purevalue.arbitrage.adapter.bitfinex
 import java.time.Instant
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, Kill, PoisonPill, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Kill, Props, Status}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{StatusCodes, Uri}
@@ -26,45 +26,45 @@ import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor, Future, Promise}
 
 
-trait IncomingPublicBitfinexJson
-case class UnknownChannelDataMessage(m: String) extends IncomingPublicBitfinexJson
-case class JsonMessage(j: JsObject) extends IncomingPublicBitfinexJson
-case class SubscribeRequestJson(event: String = "subscribe", channel: String, symbol: String)
+private[bitfinex] trait IncomingPublicBitfinexJson
+private[bitfinex] case class UnknownChannelDataMessage(m: String) extends IncomingPublicBitfinexJson
+private[bitfinex] case class JsonMessage(j: JsObject) extends IncomingPublicBitfinexJson
+private[bitfinex] case class SubscribeRequestJson(event: String = "subscribe", channel: String, symbol: String)
 
-case class RawHeartbeat() extends IncomingPublicBitfinexJson
+private[bitfinex] case class RawHeartbeat() extends IncomingPublicBitfinexJson
 
-case class RawTickerEntryJson(bid: Double, // Price of last highest bid
-                              bidSize: Double, // Sum of 25 highest bid sizes
-                              ask: Double, // Price of last lowest ask
-                              askSize: Double, // Sum of 25 lowest ask sizes
-                              dailyChange: Double, // Amount that the last price has changed since yesterday
-                              dailyChangeRelative: Double, // Relative price change since yesterday (*100 for percentage change)
-                              lastPrice: Double, // Price of the last trade
-                              volume: Double, // Daily volume
-                              high: Double, // Daily high
-                              low: Double) { // Daily low
+private[bitfinex] case class RawTickerEntryJson(bid: Double, // Price of last highest bid
+                                                bidSize: Double, // Sum of 25 highest bid sizes
+                                                ask: Double, // Price of last lowest ask
+                                                askSize: Double, // Sum of 25 lowest ask sizes
+                                                dailyChange: Double, // Amount that the last price has changed since yesterday
+                                                dailyChangeRelative: Double, // Relative price change since yesterday (*100 for percentage change)
+                                                lastPrice: Double, // Price of the last trade
+                                                volume: Double, // Daily volume
+                                                high: Double, // Daily high
+                                                low: Double) { // Daily low
   def toTicker(exchange: String, tradePair: TradePair): Ticker =
     adapter.Ticker(exchange, tradePair, bid, None, ask, None, Some(lastPrice))
 }
-object RawTickerEntryJson {
+private[bitfinex] object RawTickerEntryJson {
   def apply(v: Vector[Double]): RawTickerEntryJson =
     RawTickerEntryJson(v(0), v(1), v(2), v(3), v(4), v(5), v(6), v(7), v(8), v(9))
 }
 
-case class RawTickerJson(channelId: Int, value: RawTickerEntryJson) extends IncomingPublicBitfinexJson // [channelId, [bid, bidSize, ask, askSize, dailyChange, dailyChangeRelative, lastPrice, volume, high, low]]
+private[bitfinex] case class RawTickerJson(channelId: Int, value: RawTickerEntryJson) extends IncomingPublicBitfinexJson // [channelId, [bid, bidSize, ask, askSize, dailyChange, dailyChangeRelative, lastPrice, volume, high, low]]
 
-object RawTickerJson {
+private[bitfinex] object RawTickerJson {
   def apply(v: Tuple2[Int, RawTickerEntryJson]): RawTickerJson = RawTickerJson(v._1, v._2)
 }
 
 
-case class RawOrderBookEntryJson(price: Double, count: Int, amount: Double)
-object RawOrderBookEntryJson {
+private[bitfinex] case class RawOrderBookEntryJson(price: Double, count: Int, amount: Double)
+private[bitfinex] object RawOrderBookEntryJson {
   def apply(v: Tuple3[Double, Int, Double]): RawOrderBookEntryJson = RawOrderBookEntryJson(v._1, v._2, v._3)
 }
 
 // [channelId, [[price, count, amount],...]]
-case class RawOrderBookSnapshotJson(channelId: Int, values: List[RawOrderBookEntryJson]) extends IncomingPublicBitfinexJson {
+private[bitfinex] case class RawOrderBookSnapshotJson(channelId: Int, values: List[RawOrderBookEntryJson]) extends IncomingPublicBitfinexJson {
   def toOrderBook(exchange: String, tradePair: TradePair): OrderBook = {
     val bids = values
       .filter(_.count > 0)
@@ -79,11 +79,11 @@ case class RawOrderBookSnapshotJson(channelId: Int, values: List[RawOrderBookEnt
     OrderBook(exchange, tradePair, bids, asks)
   }
 }
-object RawOrderBookSnapshotJson {
+private[bitfinex] object RawOrderBookSnapshotJson {
   def apply(v: Tuple2[Int, List[RawOrderBookEntryJson]]): RawOrderBookSnapshotJson = RawOrderBookSnapshotJson(v._1, v._2)
 }
 
-case class RawOrderBookUpdateJson(channelId: Int, value: RawOrderBookEntryJson) extends IncomingPublicBitfinexJson { // [channelId, [price, count, amount]]
+private[bitfinex] case class RawOrderBookUpdateJson(channelId: Int, value: RawOrderBookEntryJson) extends IncomingPublicBitfinexJson { // [channelId, [price, count, amount]]
   private val log = LoggerFactory.getLogger(classOf[RawOrderBookUpdateJson])
 
   /*
@@ -123,11 +123,11 @@ case class RawOrderBookUpdateJson(channelId: Int, value: RawOrderBookEntryJson) 
     }
   }
 }
-object RawOrderBookUpdateJson {
+private[bitfinex] object RawOrderBookUpdateJson {
   def apply(v: Tuple2[Int, RawOrderBookEntryJson]): RawOrderBookUpdateJson = RawOrderBookUpdateJson(v._1, v._2)
 }
 
-object WebSocketJsonProtocoll extends DefaultJsonProtocol {
+private[bitfinex] object WebSocketJsonProtocoll extends DefaultJsonProtocol {
   implicit val subscribeRequest: RootJsonFormat[SubscribeRequestJson] = jsonFormat3(SubscribeRequestJson)
 
   implicit object rawTickerFormat extends RootJsonFormat[RawTickerEntryJson] {
@@ -179,10 +179,10 @@ object BitfinexPublicDataChannel {
  * Bitfinex public data channel
  * Converts Raw data to unified ExchangeTPStreamData
  */
-class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
-                                exchangeConfig: ExchangeConfig,
-                                exchangePublicDataManager: ActorRef,
-                                publicDataInquirer: ActorRef) extends Actor {
+private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
+                                                  exchangeConfig: ExchangeConfig,
+                                                  exchangePublicDataManager: ActorRef,
+                                                  publicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BitfinexPublicDataChannel])
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher

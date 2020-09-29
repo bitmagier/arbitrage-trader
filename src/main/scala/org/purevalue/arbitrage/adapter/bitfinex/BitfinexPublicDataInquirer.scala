@@ -12,8 +12,8 @@ import spray.json._
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor}
 
-case class BitfinexSymbol(asset: Asset, apiSymbol: String)
-case class BitfinexTradePair(baseAsset: Asset, quoteAsset: Asset, apiSymbol: String) {
+private[bitfinex] case class BitfinexSymbol(asset: Asset, apiSymbol: String)
+private[bitfinex] case class BitfinexTradePair(baseAsset: Asset, quoteAsset: Asset, apiSymbol: String) {
   def toTradePair: TradePair = TradePair(baseAsset, quoteAsset)
 }
 
@@ -30,7 +30,7 @@ object BitfinexPublicDataInquirer {
 /**
  * Bitfinex exchange data channel
  */
-class BitfinexPublicDataInquirer(globalConfig: GlobalConfig,
+private[bitfinex] class BitfinexPublicDataInquirer(globalConfig: GlobalConfig,
                                  exchangeConfig: ExchangeConfig) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BitfinexPublicDataInquirer])
   private implicit val system: ActorSystem = Main.actorSystem
@@ -102,7 +102,7 @@ class BitfinexPublicDataInquirer(globalConfig: GlobalConfig,
         bitfinexAssets.exists(_.asset.officialSymbol == e._1)
           && bitfinexAssets.exists(_.asset.officialSymbol == e._2)) // crosscheck with bitfinex (configured) assets
       .map(e => BitfinexTradePair(Asset(e._1), Asset(e._2), s"t${e._3}"))
-      .filter(e => exchangeConfig.tradeAssets.contains(e.baseAsset) && exchangeConfig.tradeAssets.contains(e.quoteAsset))
+      .filterNot(e => exchangeConfig.assetBlocklist.contains(e.baseAsset) || exchangeConfig.assetBlocklist.contains(e.quoteAsset))
       .toSet
     if (log.isTraceEnabled) log.trace(s"bitfinexTradePairs: $bitfinexTradePairs")
   }

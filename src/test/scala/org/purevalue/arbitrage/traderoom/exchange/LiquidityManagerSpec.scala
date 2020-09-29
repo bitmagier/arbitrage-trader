@@ -42,7 +42,7 @@ class LiquidityManagerSpec
       "e1",
       secrets = null,
       reserveAssets = List(USDT, Bitcoin, Asset("ETH")),
-      tradeAssets = null,
+      assetBlocklist = null,
       makerFee = 0.0, // TODO make everything working including fees
       takerFee = 0.0,
       Seq(Asset("OMG")),

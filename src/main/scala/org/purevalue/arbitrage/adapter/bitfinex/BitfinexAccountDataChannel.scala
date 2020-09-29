@@ -3,7 +3,7 @@ package org.purevalue.arbitrage.adapter.bitfinex
 import java.time.Instant
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, Kill, PoisonPill, Props}
+import akka.actor.{Actor, ActorRef, ActorSystem, Kill, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{HttpMethods, StatusCodes, Uri}
@@ -20,7 +20,7 @@ import org.purevalue.arbitrage.adapter.{Balance, ExchangeAccountStreamData, Wall
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.util.HttpUtil.hmacSha384Signature
 import org.purevalue.arbitrage.util.Util.{convertBytesToLowerCaseHex, formatDecimal}
-import org.purevalue.arbitrage.util.{HttpUtil, Util, WrongAssumption}
+import org.purevalue.arbitrage.util.WrongAssumption
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsNumber, JsObject, JsString, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
@@ -29,32 +29,32 @@ import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor, Future, Promise}
 
 
-trait IncomingBitfinexAccountJson
+private[bitfinex] trait IncomingBitfinexAccountJson
 
-case class BitfinexAuthMessage(apiKey: String, authSig: String, authNonce: String, authPayload: String, filter: Vector[String], event: String = "auth")
-case class BitfinexOrderUpdateJson(streamType: String, // "os" = order snapshot, "on" = order new, "ou" = order update, "oc" = order cancel
-                                   orderId: Long,
-                                   groupId: Option[Long],
-                                   clientOrderId: Long,
-                                   symbol: String,
-                                   createTime: Long,
-                                   updateTime: Long,
-                                   amount: Double, // filled so far - positive means buy, negative means sell
-                                   amountOriginal: Double, // positive means buy, negative means sell
-                                   orderType: String, // The type of the order: LIMIT, MARKET, STOP, STOP LIMIT, TRAILING STOP, EXCHANGE MARKET, EXCHANGE LIMIT, EXCHANGE STOP, EXCHANGE STOP LIMIT, EXCHANGE TRAILING STOP, FOK, EXCHANGE FOK, IOC, EXCHANGE IOC.
-                                   orderTypePrev: Option[String],
-                                   timeInForceTime: Option[Long],
-                                   flags: Long,
-                                   orderStatus: String, // Order Status: ACTIVE, EXECUTED @ PRICE(AMOUNT) e.g. "EXECUTED @ 107.6(-0.2)", PARTIALLY FILLED @ PRICE(AMOUNT), INSUFFICIENT MARGIN was: PARTIALLY FILLED @ PRICE(AMOUNT), CANCELED, CANCELED was: PARTIALLY FILLED @ PRICE(AMOUNT), RSN_DUST (amount is less than 0.00000001), RSN_PAUSE (trading is paused / paused due to AMPL rebase event)
-                                   price: Double,
-                                   priceAverage: Double,
-                                   priceTrailing: Double,
-                                   priceAuxLimit: Double, // Auxiliary Limit price (STOP_LIMIT)
-                                   notifY: Int, // 0 if false, 1 if true
-                                   hidden: Option[Int], // 1 if Hidden, 0 if not hidden
-                                   placedId: Option[Long], // if another order caused this order to be placed (OCO) this will be that other order's ID
-                                   routing: String // indicates origin of action: BFX, ETHFX, API>BFX, API>ETHFX
-                                  ) extends IncomingBitfinexAccountJson {
+private[bitfinex] case class BitfinexAuthMessage(apiKey: String, authSig: String, authNonce: String, authPayload: String, filter: Vector[String], event: String = "auth")
+private[bitfinex] case class BitfinexOrderUpdateJson(streamType: String, // "os" = order snapshot, "on" = order new, "ou" = order update, "oc" = order cancel
+                                                     orderId: Long,
+                                                     groupId: Option[Long],
+                                                     clientOrderId: Long,
+                                                     symbol: String,
+                                                     createTime: Long,
+                                                     updateTime: Long,
+                                                     amount: Double, // filled so far - positive means buy, negative means sell
+                                                     amountOriginal: Double, // positive means buy, negative means sell
+                                                     orderType: String, // The type of the order: LIMIT, MARKET, STOP, STOP LIMIT, TRAILING STOP, EXCHANGE MARKET, EXCHANGE LIMIT, EXCHANGE STOP, EXCHANGE STOP LIMIT, EXCHANGE TRAILING STOP, FOK, EXCHANGE FOK, IOC, EXCHANGE IOC.
+                                                     orderTypePrev: Option[String],
+                                                     timeInForceTime: Option[Long],
+                                                     flags: Long,
+                                                     orderStatus: String, // Order Status: ACTIVE, EXECUTED @ PRICE(AMOUNT) e.g. "EXECUTED @ 107.6(-0.2)", PARTIALLY FILLED @ PRICE(AMOUNT), INSUFFICIENT MARGIN was: PARTIALLY FILLED @ PRICE(AMOUNT), CANCELED, CANCELED was: PARTIALLY FILLED @ PRICE(AMOUNT), RSN_DUST (amount is less than 0.00000001), RSN_PAUSE (trading is paused / paused due to AMPL rebase event)
+                                                     price: Double,
+                                                     priceAverage: Double,
+                                                     priceTrailing: Double,
+                                                     priceAuxLimit: Double, // Auxiliary Limit price (STOP_LIMIT)
+                                                     notifY: Int, // 0 if false, 1 if true
+                                                     hidden: Option[Int], // 1 if Hidden, 0 if not hidden
+                                                     placedId: Option[Long], // if another order caused this order to be placed (OCO) this will be that other order's ID
+                                                     routing: String // indicates origin of action: BFX, ETHFX, API>BFX, API>ETHFX
+                                                    ) extends IncomingBitfinexAccountJson {
 
   def extractBetweenRoundBrackets(s: String): String = {
     s.substring(s.indexOf('(') + 1, s.indexOf(')'))
@@ -72,17 +72,17 @@ case class BitfinexOrderUpdateJson(streamType: String, // "os" = order snapshot,
     exchange,
     resolveTradePair(symbol),
     if (amountOriginal >= 0.0) TradeSide.Buy else TradeSide.Sell,
-    toOrderType(orderType),
-    price,
+    Some(toOrderType(orderType)),
+    Some(price),
     if (priceAuxLimit != 0.0) Some(priceAuxLimit) else None, // TODO check what we get
     Some(amountOriginal.abs),
     Some(Instant.ofEpochMilli(createTime)),
     Some(toOrderStatus(orderStatus)),
-    parseCumulativeFilled.map(_.abs).getOrElse(amount.abs),
+    Some(parseCumulativeFilled.map(_.abs).getOrElse(amount.abs)),
     Some(priceAverage),
     Instant.ofEpochMilli(updateTime))
 }
-object BitfinexOrderUpdateJson {
+private[bitfinex] object BitfinexOrderUpdateJson {
 
   import DefaultJsonProtocol._
 
@@ -140,17 +140,17 @@ object BitfinexOrderUpdateJson {
   }
 }
 
-case class BitfinexTradeExecutedJson(tradeId: Long,
-                                     symbol: String,
-                                     executionTime: Long,
-                                     orderId: Long,
-                                     execAmount: Double, // positive means buy, negative means sell
-                                     execPrice: Double,
-                                     orderType: String,
-                                     orderPrice: Double,
-                                     maker: Int,
-                                     clientOrderId: Long
-                                    ) extends IncomingBitfinexAccountJson {
+private[bitfinex] case class BitfinexTradeExecutedJson(tradeId: Long,
+                                                       symbol: String,
+                                                       executionTime: Long,
+                                                       orderId: Long,
+                                                       execAmount: Double, // positive means buy, negative means sell
+                                                       execPrice: Double,
+                                                       orderType: String,
+                                                       orderPrice: Double,
+                                                       maker: Int,
+                                                       clientOrderId: Long
+                                                      ) extends IncomingBitfinexAccountJson {
   // fee: Option[Double], // "tu" only
   // feeCurrency: Option[String] // "tu" only
   def toOrderUpdate(exchange: String, resolveTradePair: String => TradePair): OrderUpdate = OrderUpdate(
@@ -158,18 +158,18 @@ case class BitfinexTradeExecutedJson(tradeId: Long,
     exchange,
     resolveTradePair(symbol),
     if (execAmount >= 0.0) TradeSide.Buy else TradeSide.Sell,
-    toOrderType(orderType),
-    orderPrice,
+    Some(toOrderType(orderType)),
+    Some(orderPrice),
     None,
     None,
     None,
     None,
-    execAmount.abs,
+    Some(execAmount.abs),
     Some(orderPrice),
     Instant.ofEpochMilli(executionTime)
   )
 }
-object BitfinexTradeExecutedJson {
+private[bitfinex] object BitfinexTradeExecutedJson {
 
   import DefaultJsonProtocol._
 
@@ -191,14 +191,14 @@ object BitfinexTradeExecutedJson {
     )
 }
 
-case class BitfinexWalletUpdateJson(walletType: String,
-                                    currency: String,
-                                    balance: Double,
-                                    unsettledInterest: Double,
-                                    balanceAvailable: Option[Double], // maybe null if not fresh enough
-                                    description: Option[String]
-                                    // ignoring meta: json // Provides info on the reason for the wallet update, if available.
-                                   ) extends IncomingBitfinexAccountJson {
+private[bitfinex] case class BitfinexWalletUpdateJson(walletType: String,
+                                                      currency: String,
+                                                      balance: Double,
+                                                      unsettledInterest: Double,
+                                                      balanceAvailable: Option[Double], // maybe null if not fresh enough
+                                                      description: Option[String]
+                                                      // ignoring meta: json // Provides info on the reason for the wallet update, if available.
+                                                     ) extends IncomingBitfinexAccountJson {
   def toWalletAssetUpdate(resolveAsset: String => Asset): WalletAssetUpdate = WalletAssetUpdate(
     if (walletType == "exchange") {
       val asset = resolveAsset(currency)
@@ -208,7 +208,7 @@ case class BitfinexWalletUpdateJson(walletType: String,
     else Map() // ignore "margin/funding" wallets
   )
 }
-object BitfinexWalletUpdateJson {
+private[bitfinex] object BitfinexWalletUpdateJson {
 
   import DefaultJsonProtocol._
 
@@ -222,23 +222,23 @@ object BitfinexWalletUpdateJson {
       v(5).convertTo[Option[String]])
 }
 
-case class SubmitLimitOrderJson(`type`: String,
-                                symbol: String,
-                                price: String,
-                                amount: String, // Amount of order (positive for buy, negative for sell)
-                                meta: JsObject)
+private[bitfinex] case class SubmitLimitOrderJson(`type`: String,
+                                                  symbol: String,
+                                                  price: String,
+                                                  amount: String, // Amount of order (positive for buy, negative for sell)
+                                                  meta: JsObject)
 
-case class SubmitOrderResponseJson(mts: Long,
-                                   orders: Vector[BitfinexOrderUpdateJson],
-                                   status: String, // SUCCESS, ERROR. FAILURE, ...
-                                   text: String)
+private[bitfinex] case class SubmitOrderResponseJson(mts: Long,
+                                                     orders: Vector[BitfinexOrderUpdateJson],
+                                                     status: String, // SUCCESS, ERROR. FAILURE, ...
+                                                     text: String)
 
-case class CancelOrderResponseJson(mts: Long,
-                                   order: BitfinexOrderUpdateJson,
-                                   status: String,
-                                   text: String)
+private[bitfinex] case class CancelOrderResponseJson(mts: Long,
+                                                     order: BitfinexOrderUpdateJson,
+                                                     status: String,
+                                                     text: String)
 
-object BitfinexAccountDataJsonProtocoll extends DefaultJsonProtocol {
+private[bitfinex] object BitfinexAccountDataJsonProtocoll extends DefaultJsonProtocol {
   implicit val bitfinexAuthMessage: RootJsonFormat[BitfinexAuthMessage] = jsonFormat6(BitfinexAuthMessage)
   implicit val submitLimitOrderJson: RootJsonFormat[SubmitLimitOrderJson] = jsonFormat5(SubmitLimitOrderJson)
 
@@ -286,7 +286,7 @@ object BitfinexAccountDataChannel {
             publicDataInquirer: ActorRef): Props =
     Props(new BitfinexAccountDataChannel(globalConfig, exchangeConfig, exchangeAccountDataManager, publicDataInquirer))
 }
-class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
+private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
                                  exchangeConfig: ExchangeConfig,
                                  exchangeAccountDataManager: ActorRef,
                                  exchangePublicDataInquirer: ActorRef) extends Actor {
