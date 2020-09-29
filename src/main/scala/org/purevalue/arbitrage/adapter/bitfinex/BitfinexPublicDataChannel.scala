@@ -352,7 +352,7 @@ class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
 
   def connect(): Unit = {
     var connectionId: Int = 0
-    bitfinexTradePairByApiSymbol.values.sliding(MaximumNumberOfChannelsPerConnection).foreach { partition =>
+    bitfinexTradePairByApiSymbol.values.grouped(MaximumNumberOfChannelsPerConnection).foreach { partition =>
       if (log.isTraceEnabled) log.trace(s"""starting a WebSocket stream partition for Tickers ${partition.mkString(",")}""")
       val subscribeMessages: List[SubscribeRequestJson] = partition.map(e => subscribeTickerMessage(e)).toList
       connectionId += 1
@@ -362,7 +362,7 @@ class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
       connectedList = createConnected(ws._1) :: connectedList
     }
 
-    bitfinexTradePairByApiSymbol.values.sliding(MaximumNumberOfChannelsPerConnection).foreach { partition =>
+    bitfinexTradePairByApiSymbol.values.grouped(MaximumNumberOfChannelsPerConnection).foreach { partition =>
       if (log.isTraceEnabled) log.trace(s"""starting a WebSocket stream partition for OrderBooks ${partition.mkString(",")}""")
       val subscribeMessages: List[SubscribeRequestJson] = partition.map(e => subscribeOrderBookMessage(e)).toList
       connectionId += 1
