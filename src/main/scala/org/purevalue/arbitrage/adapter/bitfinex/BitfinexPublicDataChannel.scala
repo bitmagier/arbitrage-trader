@@ -205,9 +205,9 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
 
   def exchangeDataMapping(connectionId: Int, in: Seq[IncomingPublicBitfinexJson]): Seq[ExchangePublicStreamData] = in.map {
     // @formatter:off
-    case t: RawTickerJson            => t.value.toTicker(exchangeConfig.exchangeName, tickerChannelTradePair(connectionId, t.channelId))
-    case b: RawOrderBookSnapshotJson => b.toOrderBook(exchangeConfig.exchangeName, orderBookChannelTradepair(connectionId, b.channelId))
-    case b: RawOrderBookUpdateJson   => b.toOrderBookUpdate(exchangeConfig.exchangeName, orderBookChannelTradepair(connectionId, b.channelId))
+    case t: RawTickerJson            => t.value.toTicker(exchangeConfig.name, tickerChannelTradePair(connectionId, t.channelId))
+    case b: RawOrderBookSnapshotJson => b.toOrderBook(exchangeConfig.name, orderBookChannelTradepair(connectionId, b.channelId))
+    case b: RawOrderBookUpdateJson   => b.toOrderBookUpdate(exchangeConfig.name, orderBookChannelTradepair(connectionId, b.channelId))
     case RawHeartbeat()              => Heartbeat(Instant.now)
     case other                       => log.error(s"unhandled object: $other"); throw new NotImplementedError()
     // @formatter:on

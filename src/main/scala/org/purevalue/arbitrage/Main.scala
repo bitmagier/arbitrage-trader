@@ -32,7 +32,7 @@ class RootGuardian(val config: Config) extends Actor {
 */
   override val supervisorStrategy: AllForOneStrategy = {
     AllForOneStrategy(maxNrOfRetries = 5, withinTimeRange = 20.minutes, loggingEnabled = true) {
-      case _:Throwable => Restart
+      case _: Throwable => Restart
     }
   }
 
@@ -43,19 +43,20 @@ class RootGuardian(val config: Config) extends Actor {
     // @formatter:on
   }
 
-//  // TODO coordinated shutdown
-//  CoordinatedShutdown(actorSystem).addTask(CoordinatedShutdown.PhaseBeforeServiceUnbind, "shutdown traderoom") { () =>
-//    val shutdownTimeout: Duration = config.gracefulShutdownTimeout
-//    implicit val askTimeout: Timeout = Timeout.create(shutdownTimeout)
-//    log.info("initiating graceful shutdown")
-//    tradeRoom.ask(Stop(shutdownTimeout.minusSeconds(1))).mapTo[Done]
-//  }
+  //  // TODO coordinated shutdown
+  //  CoordinatedShutdown(actorSystem).addTask(CoordinatedShutdown.PhaseBeforeServiceUnbind, "shutdown traderoom") { () =>
+  //    val shutdownTimeout: Duration = config.gracefulShutdownTimeout
+  //    implicit val askTimeout: Timeout = Timeout.create(shutdownTimeout)
+  //    log.info("initiating graceful shutdown")
+  //    tradeRoom.ask(Stop(shutdownTimeout.minusSeconds(1))).mapTo[Done]
+  //  }
 }
 
 
 object Main extends App {
   lazy val actorSystem = ActorSystem("ArbitrageTrader")
   private val _config = Config.load()
+
   def config(): Config = _config
 
   private val rootGuardian = actorSystem.actorOf(RootGuardian.props(config()), "RootGuardian")

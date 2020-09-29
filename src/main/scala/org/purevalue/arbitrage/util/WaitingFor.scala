@@ -9,9 +9,10 @@ case class WaitingFor() {
   private val latch: CountDownLatch = new CountDownLatch(1)
 
   def arrived(): Unit = latch.countDown()
+
   def isArrived: Boolean = latch.getCount == 0
 
-  def await(maxWaitTime:FiniteDuration): Unit = {
+  def await(maxWaitTime: FiniteDuration): Unit = {
     val arrived = latch.await(maxWaitTime.toMillis, TimeUnit.MILLISECONDS)
     if (!arrived) throw new TimeoutException("Maximum wait time exceeded")
   }

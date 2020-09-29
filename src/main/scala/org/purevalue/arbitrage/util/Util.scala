@@ -15,7 +15,7 @@ object Util {
 
   def formatDecimal(d: Double): String = formatDecimal(d, 8)
 
-  def formatDecimal(d: Double, visibleFractionDigits:Int, minimumFractionDigits:Int = 2): String = {
+  def formatDecimal(d: Double, visibleFractionDigits: Int, minimumFractionDigits: Int = 2): String = {
     val format = new DecimalFormat()
     format.setDecimalFormatSymbols(new DecimalFormatSymbols(Locale.ENGLISH))
     format.setMinimumIntegerDigits(1)
@@ -26,10 +26,19 @@ object Util {
   }
 
   // format with exactly the given precision
-  def formatDecimalWithFixPrecision(d: Double, precision:Int): String = {
+  def formatDecimalWithFixPrecision(d: Double, precision: Int): String = {
     val numWholeDigits = d.toInt.toString.length
     val numFractionDigits: Int = precision - numWholeDigits
     formatDecimal(d, numFractionDigits, numFractionDigits)
+  }
+
+  def alignToStepSizeCeil(amount: Double, stepSize: Double): Double = {
+    stepSize * (amount / stepSize).ceil
+  }
+
+  def alignToStepSizeNearest(price: Double, tickSize: Double): Double = {
+    if (tickSize == 0.0) price
+    else tickSize * (price / tickSize).round
   }
 
   def convertBytesToLowerCaseHex(bytes: Seq[Byte]): String = {

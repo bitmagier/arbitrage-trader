@@ -10,7 +10,7 @@ import org.slf4j.LoggerFactory
  * If one order placement fails, it tries to immediately cancel the successful ones
  */
 object OrderSetPlacer {
-  case class NewOrderSet(orders:Seq[NewLimitOrder])
+  case class NewOrderSet(orders: Seq[NewLimitOrder])
 
   def props(exchanges: Map[String, ActorRef]): Props = Props(new OrderSetPlacer(exchanges))
 }
@@ -49,7 +49,7 @@ case class OrderSetPlacer(exchanges: Map[String, ActorRef]) extends Actor {
 
     case c: CancelOrderResult =>
       expectedCancelOrderResults -= 1
-      if (c.success) log.info(s"$c")      else log.warn(s"$c")
+      if (c.success) log.info(s"$c") else log.warn(s"$c")
       if (expectedCancelOrderResults == 0) { // nothing more to do here
         self ! PoisonPill
       }

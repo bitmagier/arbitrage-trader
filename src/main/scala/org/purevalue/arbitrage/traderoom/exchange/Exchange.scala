@@ -10,7 +10,6 @@ import akka.util.Timeout
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager.{CancelOrder, NewLimitOrder}
 import org.purevalue.arbitrage.adapter._
-import org.purevalue.arbitrage.traderoom.Asset.USDT
 import org.purevalue.arbitrage.traderoom.TradeRoom.{JoinTradeRoom, OrderRef, TradeRoomJoined}
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
@@ -27,11 +26,11 @@ object Exchange {
   case class GetTradePairs()
   case class TradePairs(value: Set[TradePair])
   case class RemoveTradePair(tradePair: TradePair)
-  case class RemoveOrphanOrder(ref:OrderRef)
+  case class RemoveOrphanOrder(ref: OrderRef)
   case class StartStreaming()
   case class StreamingStarted(exchange: String)
   case class WalletUpdateTrigger()
-  case class OrderUpdateTrigger(ref: OrderRef, resendCounter:Int = 0) // status of an order has changed
+  case class OrderUpdateTrigger(ref: OrderRef, resendCounter: Int = 0) // status of an order has changed
   case class HouseKeeping()
   case class SwitchToInitializedMode()
 
@@ -97,17 +96,18 @@ case class Exchange(exchangeName: String,
   }
 
   def checkIfBalanceIsSufficientForTrading(): Unit = {
-    def balanceSufficient: Boolean =
-      accountData.wallet.balance.contains(USDT) &&
-        accountData.wallet.balance(USDT).amountAvailable >= tradeRoomConfig.pioneerOrderValueUSDT &&
-        accountData.wallet.liquidCryptoValueSum(USDT, publicData.ticker).amount >= tradeRoomConfig.liquidityManager.minimumKeepReserveLiquidityPerAssetInUSDT
 
-    val minRequiredBalance: Double = tradeRoomConfig.liquidityManager.minimumKeepReserveLiquidityPerAssetInUSDT
+    def balanceSufficient: Boolean =
+      accountData.wallet.balance.contains(exchangeConfig.usdEquivalentCoin) &&
+        accountData.wallet.balance(exchangeConfig.usdEquivalentCoin).amountAvailable >= tradeRoomConfig.pioneerOrderValueUSD &&
+        accountData.wallet.liquidCryptoValueSum(exchangeConfig.usdEquivalentCoin, publicData.ticker).amount >= tradeRoomConfig.liquidityManager.minimumKeepReserveLiquidityPerAssetInUSD
+
+    val minRequiredBalance: Double = tradeRoomConfig.liquidityManager.minimumKeepReserveLiquidityPerAssetInUSD
 
     if (!balanceSufficient) {
       throw new RuntimeException(s"Insufficient balance for trading on $exchangeName. " +
-        s"Expectation is to have at least ${tradeRoomConfig.pioneerOrderValueUSDT} USDT for the pioneer order " +
-        s"and a cumulated amount of at least $minRequiredBalance USDT available for trading. " +
+        s"Expectation is to have at least ${tradeRoomConfig.pioneerOrderValueUSD} USD for the pioneer order " +
+        s"and a cumulated amount of at least $minRequiredBalance USD available for trading. " +
         s"Wallet:\n${accountData.wallet.balance.values.mkString("\n")}")
     }
   }
@@ -144,11 +144,11 @@ case class Exchange(exchangeName: String,
     }
   }
 
-  def initiatePioneerOrder(): Unit = {
+  def initiatePioneerOrders(): Unit = {
     pioneerOrderRunner = context.actorOf(PioneerOrderRunner.props(
       globalConfig,
       tradeRoomConfig,
-      exchangeName,
+      exchangeConfig,
       self,
       accountData,
       publicData), s"PioneerOrderRunner-$exchangeName")
@@ -170,7 +170,7 @@ case class Exchange(exchangeName: String,
   val accountDataManagerInitialized: WaitingFor = WaitingFor()
   val publicDataManagerInitialized: WaitingFor = WaitingFor()
   val walletInitialized: WaitingFor = WaitingFor()
-  val pioneerOrderSucceeded: WaitingFor = WaitingFor()
+  val pioneerOrdersSucceeded: WaitingFor = WaitingFor()
   val joinedTradeRoom: WaitingFor = WaitingFor()
 
   def startStreaming(): Unit = {
@@ -184,12 +184,14 @@ case class Exchange(exchangeName: String,
         InitStep("start account-data-manager", () => startAccountDataManager()),
         InitStep("start public-data-manager", () => startPublicDataManager()),
         InitStep("wait until account-data-manager initialized", () => accountDataManagerInitialized.await(maxWaitTime)),
-        InitStep("wait until wallet data arrives", () => {walletInitialized.await(maxWaitTime); Thread.sleep(2000)}), // wait another 2 seconds for all wallet entries to arrive (bitfinex)
+        InitStep("wait until wallet data arrives", () => {
+          walletInitialized.await(maxWaitTime); Thread.sleep(2000)
+        }), // wait another 2 seconds for all wallet entries to arrive (bitfinex)
         InitStep("wait until public-data-manager initialized", () => publicDataManagerInitialized.await(maxWaitTime)),
         InitStep("check if balance is sufficient for trading", () => checkIfBalanceIsSufficientForTrading()),
         InitStep("warmup channels for 3 seconds", () => Thread.sleep(3000)),
-        InitStep(s"initiate pioneer order (${tradeRoomConfig.pioneerOrderValueUSDT} USDT -> Bitcoin)", () => initiatePioneerOrder()),
-        InitStep("waiting for pioneer order to succeed", () => pioneerOrderSucceeded.await(pioneerOrderMaxWaitTime)),
+        InitStep(s"initiate pioneers", () => initiatePioneerOrders()),
+        InitStep("waiting for pioneer orders to succeed", () => pioneerOrdersSucceeded.await(pioneerOrderMaxWaitTime)),
         InitStep("send streaming-started", () => sendStreamingStartedResponseTo ! StreamingStarted(exchangeName)),
         InitStep("wait until joined trade-room", () => joinedTradeRoom.await(maxWaitTime * 3))
       ))
@@ -222,7 +224,7 @@ case class Exchange(exchangeName: String,
     case RemoveTradePair(tp)                      => removeTradePairBeforeInitialized(tp); sender() ! true
     case ExchangePublicDataManager.Initialized()  => publicDataManagerInitialized.arrived()
     case ExchangeAccountDataManager.Initialized() => accountDataManagerInitialized.arrived()
-    case PioneerOrderSucceeded()                  => pioneerOrderSucceeded.arrived()
+    case PioneerOrderSucceeded()                  => pioneerOrdersSucceeded.arrived()
     case PioneerOrderFailed(e)                    => log.error(s"[$exchangeName] Pioneer order failed", e)
     case j: JoinTradeRoom                         => joinTradeRoom(j)
     case WalletUpdateTrigger()                    => if (!walletInitialized.isArrived) walletInitialized.arrived()

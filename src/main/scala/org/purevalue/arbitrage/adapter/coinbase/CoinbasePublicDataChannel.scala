@@ -98,17 +98,17 @@ object CoinbasePublicDataChannel {
             publicDataManager: ActorRef,
             coinbasePublicDataInquirer: ActorRef): Props = Props(new CoinbasePublicDataChannel(globalConfig, exchangeConfig, publicDataManager, coinbasePublicDataInquirer))
 }
-private [coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
-                                exchangeConfig: ExchangeConfig,
-                                publicDataManager: ActorRef,
-                                coinbasePublicDataInquirer: ActorRef) extends Actor {
+private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
+                                                  exchangeConfig: ExchangeConfig,
+                                                  publicDataManager: ActorRef,
+                                                  coinbasePublicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[CoinbasePublicDataChannel])
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
-  val BaseRestEndpoint: String = "https://api-public.sandbox.pro.coinbase.com" // https://api.pro.coinbase.com
+  val BaseRestEndpoint: String = "https://api.pro.coinbase.com"
   // The websocket feed is publicly available, but connections to it are rate-limited to 1 per 4 seconds per IP.
-  val WebSocketEndpoint: String = "wss://ws-feed-public.sandbox.pro.coinbase.com" // wss://ws-feed.pro.coinbase.com
+  val WebSocketEndpoint: String = "wss://ws-feed.pro.coinbase.com"
 
   val TickerChannelName: String = "ticker"
   val OrderBookChannelname: String = "level2"
@@ -120,9 +120,9 @@ private [coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
   // @formatter:off
   def exchangeDataMapping(in: IncomingPublicCoinbaseJson): ExchangePublicStreamData = {
     in match {
-      case t: TickerJson            => t.toTicker(exchangeConfig.exchangeName, id => coinbaseTradePairByProductId(id).toTradePair)
-      case o: OrderBookSnapshotJson => o.toOrderBook(exchangeConfig.exchangeName, id => coinbaseTradePairByProductId(id).toTradePair)
-      case o: OrderBookUpdateJson   => o.toOrderBookUpdate(exchangeConfig.exchangeName, id => coinbaseTradePairByProductId(id).toTradePair)
+      case t: TickerJson            => t.toTicker(exchangeConfig.name, id => coinbaseTradePairByProductId(id).toTradePair)
+      case o: OrderBookSnapshotJson => o.toOrderBook(exchangeConfig.name, id => coinbaseTradePairByProductId(id).toTradePair)
+      case o: OrderBookUpdateJson   => o.toOrderBookUpdate(exchangeConfig.name, id => coinbaseTradePairByProductId(id).toTradePair)
     }
   } // @formatter:on
 

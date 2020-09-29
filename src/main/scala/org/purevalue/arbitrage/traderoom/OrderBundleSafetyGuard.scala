@@ -3,7 +3,7 @@ package org.purevalue.arbitrage.traderoom
 import java.time.{Duration, Instant}
 
 import org.purevalue.arbitrage.adapter.PublicDataTimestamps
-import org.purevalue.arbitrage.traderoom.Asset.USDT
+import org.purevalue.arbitrage.traderoom.Asset.{AssetUSDT, Bitcoin}
 import org.purevalue.arbitrage.traderoom.TradeRoom.{ActiveOrderBundlesReadonly, TradeContext}
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.OrderBookTooFlatException
@@ -72,7 +72,7 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
    *
    * It is possible to use different Liquidity reserve assets for different involved assets/trades
    */
-  private def balanceOfLiquidityTransformationCompensationTransactionsInUSDT(t: OrderRequestBundle): Option[Double] = {
+  private def balanceOfLiquidityTransformationCompensationTransactionsInUSD(t: OrderRequestBundle): Option[Double] = {
     val involvedAssetsPerExchange: Map[String, Set[Asset]] =
       t.orderRequests
         .groupBy(_.exchange)
@@ -167,23 +167,24 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
 
     val balanceSheet: Iterable[LocalCryptoValue] = transactions.flatMap(OrderBill.calcBalanceSheet)
 
-    Some(
-      OrderBill.aggregateValues(
-        balanceSheet,
-        USDT,
-        tc.tickers))
+    val btcValue = OrderBill.aggregateValues(
+      balanceSheet,
+      Bitcoin,
+      tc.tickers)
+
+    Some(CryptoValue(Bitcoin, btcValue).convertTo(AssetUSDT, tc.referenceTicker).amount)
   }
 
 
   // returns decision-result and the total win in case the decision-result is true
   private def totalTransactionsWinInRage(t: OrderRequestBundle): (Boolean, Option[Double]) = {
-    val b: Option[Double] = balanceOfLiquidityTransformationCompensationTransactionsInUSDT(t)
+    val b: Option[Double] = balanceOfLiquidityTransformationCompensationTransactionsInUSD(t)
     if (b.isEmpty) return (false, None)
-    if ((t.bill.sumUSDTAtCalcTime + b.get) < config.minTotalGainInUSDT) {
-      log.debug(s"${Emoji.LookingDown}  Got interesting $t, but the sum of costs (${formatDecimal(b.get)} USDT) of the necessary " +
-        s"liquidity transformation transactions makes the whole thing uneconomic (total gain: ${formatDecimal(t.bill.sumUSDTAtCalcTime + b.get)} USDT = lower than threshold ${config.minTotalGainInUSDT} USDT).")
+    if ((t.bill.sumUSDAtCalcTime + b.get) < config.minTotalGainInUSD) {
+      log.debug(s"${Emoji.LookingDown}  Got interesting $t, but the sum of costs (${formatDecimal(b.get)} USD) of the necessary " +
+        s"liquidity transformation transactions makes the whole thing uneconomic (total gain: ${formatDecimal(t.bill.sumUSDAtCalcTime + b.get)} USD = lower than threshold ${config.minTotalGainInUSD} USD).")
       (false, None)
-    } else (true, Some(t.bill.sumUSDTAtCalcTime))
+    } else (true, Some(t.bill.sumUSDAtCalcTime))
   }
 
   // reject OrderBundles, when there is another active order of the same exchange+tradepair still active
@@ -204,14 +205,14 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
 
     def unsafe(d: SafetyGuardDecision): (Boolean, SafetyGuardDecision, Option[Double]) = (false, d, None)
 
-    if (bundle.bill.sumUSDTAtCalcTime <= 0) {
-      log.warn(s"${Emoji.Disagree}  Got OrderBundle with negative balance: ${bundle.bill.sumUSDTAtCalcTime}. I will not execute that one!")
+    if (bundle.bill.sumUSDAtCalcTime <= 0) {
+      log.warn(s"${Emoji.Disagree}  Got OrderBundle with negative balance: ${bundle.bill.sumUSDAtCalcTime}. I will not execute that one!")
       log.debug(s"$bundle")
       unsafe(NegativeBalance)
     } else if (!bundle.orderRequests.forall(tickerDataUpToDate)) {
       unsafe(TickerOutdated)
-    } else if (bundle.bill.sumUSDTAtCalcTime >= config.maximumReasonableWinPerOrderBundleUSDT) {
-      log.warn(s"${Emoji.Disagree}  Got OrderBundle with unbelievable high estimated win of ${formatDecimal(bundle.bill.sumUSDTAtCalcTime)} USDT. I will rather not execute that one - seem to be a bug!")
+    } else if (bundle.bill.sumUSDAtCalcTime >= config.maximumReasonableWinPerOrderBundleUSD) {
+      log.warn(s"${Emoji.Disagree}  Got OrderBundle with unbelievable high estimated win of ${formatDecimal(bundle.bill.sumUSDAtCalcTime)} USD. I will rather not execute that one - seem to be a bug!")
       log.debug(s"${Emoji.Disagree}  $bundle")
       unsafe(TooFantasticWin)
     } else if (!bundle.orderRequests.forall(orderLimitCloseToTicker))

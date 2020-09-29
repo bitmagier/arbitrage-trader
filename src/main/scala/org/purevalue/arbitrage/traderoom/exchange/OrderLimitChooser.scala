@@ -19,14 +19,16 @@ class OrderLimitChooser(private val orderBook: Option[OrderBook], private val ti
    *
    * The result will be None, in case we have an order book available, but not enough entires in the order book to fulfil our order
    * (happened on bitfinex for TUSD:USDT)
+   *
+   * @param realityAdjustmentRate small relative rate to add/substract from the edge-order-limit to get our order through. 0.0002 is a good starting point
    */
-  def determineRealisticOrderLimit(tradeSide: TradeSide, amountBaseAssetEstimate: Double, realityAdjustmentRate: Double = 0.0002): Option[Double] = {
-    determineEdgeOrderLimit(tradeSide, amountBaseAssetEstimate).map(edgeLimit =>
-      tradeSide match {
+  def determineRealisticOrderLimit(tradeSide: TradeSide, amountBaseAssetEstimate: Double, realityAdjustmentRate: Double): Option[Double] = {
+    determineEdgeOrderLimit(tradeSide, amountBaseAssetEstimate)
+      .map(edgeLimit => tradeSide match {
         case TradeSide.Buy => edgeLimit * (1.0 + realityAdjustmentRate)
         case TradeSide.Sell => edgeLimit * (1.0 - realityAdjustmentRate)
       }
-    )
+      )
   }
 
   /**

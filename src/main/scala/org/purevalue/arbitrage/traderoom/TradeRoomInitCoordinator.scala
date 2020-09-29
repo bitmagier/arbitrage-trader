@@ -4,7 +4,7 @@ import akka.actor.{Actor, ActorRef, Props}
 import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage.adapter._
-import org.purevalue.arbitrage.traderoom.Asset.{Bitcoin, USDT}
+import org.purevalue.arbitrage.traderoom.Asset.Bitcoin
 import org.purevalue.arbitrage.traderoom.TradeRoom.{ConcurrentMap, OrderRef}
 import org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator.InitializedTradeRoom
 import org.purevalue.arbitrage.traderoom.exchange.Exchange
@@ -19,7 +19,8 @@ import scala.concurrent.duration.DurationInt
 
 object TradeRoomInitCoordinator {
   case class InitializedTradeRoom(tradeRoom: ActorRef)
-  def props(config: Config, parent: ActorRef): Props = Props(new TradeRoomInitCoordinator(config, parent))
+  def props(config: Config,
+            parent: ActorRef): Props = Props(new TradeRoomInitCoordinator(config, parent))
 }
 class TradeRoomInitCoordinator(val config: Config,
                                val parent: ActorRef) extends Actor {
@@ -92,9 +93,10 @@ class TradeRoomInitCoordinator(val config: Config,
     for (asset <- assetsToRemove) {
       val tradePairsToDrop: Set[Tuple2[String, TradePair]] =
         eTradePairs
-          .filter(e => e._2.baseAsset == asset && e._2.quoteAsset != USDT) // keep :USDT TradePairs because we want them in the ReferenceTicker
-          .filterNot(e => !eTradePairs.exists(x => x._1 == e._1 && x._2 == TradePair(e._2.baseAsset, USDT)) && // when no :USDT tradepair exists
-            e._2 == TradePair(e._2.baseAsset, Bitcoin)) // keep :BTC tradepair (for currency conversion via x -> BTC -> USDT)
+          .filter(e => e._2.baseAsset == asset && e._2.quoteAsset != config.tradeRoom.exchanges(e._1).usdEquivalentCoin) // keep :USD-equivalent TradePairs because we want them for currency calculations (and in the ReferenceTicker)
+          .filterNot(e =>
+            !eTradePairs.exists(x => x._1 == e._1 && x._2 == TradePair(e._2.baseAsset, config.tradeRoom.exchanges(e._1).usdEquivalentCoin)) && // when no :USD-eqiv tradepair exists
+            e._2 == TradePair(e._2.baseAsset, Bitcoin)) // keep :BTC tradepair (for currency conversion via x -> BTC -> USD-equiv)
 
       if (tradePairsToDrop.nonEmpty) {
         log.debug(s"${Emoji.Robot}  Dropping some TradePairs involving $asset, because we don't have a use for it:  $tradePairsToDrop")

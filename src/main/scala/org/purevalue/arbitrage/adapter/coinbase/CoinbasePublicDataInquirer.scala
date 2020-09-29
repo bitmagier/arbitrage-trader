@@ -1,6 +1,6 @@
 package org.purevalue.arbitrage.adapter.coinbase
 
-import akka.actor.{Actor, ActorSystem, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
 import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataInquirer.GetCoinbaseTradePairs
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.{GetTradePairs, TradePairs}
 import org.purevalue.arbitrage.traderoom.{Asset, TradePair}
@@ -11,7 +11,7 @@ import spray.json.{DefaultJsonProtocol, RootJsonFormat}
 
 import scala.concurrent.{Await, ExecutionContextExecutor}
 
-private[coinbase] case class CoinbaseTradePair(id: String,
+private[coinbase] case class CoinbaseTradePair(id: String, // product_id
                                                baseAsset: Asset,
                                                quoteAsset: Asset,
                                                baseIncrement: Double,
@@ -49,6 +49,7 @@ private[coinbase] object CoinbaseJsonProtocol extends DefaultJsonProtocol {
 
 object CoinbasePublicDataInquirer {
   case class GetCoinbaseTradePairs()
+  case class DeliverAccounts()
 
   case class CoinbaseTradePair()
 
@@ -56,12 +57,13 @@ object CoinbasePublicDataInquirer {
             exchangeConfig: ExchangeConfig): Props = Props(new CoinbasePublicDataInquirer(globalConfig, exchangeConfig))
 }
 private[coinbase] class CoinbasePublicDataInquirer(globalConfig: GlobalConfig,
-                                 exchangeConfig: ExchangeConfig) extends Actor {
+                                                   exchangeConfig: ExchangeConfig) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[CoinbasePublicDataInquirer])
-  implicit val system: ActorSystem = Main.actorSystem
-  implicit val executionContext: ExecutionContextExecutor = system.dispatcher
+  implicit val actorSystem: ActorSystem = Main.actorSystem
+  implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
-  val CoinbaseBaseRestEndpoint: String = "https://api-public.sandbox.pro.coinbase.com" // https://api.pro.coinbase.com
+  val CoinbaseBaseRestEndpoint: String = "https://api.pro.coinbase.com"
+
   var tradePairs: Set[TradePair] = _
   var coinbaseTradePairs: Set[CoinbaseTradePair] = _
 

@@ -1,6 +1,6 @@
 package org.purevalue.arbitrage.adapter.bitfinex
 
-import akka.actor.{Actor, ActorSystem, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.{GetBitfinexAssets, GetBitfinexTradePairs}
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.{GetTradePairs, TradePairs}
@@ -31,7 +31,7 @@ object BitfinexPublicDataInquirer {
  * Bitfinex exchange data channel
  */
 private[bitfinex] class BitfinexPublicDataInquirer(globalConfig: GlobalConfig,
-                                 exchangeConfig: ExchangeConfig) extends Actor {
+                                                   exchangeConfig: ExchangeConfig) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BitfinexPublicDataInquirer])
   private implicit val system: ActorSystem = Main.actorSystem
   private implicit val executor: ExecutionContextExecutor = system.dispatcher

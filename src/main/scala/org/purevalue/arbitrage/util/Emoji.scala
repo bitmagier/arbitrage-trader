@@ -22,4 +22,4 @@ object Emoji {
   val Satisfied = "(◠﹏◠)"
   val Judgemental = "{ಠʖಠ}"
   val NoSupport = "乁( ◔ ౪◔)「"
-  }
+}

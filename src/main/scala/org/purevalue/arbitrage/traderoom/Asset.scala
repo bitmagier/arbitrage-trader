@@ -9,7 +9,7 @@ import org.purevalue.arbitrage.util.Util.formatDecimal
 
 // Crypto asset / coin.
 // It should NOT be created somewhere else. The way to get it is via Asset(officialSymbol)
-case class Asset(officialSymbol: String, name: String, defaultPrecision:Int = 5, isFiat: Boolean = false) {
+case class Asset(officialSymbol: String, name: String, defaultFractionDigits: Int = 5, isFiat: Boolean = false) {
 
   private def canConvertIndirectly(targetAsset: Asset, intermediateAsset: Asset, conversionRateExists: TradePair => Boolean): Boolean = {
     canConvertDirectlyTo(intermediateAsset, conversionRateExists) &&
@@ -24,7 +24,7 @@ case class Asset(officialSymbol: String, name: String, defaultPrecision:Int = 5,
 
   private def canConvertTo(targetAsset: Asset, conversionRateExists: TradePair => Boolean): Boolean = {
     canConvertDirectlyTo(targetAsset, conversionRateExists) ||
-    canConvertIndirectly(targetAsset, Bitcoin, conversionRateExists)
+      canConvertIndirectly(targetAsset, Bitcoin, conversionRateExists)
   }
 
   def canConvertTo(targetAsset: Asset, ticker: collection.Map[TradePair, Ticker]): Boolean = {
@@ -46,7 +46,9 @@ object Asset {
   val Euro: Asset = Asset("EUR")
   val USDollar: Asset = Asset("USD")
   val Bitcoin: Asset = Asset("BTC")
-  val USDT: Asset = Asset("USDT")
+
+  val AssetUSDT: Asset = Asset("USDT")
+  val AssetUSDC: Asset = Asset("USDC")
 
   def apply(officialSymbol: String): Asset = {
     if (!StaticConfig.AllAssets.contains(officialSymbol)) {
@@ -93,13 +95,13 @@ object TradePair {
 case class FiatMoney(asset: Asset, amount: Double) {
   if (!asset.isFiat) throw new IllegalArgumentException(s"$asset is not Fiat Money")
 
-  override def toString: String = s"""${formatDecimal(amount,2)} ${asset.officialSymbol}"""
+  override def toString: String = s"""${formatDecimal(amount, 2)} ${asset.officialSymbol}"""
 }
 
 case class CryptoValue(asset: Asset, amount: Double) {
   if (asset.isFiat) throw new IllegalArgumentException(s"Fiat $asset isn't a crypto asset")
 
-  override def toString: String = s"${formatDecimal(amount, asset.defaultPrecision)} ${asset.officialSymbol}"
+  override def toString: String = s"${formatDecimal(amount, asset.defaultFractionDigits)} ${asset.officialSymbol}"
 
   def canConvertTo(targetAsset: Asset, ticker: collection.Map[TradePair, Ticker]): Boolean =
     this.asset.canConvertTo(targetAsset, ticker)

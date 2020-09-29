@@ -24,7 +24,7 @@ class TradeSimulator(exchangeConfig: ExchangeConfig,
 
   def cancelOrder(tradePair: TradePair, externalOrderId: String): Future[CancelOrderResult] = {
     Future.successful(
-      CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId, success = false, Some("(easy way) always fail, because we assume the order is already filled"))
+      CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId, success = false, Some("(easy way) always fail, because we assume the order is already filled"))
     )
   }
 
@@ -64,12 +64,12 @@ class TradeSimulator(exchangeConfig: ExchangeConfig,
     executionContext.execute(() => simulateOrderLifetime(externalOrderId, o))
 
     Future.successful(
-      NewOrderAck(exchangeConfig.exchangeName, o.tradePair, externalOrderId, o.id)
+      NewOrderAck(exchangeConfig.name, o.tradePair, externalOrderId, o.id)
     )
   }
 
   override def receive: Receive = {
-    case CancelOrder(ref)            => cancelOrder(ref.tradePair, ref.externalOrderId).pipeTo(sender())
+    case CancelOrder(ref) => cancelOrder(ref.tradePair, ref.externalOrderId).pipeTo(sender())
     case NewLimitOrder(orderRequest) => newLimitOrder(orderRequest).pipeTo(sender())
   }
 }

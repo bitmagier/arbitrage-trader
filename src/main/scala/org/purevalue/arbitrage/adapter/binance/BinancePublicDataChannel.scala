@@ -71,9 +71,9 @@ object BinancePublicDataChannel {
  * Converts Raw TradePair-based data to unified ExchangeTPStreamData
  */
 private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
-                               exchangeConfig: ExchangeConfig,
-                               publicDataManager: ActorRef,
-                               binancePublicDataInquirer: ActorRef) extends Actor {
+                                                exchangeConfig: ExchangeConfig,
+                                                publicDataManager: ActorRef,
+                                                binancePublicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BinancePublicDataChannel])
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
@@ -105,8 +105,8 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
 
   def exchangeDataMapping(in: Seq[IncomingPublicBinanceJson]): Seq[ExchangePublicStreamData] = in.map {
     // @formatter:off
-    case t: RawBookTickerRestJson   => t.toTicker(exchangeConfig.exchangeName, resolveTradePairSymbol)
-    case t: RawBookTickerStreamJson => t.toTicker(exchangeConfig.exchangeName, resolveTradePairSymbol)
+    case t: RawBookTickerRestJson   => t.toTicker(exchangeConfig.name, resolveTradePairSymbol)
+    case t: RawBookTickerStreamJson => t.toTicker(exchangeConfig.name, resolveTradePairSymbol)
     case other                      =>
       log.error(s"binance unhandled object: $other")
       throw new RuntimeException()

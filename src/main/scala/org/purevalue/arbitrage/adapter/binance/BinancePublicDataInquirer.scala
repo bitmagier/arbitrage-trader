@@ -1,6 +1,6 @@
 package org.purevalue.arbitrage.adapter.binance
 
-import akka.actor.{Actor, ActorSystem, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer._
 import org.purevalue.arbitrage.adapter.{Ask, Bid}
@@ -86,7 +86,8 @@ object BinancePublicDataInquirer {
 
   val BinanceBaseRestEndpoint = "https://api.binance.com"
 
-  def props(globalConfig: GlobalConfig, exchangeConfig: ExchangeConfig): Props =
+  def props(globalConfig: GlobalConfig,
+            exchangeConfig: ExchangeConfig): Props =
     Props(new BinancePublicDataInquirer(globalConfig, exchangeConfig))
 }
 
@@ -94,7 +95,7 @@ object BinancePublicDataInquirer {
  * Binance exchange - account data channel
  */
 private[binance] class BinancePublicDataInquirer(globalConfig: GlobalConfig,
-                                exchangeConfig: ExchangeConfig) extends Actor {
+                                                 exchangeConfig: ExchangeConfig) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BinancePublicDataInquirer])
   implicit val system: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = system.dispatcher

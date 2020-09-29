@@ -1,10 +1,10 @@
 package org.purevalue.arbitrage.traderoom
 
-import java.time.{Instant, LocalDateTime}
+import java.time.Instant
 import java.util.UUID
 
-import org.purevalue.arbitrage.adapter.{ExchangeAccountStreamData, Fee}
-import org.purevalue.arbitrage.traderoom.Asset.USDT
+import org.purevalue.arbitrage.adapter.{ExchangeAccountStreamData, Fee, Ticker}
+import org.purevalue.arbitrage.traderoom.Asset.{AssetUSDC, AssetUSDT}
 import org.purevalue.arbitrage.traderoom.TradeRoom.{OrderRef, TickersReadonly}
 import org.purevalue.arbitrage.util.IncomingDataError
 import org.purevalue.arbitrage.util.Util.formatDecimal
@@ -32,10 +32,10 @@ case class Order(externalId: String,
       case TradeSide.Buy => "<-"
       case TradeSide.Sell => "->"
     }
-    s"[$exchange side ${cumulativeFilledQuantity.map(formatDecimal(_, tradePair.baseAsset.defaultPrecision))} " +
+    s"[$exchange side ${cumulativeFilledQuantity.map(formatDecimal(_, tradePair.baseAsset.defaultFractionDigits))} " +
       s"${tradePair.baseAsset.officialSymbol}$direction${tradePair.quoteAsset.officialSymbol} " +
-      s"""filled ${if (cumulativeFilledQuantity.isDefined && priceAverage.isDefined) formatDecimal(cumulativeFilledQuantity.get * priceAverage.get, tradePair.quoteAsset.defaultPrecision) else "n/a"} """ +
-      s"price ${orderPrice.map(formatDecimal(_, tradePair.quoteAsset.defaultPrecision))} $orderStatus]"
+      s"""filled ${if (cumulativeFilledQuantity.isDefined && priceAverage.isDefined) formatDecimal(cumulativeFilledQuantity.get * priceAverage.get, tradePair.quoteAsset.defaultFractionDigits) else "n/a"} """ +
+      s"price ${orderPrice.map(formatDecimal(_, tradePair.quoteAsset.defaultFractionDigits))} $orderStatus]"
   }
 
 
@@ -208,9 +208,9 @@ case class OrderRequest(id: UUID,
       case TradeSide.Buy => s"${tradePair.baseAsset.officialSymbol}<-${tradePair.quoteAsset.officialSymbol}"
       case TradeSide.Sell => s"${tradePair.baseAsset.officialSymbol}->${tradePair.quoteAsset.officialSymbol}"
     }
-    s"($exchange: ${formatDecimal(amountBaseAsset, tradePair.baseAsset.defaultPrecision)} " +
-      s"$orderDesc ${formatDecimal(amountBaseAsset * limit, tradePair.quoteAsset.defaultPrecision)} " +
-      s"limit ${formatDecimal(limit, tradePair.quoteAsset.defaultPrecision)})"
+    s"($exchange: ${formatDecimal(amountBaseAsset, tradePair.baseAsset.defaultFractionDigits)} " +
+      s"$orderDesc ${formatDecimal(amountBaseAsset * limit, tradePair.quoteAsset.defaultFractionDigits)} " +
+      s"limit ${formatDecimal(limit, tradePair.quoteAsset.defaultFractionDigits)})"
   }
 
   def shortDesc: String = s"OrderRequest($exchange: $tradeDesc)"
@@ -236,8 +236,8 @@ case class OrderRequest(id: UUID,
  * The bill which is expected from executing an OrderRequest
  * (direct costs only, not including liquidity TXs)
  */
-case class OrderBill(balanceSheet: Seq[LocalCryptoValue], sumUSDTAtCalcTime: Double) {
-  override def toString: String = s"""OrderBill(balanceSheet:[${balanceSheet.mkString(", ")}], sumUSDT:${formatDecimal(sumUSDTAtCalcTime, 2)})"""
+case class OrderBill(balanceSheet: Seq[LocalCryptoValue], sumUSDAtCalcTime: Double) {
+  override def toString: String = s"""OrderBill(balanceSheet:[${balanceSheet.mkString(", ")}], sumUSD:${formatDecimal(sumUSDAtCalcTime, 2)})"""
 }
 object OrderBill {
   /**
@@ -255,6 +255,7 @@ object OrderBill {
   def aggregateValues(balanceSheet: Iterable[LocalCryptoValue],
                       targetAsset: Asset,
                       findConversionRate: (String, TradePair) => Option[Double]): Double = {
+
     val sumByLocalAsset: Iterable[LocalCryptoValue] = balanceSheet
       .groupBy(e => (e.exchange, e.asset))
       .map(e => LocalCryptoValue(e._1._1, e._1._2, e._2.map(_.amount).sum))
@@ -270,26 +271,33 @@ object OrderBill {
     aggregateValues(balanceSheet, targetAsset, (exchange, tradePair) => tickers(exchange).get(tradePair).map(_.priceEstimate))
 
   def calc(orders: Seq[OrderRequest],
-           tickers: TickersReadonly): OrderBill = {
+           aggregateUSDxAsset: Asset,
+           referenceTicker: collection.Map[TradePair, Ticker]): OrderBill = {
+    if (aggregateUSDxAsset != AssetUSDT && aggregateUSDxAsset != AssetUSDC) throw new IllegalArgumentException("not a USD equivalent asset")
+
     val balanceSheet: Seq[LocalCryptoValue] = orders.flatMap(calcBalanceSheet)
-    val sumUSDT: Double = aggregateValues(balanceSheet, USDT, tickers)
-    OrderBill(balanceSheet, sumUSDT)
+    val sumUSD: Double = aggregateValues(balanceSheet, aggregateUSDxAsset, (_,tradePair) => referenceTicker.get(tradePair).map(_.priceEstimate))
+    OrderBill(balanceSheet, sumUSD)
   }
 
   // TODO handle non-FILLED orders correctly
   def calc(orders: Seq[Order],
-           tickers: TickersReadonly,
+           referenceTicker: collection.Map[TradePair, Ticker],
+           aggregateUSDxAsset: Asset,
            fees: Map[String, Fee]): OrderBill = {
-    val balanceSheet: Seq[LocalCryptoValue] = orders.flatMap(o => calcBalanceSheet(o, fees(o.exchange)))
-    val sumUSDT: Double = aggregateValues(balanceSheet, USDT, tickers)
-    OrderBill(balanceSheet, sumUSDT)
+    if (aggregateUSDxAsset != AssetUSDT && aggregateUSDxAsset != AssetUSDC) throw new IllegalArgumentException("not a USD equivalent asset")
+
+    val balanceSheet: Seq[LocalCryptoValue] =
+      orders.flatMap(o => calcBalanceSheet(o, fees(o.exchange)))
+    val sumUSD: Double = aggregateValues(balanceSheet, aggregateUSDxAsset, (_,tradePair) => referenceTicker.get(tradePair).map(_.priceEstimate))
+    OrderBill(balanceSheet, sumUSD)
   }
 }
 
 /** High level order request bundle, covering 2 or more trader orders */
 case class OrderRequestBundle(id: UUID,
                               tradePattern: String,
-                              creationTime: LocalDateTime,
+                              creationTime: Instant,
                               orderRequests: List[OrderRequest],
                               bill: OrderBill) {
   def tradeDesc: String = s"""[${orderRequests.map(_.tradeDesc).mkString(" & ")}]"""

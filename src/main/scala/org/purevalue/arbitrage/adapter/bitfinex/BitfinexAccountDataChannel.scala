@@ -287,9 +287,9 @@ object BitfinexAccountDataChannel {
     Props(new BitfinexAccountDataChannel(globalConfig, exchangeConfig, exchangeAccountDataManager, publicDataInquirer))
 }
 private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
-                                 exchangeConfig: ExchangeConfig,
-                                 exchangeAccountDataManager: ActorRef,
-                                 exchangePublicDataInquirer: ActorRef) extends Actor {
+                                                   exchangeConfig: ExchangeConfig,
+                                                   exchangeAccountDataManager: ActorRef,
+                                                   exchangePublicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BitfinexAccountDataChannel])
 
   val BaseRestEndpoint = "https://api.bitfinex.com"
@@ -315,8 +315,8 @@ private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
 
   def exchangeDataMapping(in: Seq[IncomingBitfinexAccountJson]): Seq[ExchangeAccountStreamData] = in.map {
     // @formatter:off
-    case o: BitfinexOrderUpdateJson   => o.toOrderUpdate(exchangeConfig.exchangeName, symbol => bitfinexTradePairByApiSymbol(symbol).toTradePair)
-    case t: BitfinexTradeExecutedJson => t.toOrderUpdate(exchangeConfig.exchangeName, symbol => bitfinexTradePairByApiSymbol(symbol).toTradePair)
+    case o: BitfinexOrderUpdateJson   => o.toOrderUpdate(exchangeConfig.name, symbol => bitfinexTradePairByApiSymbol(symbol).toTradePair)
+    case t: BitfinexTradeExecutedJson => t.toOrderUpdate(exchangeConfig.name, symbol => bitfinexTradePairByApiSymbol(symbol).toTradePair)
     case w: BitfinexWalletUpdateJson  => w.toWalletAssetUpdate(symbol => symbolToAsset(symbol))
     case x                            => log.error(s"$x"); throw new NotImplementedError
     // @formatter:on
@@ -497,10 +497,10 @@ private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
       SubmitLimitOrderJson(
         "EXCHANGE LIMIT", // has to be "EXCHANGE ..." see https://github.com/bitfinexcom/bitfinex-api-node/issues/220
         resolveSymbol.apply(o.tradePair),
-        formatDecimal(o.limit, Math.min(Math.max(MinPricePrecision, o.tradePair.quoteAsset.defaultPrecision), MaxPricePrecision)),
+        formatDecimal(o.limit, Math.min(Math.max(MinPricePrecision, o.tradePair.quoteAsset.defaultFractionDigits), MaxPricePrecision)),
         o.tradeSide match {
-          case TradeSide.Buy => formatDecimal(o.amountBaseAsset, o.tradePair.baseAsset.defaultPrecision)
-          case TradeSide.Sell => formatDecimal(-o.amountBaseAsset, o.tradePair.baseAsset.defaultPrecision)
+          case TradeSide.Buy => formatDecimal(o.amountBaseAsset, o.tradePair.baseAsset.defaultFractionDigits)
+          case TradeSide.Sell => formatDecimal(-o.amountBaseAsset, o.tradePair.baseAsset.defaultFractionDigits)
         },
         affiliateCode match {
           case Some(code) => JsObject(Map("aff_code" -> JsString(code)))
@@ -523,7 +523,7 @@ private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
           if (log.isTraceEnabled) log.trace(s"$r")
           val order = r.orders.head
           exchangeAccountDataManager ! IncomingData(exchangeDataMapping(Seq(order)))
-          NewOrderAck(exchangeConfig.exchangeName, o.tradePair, order.orderId.toString, o.id)
+          NewOrderAck(exchangeConfig.name, o.tradePair, order.orderId.toString, o.id)
         case r: SubmitOrderResponseJson =>
           throw new RuntimeException(s"Something went wrong while placing a limit-order. Response is: $r")
       }
@@ -545,14 +545,14 @@ private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
         case r: CancelOrderResponseJson if r.status == "SUCCESS" =>
           if (log.isTraceEnabled) log.trace(s"$r")
           exchangeAccountDataManager ! IncomingData(exchangeDataMapping(Seq(r.order)))
-          CancelOrderResult(exchangeConfig.exchangeName, tradePair, r.order.orderId.toString, success = true, Option(r.text))
+          CancelOrderResult(exchangeConfig.name, tradePair, r.order.orderId.toString, success = true, Option(r.text))
         case r: CancelOrderResponseJson =>
           log.debug(s"Cancel order failed. Response: $r")
-          CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = false, Some(r.text))
+          CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId.toString, success = false, Some(r.text))
       }
       case Right(errorResponse) =>
         log.warn(s"CancelOrder id=$externalOrderId failed: $errorResponse")
-        CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = false, Some(errorResponse.compactPrint))
+        CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId.toString, success = false, Some(errorResponse.compactPrint))
     }
   }
 
@@ -574,8 +574,8 @@ private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
   override def receive: Receive = {
     case Connect()                               => connect()
     case OnStreamsRunning()                      => onStreamsRunning()
-    case CancelOrder(ref)                        => cancelOrder(ref.tradePair, ref.externalOrderId.toLong).pipeTo(sender())
     case NewLimitOrder(o)                        => newLimitOrder(o).pipeTo(sender())
+    case CancelOrder(ref)                        => cancelOrder(ref.tradePair, ref.externalOrderId.toLong).pipeTo(sender())
   }
   // @formatter:on
 }

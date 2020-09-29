@@ -173,7 +173,7 @@ case class ExchangePublicDataManager(globalConfig: GlobalConfig,
 
   override def preStart(): Unit = {
     publicDataChannel = context.actorOf(exchangePublicDataChannelProps(globalConfig, exchangeConfig, self, exchangePublicDataInquirer),
-      s"${exchangeConfig.exchangeName}-PublicDataChannel")
+      s"${exchangeConfig.name}-PublicDataChannel")
   }
 
 

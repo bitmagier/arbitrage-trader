@@ -15,15 +15,16 @@ case class SecretsConfig(apiKey: String,
                          apiSecretKey: String,
                          apiKeyPassphrase: Option[String])
 
-case class ExchangeConfig(exchangeName: String,
-                          secrets: SecretsConfig,
+case class ExchangeConfig(name: String,
                           reserveAssets: List[Asset], // reserve assets in order of importance; first in list is the primary reserve asset
                           assetBlocklist: Set[Asset],
+                          usdEquivalentCoin: Asset, // primary local USD equivalent coin. USDT, USDC etc. for amount calculations
                           makerFee: Double,
                           takerFee: Double,
                           doNotTouchTheseAssets: Seq[Asset],
+                          secrets: SecretsConfig,
                           refCode: Option[String]) {
-  def fee: Fee = Fee(exchangeName, makerFee, takerFee)
+  def fee: Fee = Fee(name, makerFee, takerFee)
 }
 
 object ExchangeConfig {
@@ -33,15 +34,17 @@ object ExchangeConfig {
     val reserveAssets = c.getStringList("reserve-assets").asScala.map(e => Asset(e)).toList
     if (reserveAssets.exists(doNotTouchTheseAssets.contains)) throw new IllegalArgumentException(s"$name: reserve-assets & do-not-touch-these-assets overlap!")
     if (reserveAssets.exists(_.isFiat)) throw new IllegalArgumentException(s"$name: Cannot us a Fiat currency as reserve-asset")
+    if (reserveAssets.size < 2) throw new IllegalArgumentException(s"$name: Need at least two reserve assets (more are better)")
 
     ExchangeConfig(
       name,
-      secretsConfig(c.getConfig("secrets")),
       reserveAssets,
       c.getStringList("assets-blocklist").asScala.map(e => Asset(e)).toSet,
+      Asset(c.getString("usd-equivalent-coin")),
       c.getDouble("fee.maker"),
       c.getDouble("fee.taker"),
       doNotTouchTheseAssets,
+      secretsConfig(c.getConfig("secrets")),
       if (c.hasPath("ref-code")) Some(c.getString("ref-code")) else None,
     )
   }
@@ -53,17 +56,17 @@ object ExchangeConfig {
   )
 }
 
-case class OrderBundleSafetyGuardConfig(maximumReasonableWinPerOrderBundleUSDT: Double,
+case class OrderBundleSafetyGuardConfig(maximumReasonableWinPerOrderBundleUSD: Double,
                                         maxOrderLimitTickerVariance: Double,
                                         maxTickerAge: Duration,
-                                        minTotalGainInUSDT: Double,
+                                        minTotalGainInUSD: Double,
                                         txLimitAwayFromEdgeLimit: Double)
 object OrderBundleSafetyGuardConfig {
   def apply(c: com.typesafe.config.Config): OrderBundleSafetyGuardConfig = OrderBundleSafetyGuardConfig(
-    c.getDouble("max-reasonable-win-per-order-bundle-usdt"),
+    c.getDouble("max-reasonable-win-per-order-bundle-usd"),
     c.getDouble("max-order-limit-ticker-variance"),
     c.getDuration("max-ticker-age"),
-    c.getDouble("min-total-gain-in-usdt"),
+    c.getDouble("min-total-gain-in-usd"),
     c.getDouble("tx-limit-away-from-edge-limit")
   )
 }
@@ -71,13 +74,13 @@ case class TradeRoomConfig(tradeSimulation: Boolean,
                            referenceTickerExchange: String,
                            maxOrderLifetime: Duration,
                            restarExchangeWhenDataStreamIsOlderThan: Duration,
-                           pioneerOrderValueUSDT: Double,
+                           pioneerOrderValueUSD: Double,
                            dataManagerInitTimeout: Duration,
                            stats: TradeRoomStatsConfig,
                            orderBundleSafetyGuard: OrderBundleSafetyGuardConfig,
                            liquidityManager: LiquidityManagerConfig,
                            exchanges: Map[String, ExchangeConfig]) {
-  if (pioneerOrderValueUSDT > 100.0) throw new IllegalArgumentException("pioneer order value is unnecessary big")
+  if (pioneerOrderValueUSD > 100.0) throw new IllegalArgumentException("pioneer order value is unnecessary big")
   if (!exchanges.contains(referenceTickerExchange)) throw new IllegalArgumentException("reference-ticker-exchange not in list of active exchanges")
 }
 object TradeRoomConfig {
@@ -86,7 +89,7 @@ object TradeRoomConfig {
     c.getString("reference-ticker-exchange"),
     c.getDuration("max-order-lifetime"),
     c.getDuration("restart-exchange-when-data-stream-is-older-than"),
-    c.getDouble("pioneer-order-value-usdt"),
+    c.getDouble("pioneer-order-value-usd"),
     c.getDuration("data-manager-init-timeout"),
     TradeRoomStatsConfig(
       c.getDuration("stats.report-interval"),
@@ -105,20 +108,20 @@ case class LiquidityManagerConfig(liquidityLockMaxLifetime: Duration, // when a 
                                   liquidityDemandActiveTime: Duration, // when demanded liquidity is not requested within that time, the coins are transferred back to a reserve asset
                                   providingLiquidityExtra: Double, // we provide a little bit more than it was demanded, to potentially fulfill order requests with a slightly different amount
                                   maxAcceptableExchangeRateLossVersusReferenceTicker: Double, // defines the maximum acceptable relative loss (local exchange rate versus reference ticker) for liquidity conversion transactions
-                                  minimumKeepReserveLiquidityPerAssetInUSDT: Double, // when we convert to a reserve liquidity or re-balance our reserve liquidity, each of them should reach at least that value (measured in USDT)
-                                  txLimitAwayFromEdgeLimit: Double,  // [limit-reality-adjustment-rate] defines the rate we set our limit above the highest ask or below the lowest bid (use 0.0 for matching exactly the bid or ask price).
-                                  rebalanceTxGranularityInUSDT: Double, // that's the granularity (and also minimum amount) we transfer for reserve asset re-balance orders)}
-                                  dustLevelInUsdt: Double) // we don't try to convert back assets with a value below that one back to a reserve asset
+                                  minimumKeepReserveLiquidityPerAssetInUSD: Double, // when we convert to a reserve liquidity or re-balance our reserve liquidity, each of them should reach at least that value (measured in USD)
+                                  txLimitAwayFromEdgeLimit: Double, // [limit-reality-adjustment-rate] defines the rate we set our limit above the highest ask or below the lowest bid (use 0.0 for matching exactly the bid or ask price).
+                                  rebalanceTxGranularityInUSD: Double, // that's the granularity (and also minimum amount) we transfer for reserve asset re-balance orders)}
+                                  dustLevelInUSD: Double) // we don't try to convert back assets with a value below that one back to a reserve asset
 object LiquidityManagerConfig {
   def apply(c: com.typesafe.config.Config): LiquidityManagerConfig = LiquidityManagerConfig(
     c.getDuration("liquidity-lock-max-lifetime"),
     c.getDuration("liquidity-demand-active-time"),
     c.getDouble("providing-liquidity-extra"),
     c.getDouble("max-acceptable-exchange-rate-loss-versus-reference-ticker"),
-    c.getDouble("minimum-keep-reserve-liquidity-per-asset-in-usdt"),
+    c.getDouble("minimum-keep-reserve-liquidity-per-asset-in-usd"),
     c.getDouble("tx-limit-away-from-edge-limit"),
-    c.getDouble("rebalance-tx-granularity-in-usdt"),
-    c.getDouble("dust-level-in-usdt")
+    c.getDouble("rebalance-tx-granularity-in-usd"),
+    c.getDouble("dust-level-in-usd")
   )
 }
 

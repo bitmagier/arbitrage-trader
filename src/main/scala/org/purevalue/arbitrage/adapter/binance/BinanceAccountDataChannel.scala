@@ -18,7 +18,7 @@ import org.purevalue.arbitrage.adapter.binance.BinanceHttpUtil.httpRequestJsonBi
 import org.purevalue.arbitrage.adapter.binance.BinanceOrder.{toOrderStatus, toOrderType, toTradeSide}
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.{BinanceBaseRestEndpoint, GetBinanceTradePairs}
 import org.purevalue.arbitrage.traderoom._
-import org.purevalue.arbitrage.util.Util.{formatDecimal, formatDecimalWithFixPrecision}
+import org.purevalue.arbitrage.util.Util.{alignToStepSizeCeil, alignToStepSizeNearest, formatDecimal, formatDecimalWithFixPrecision}
 import org.purevalue.arbitrage.util.{BadCalculationError, WrongAssumption}
 import org.purevalue.arbitrage.{adapter, _}
 import org.slf4j.LoggerFactory
@@ -200,8 +200,8 @@ private[binance] object BinanceOrder {
     case TradeSide.Sell => "SELL"
   }
 
+  // @formatter:off
   def toOrderType(o: String): OrderType = o match {
-    // @formatter:off
     case "LIMIT"              => OrderType.LIMIT
     case "MARKET"             => OrderType.MARKET
     case "STOP_LOSS"          => OrderType.STOP_LOSS
@@ -209,29 +209,28 @@ private[binance] object BinanceOrder {
     case "TAKE_PROFIT"        => OrderType.TAKE_PROFIT
     case "TAKE_PROFIT_LIMIT"  => OrderType.TAKE_PROFIT_LIMIT
     case "LIMIT_MAKER"        => OrderType.LIMIT_MAKER
-    // @formatter:on
-  }
+  } // @formatter:on
 
+  // @formatter:off
   def toString(o: OrderType): String = o match {
-    case OrderType.LIMIT => "LIMIT"
-    case OrderType.MARKET => "MARKET"
-    case OrderType.STOP_LOSS => "STOP_LOSS"
-    case OrderType.STOP_LOSS_LIMIT => "STOP_LOSS_LIMIT"
-    case OrderType.TAKE_PROFIT => "TAKE_PROFIT"
+    case OrderType.LIMIT             => "LIMIT"
+    case OrderType.MARKET            => "MARKET"
+    case OrderType.STOP_LOSS         => "STOP_LOSS"
+    case OrderType.STOP_LOSS_LIMIT   => "STOP_LOSS_LIMIT"
+    case OrderType.TAKE_PROFIT       => "TAKE_PROFIT"
     case OrderType.TAKE_PROFIT_LIMIT => "TAKE_PROFIT_LIMIT"
-    case OrderType.LIMIT_MAKER => "LIMIT_MAKER"
-  }
+    case OrderType.LIMIT_MAKER       => "LIMIT_MAKER"
+  } // @formatter:on
 
+  // @formatter:off
   def toOrderStatus(X: String): OrderStatus = X match {
-    // @formatter:off
     case "NEW"              => OrderStatus.NEW
     case "PARTIALLY_FILLED" => OrderStatus.PARTIALLY_FILLED
     case "FILLED"           => OrderStatus.FILLED
     case "CANCELED"         => OrderStatus.CANCELED
     case "REJECTED"         => OrderStatus.REJECTED
     case "EXPIRED"          => OrderStatus.EXPIRED
-    // @formatter:on
-  }
+  } // @formatter:on
 }
 
 private[binance] case class NewOrderResponseAckJson(symbol: String,
@@ -345,9 +344,9 @@ object BinanceAccountDataChannel {
 }
 
 private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
-                                exchangeConfig: ExchangeConfig,
-                                exchangeAccountDataManager: ActorRef,
-                                exchangePublicDataInquirer: ActorRef) extends Actor {
+                                                 exchangeConfig: ExchangeConfig,
+                                                 exchangeAccountDataManager: ActorRef,
+                                                 exchangePublicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BinanceAccountDataChannel])
 
   // outboundAccountPosition is sent any time an account balance has changed and contains the assets
@@ -389,9 +388,9 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
     case a: OutboundAccountPositionJson => a.toWalletAssetUpdate
     case b: BalanceUpdateJson           => b.toWalletBalanceUpdate
     // case o: NewOrderResponseFullJson    => o.toOrderUpdate(exchangeConfig.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair) // expecting, that we have all relevant trade pairs
-    case o: OrderExecutionReportJson    => o.toOrderUpdate(exchangeConfig.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair)
-    case o: OpenOrderJson               => o.toOrderUpdate(exchangeConfig.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair)
-    case o: CancelOrderResponseJson     => o.toOrderUpdate(exchangeConfig.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair)
+    case o: OrderExecutionReportJson    => o.toOrderUpdate(exchangeConfig.name, symbol => binanceTradePairsBySymbol(symbol).toTradePair)
+    case o: OpenOrderJson               => o.toOrderUpdate(exchangeConfig.name, symbol => binanceTradePairsBySymbol(symbol).toTradePair)
+    case o: CancelOrderResponseJson     => o.toOrderUpdate(exchangeConfig.name, symbol => binanceTradePairsBySymbol(symbol).toTradePair)
     case x                              => log.debug(s"$x"); throw new NotImplementedError
     // @formatter:on
   }
@@ -480,44 +479,14 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
       s"$BinanceBaseRestEndpoint/api/v3/userDataStream?listenKey=$listenKey", None, exchangeConfig.secrets, sign = false)
   }
 
-  // fire and forget - error logging in case of failure
-  def cancelOrder(tradePair: TradePair, externalOrderId: Long): Future[CancelOrderResult] = {
-    val symbol = binanceTradePairsByTradePair(tradePair).symbol
-    httpRequestJsonBinanceAccount[CancelOrderResponseJson, JsValue](
-      HttpMethods.DELETE,
-      s"$BinanceBaseRestEndpoint/api/v3/order?symbol=$symbol&orderId=$externalOrderId",
-      None,
-      exchangeConfig.secrets,
-      sign = true
-    ).map {
-      case Left(response) =>
-        log.trace(s"Order successfully canceled: $response")
-        exchangeAccountDataManager ! IncomingData(exchangeDataMapping(Seq(response)))
-        CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = true, None)
-      case Right(errorResponse) =>
-        log.error(s"CancelOrder failed: $errorResponse")
-        CancelOrderResult(exchangeConfig.exchangeName, tradePair, externalOrderId.toString, success = false, Some(errorResponse.compactPrint))
-    }
-  }
-
-
   def newLimitOrder(o: OrderRequest): Future[NewOrderAck] = {
-    def alignToStepSize(amount: Double, stepSize: Double): Double = {
-      stepSize * (amount / stepSize).ceil
-    }
-
-    def alignToTickSize(price: Double, tickSize: Double): Double = {
-      if (tickSize == 0.0) price
-      else tickSize * (price / tickSize).round
-    }
-
     if (o.amountBaseAsset < 0.0) throw new WrongAssumption("our order amount is always positive")
 
     val binanceTradePair = binanceTradePairsByTradePair(o.tradePair)
-    val price: Double = alignToTickSize(o.limit, binanceTradePair.tickSize)
-    val quantity: Double = alignToStepSize(o.amountBaseAsset, binanceTradePair.lotSize.stepSize) match {
+    val price: Double = alignToStepSizeNearest(o.limit, binanceTradePair.tickSize)
+    val quantity: Double = alignToStepSizeCeil(o.amountBaseAsset, binanceTradePair.lotSize.stepSize) match {
       case q: Double if price * q < binanceTradePair.minNotional =>
-        val newQuantity = alignToStepSize(binanceTradePair.minNotional / price, binanceTradePair.lotSize.stepSize)
+        val newQuantity = alignToStepSizeCeil(binanceTradePair.minNotional / price, binanceTradePair.lotSize.stepSize)
         log.info(s"binance: ${o.shortDesc} increasing quantity from ${o.amountBaseAsset} to ${formatDecimal(newQuantity)} to match min_notional filter")
         newQuantity
       case q: Double => q
@@ -555,7 +524,27 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
     }
 
     // response type FULL: response.map(e => IncomingData(exchangeDataMapping(Seq(e)))).pipeTo(exchangeAccountDataManager)
-    response.map(_.toNewOrderAck(exchangeConfig.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair))
+    response.map(_.toNewOrderAck(exchangeConfig.name, symbol => binanceTradePairsBySymbol(symbol).toTradePair))
+  }
+
+  // fire and forget - error logging in case of failure
+  def cancelOrder(tradePair: TradePair, externalOrderId: Long): Future[CancelOrderResult] = {
+    val symbol = binanceTradePairsByTradePair(tradePair).symbol
+    httpRequestJsonBinanceAccount[CancelOrderResponseJson, JsValue](
+      HttpMethods.DELETE,
+      s"$BinanceBaseRestEndpoint/api/v3/order?symbol=$symbol&orderId=$externalOrderId",
+      None,
+      exchangeConfig.secrets,
+      sign = true
+    ).map {
+      case Left(response) =>
+        log.trace(s"Order successfully canceled: $response")
+        exchangeAccountDataManager ! IncomingData(exchangeDataMapping(Seq(response)))
+        CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId.toString, success = true, None)
+      case Right(errorResponse) =>
+        log.error(s"CancelOrder failed: $errorResponse")
+        CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId.toString, success = false, Some(errorResponse.compactPrint))
+    }
   }
 
   def createListenKey(): Unit = {
@@ -647,8 +636,8 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
     case Connect()                               => connect()
     case OnStreamsRunning()                      => onStreamsRunning()
     case SendPing()                              => pingUserStream()
-    case CancelOrder(ref)                        => cancelOrder(ref.tradePair, ref.externalOrderId.toLong).pipeTo(sender())
     case NewLimitOrder(o)                        => newLimitOrder(o).pipeTo(sender())
+    case CancelOrder(ref)                        => cancelOrder(ref.tradePair, ref.externalOrderId.toLong).pipeTo(sender())
     case Status.Failure(e)                       => log.error("failure", e)
   }
   // @formatter:oon

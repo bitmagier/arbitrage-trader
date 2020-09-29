@@ -20,7 +20,7 @@ import scala.concurrent.duration.DurationInt
 object ExchangeAccountDataManager {
   case class IncomingData(data: Seq[ExchangeAccountStreamData])
   case class Initialized()
-  case class CancelOrder(ref:OrderRef)
+  case class CancelOrder(ref: OrderRef)
   case class CancelOrderResult(exchange: String, tradePair: TradePair, externalOrderId: String, success: Boolean, text: Option[String])
   case class NewLimitOrder(orderRequest: OrderRequest) // response is NewOrderAck
   case class NewOrderAck(exchange: String, tradePair: TradePair, externalOrderId: String, orderId: UUID) {
@@ -52,10 +52,6 @@ class ExchangeAccountDataManager(globalConfig: GlobalConfig,
     if (log.isTraceEnabled) log.trace(s"applying incoming $data")
 
     data match {
-      case w: WalletAssetUpdate =>
-        accountData.wallet.balance = accountData.wallet.balance ++ w.balance
-        exchange ! WalletUpdateTrigger()
-
       case w: WalletBalanceUpdate =>
         accountData.wallet.balance = accountData.wallet.balance.map {
           case (a: Asset, b: Balance) if a == w.asset =>
@@ -64,8 +60,18 @@ class ExchangeAccountDataManager(globalConfig: GlobalConfig,
         }
         exchange ! WalletUpdateTrigger()
 
+      case w: WalletAssetUpdate =>
+        accountData.wallet.balance = accountData.wallet.balance ++ w.balance
+        exchange ! WalletUpdateTrigger()
+
+      case w: CompleteWalletUpdate =>
+        if (w.balance != accountData.wallet) { // we get snapshots delivered here, so updates are needed only, when something changed
+          accountData.wallet.balance = w.balance
+          exchange ! WalletUpdateTrigger()
+        }
+
       case o: OrderUpdate =>
-        val ref = OrderRef(exchangeConfig.exchangeName, o.tradePair, o.externalOrderId)
+        val ref = OrderRef(exchangeConfig.name, o.tradePair, o.externalOrderId)
         if (accountData.activeOrders.contains(ref)) {
           accountData.activeOrders(ref).applyUpdate(o)
         } else {
@@ -83,7 +89,7 @@ class ExchangeAccountDataManager(globalConfig: GlobalConfig,
     applyData(dataset)
   }
 
-  def cancelOrderIfStillExist(c:CancelOrder): Unit = {
+  def cancelOrderIfStillExist(c: CancelOrder): Unit = {
     if (accountData.activeOrders.contains(c.ref)) {
       accountDataChannel.forward(c)
     }
@@ -97,7 +103,7 @@ class ExchangeAccountDataManager(globalConfig: GlobalConfig,
 
   override def preStart(): Unit = {
     accountDataChannel = context.actorOf(exchangeAccountDataChannelInit(globalConfig, exchangeConfig, self, exchangePublicDataInquirer),
-      s"${exchangeConfig.exchangeName}.AccountDataChannel")
+      s"${exchangeConfig.name}.AccountDataChannel")
   }
 
   override def receive: Receive = {
@@ -125,11 +131,11 @@ trait ExchangeAccountStreamData
 
 case class Balance(asset: Asset, amountAvailable: Double, amountLocked: Double) {
   override def toString: String = s"Balance(${asset.officialSymbol}: " +
-    s"available:${formatDecimal(amountAvailable, asset.defaultPrecision)}, " +
-    s"locked: ${formatDecimal(amountLocked, asset.defaultPrecision)})"
+    s"available:${formatDecimal(amountAvailable, asset.defaultFractionDigits)}, " +
+    s"locked: ${formatDecimal(amountLocked, asset.defaultFractionDigits)})"
 }
 // we use a [var immutable map] instead of mutable one here, to be able to update the whole map at once without a race condition
-case class Wallet(exchange: String, var balance: Map[Asset, Balance], exchangeConfig: ExchangeConfig) {
+case class Wallet(exchange: String, @volatile var balance: Map[Asset, Balance], exchangeConfig: ExchangeConfig) {
 
   def toOverviewString(aggregateAsset: Asset, ticker: collection.Map[TradePair, Ticker]): String = {
     val liquidity = this.liquidCryptoValueSum(aggregateAsset, ticker)
@@ -179,6 +185,7 @@ case class Wallet(exchange: String, var balance: Map[Asset, Balance], exchangeCo
   }
 }
 
+case class CompleteWalletUpdate(balance: Map[Asset, Balance]) extends ExchangeAccountStreamData
 case class WalletAssetUpdate(balance: Map[Asset, Balance]) extends ExchangeAccountStreamData
 case class WalletBalanceUpdate(asset: Asset, amountDelta: Double) extends ExchangeAccountStreamData
 

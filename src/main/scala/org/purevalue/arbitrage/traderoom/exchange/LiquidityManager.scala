@@ -6,7 +6,6 @@ import java.util.{NoSuchElementException, UUID}
 import akka.actor.{Actor, ActorRef, Cancellable, Props}
 import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.adapter._
-import org.purevalue.arbitrage.traderoom.Asset.USDT
 import org.purevalue.arbitrage.traderoom.TradeRoom.{LiquidityTransformationOrder, LiquidityTx}
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager._
@@ -232,7 +231,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
   }
 
   def checkValidity(r: LiquidityRequest): Unit = {
-    if (r.exchange != exchangeConfig.exchangeName) throw new IllegalArgumentException
+    if (r.exchange != exchangeConfig.name) throw new IllegalArgumentException
     if (r.coins.exists(c => exchangeConfig.doNotTouchTheseAssets.contains(c.asset))) throw new IllegalArgumentException("liquidity request for a DO-NOT-TOUCH asset")
   }
 
@@ -276,7 +275,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
       val orderAmount: Double = demand.amount * (1.0 + config.providingLiquidityExtra)
       val tradePair = TradePair(demand.asset, bestReserveAssets.get._1)
       val limit = determineRealisticLimit(tradePair, TradeSide.Buy, orderAmount)
-      val orderRequest = OrderRequest(UUID.randomUUID(), None, exchangeConfig.exchangeName, tradePair, TradeSide.Buy, exchangeConfig.fee, orderAmount, limit)
+      val orderRequest = OrderRequest(UUID.randomUUID(), None, exchangeConfig.name, tradePair, TradeSide.Buy, exchangeConfig.fee, orderAmount, limit)
 
       log.info(s"${Emoji.Robot}  placing liquidity providing order: ${orderRequest.shortDesc}")
       tradeRoom ! LiquidityTransformationOrder(orderRequest)
@@ -316,9 +315,9 @@ class LiquidityManager(val config: LiquidityManagerConfig,
           .filter(e => exchangeConfig.reserveAssets.contains(e._1))
           .filterNot(e => exchangeConfig.doNotTouchTheseAssets.contains(e._1))
           .filterNot(_._1.isFiat)
-          .filter(_._1.canConvertTo(USDT, publicData.ticker))
-          .map(e => (e, CryptoValue(e._1, e._2.amountAvailable).convertTo(USDT, publicData.ticker))) // + USDT value - we expect we can convert a reserve asset to USDT always
-          .filter(e => e._2.amount < config.minimumKeepReserveLiquidityPerAssetInUSDT) // value below minimum asset liquidity value
+          .filter(_._1.canConvertTo(exchangeConfig.usdEquivalentCoin, publicData.ticker))
+          .map(e => (e, CryptoValue(e._1, e._2.amountAvailable).convertTo(exchangeConfig.usdEquivalentCoin, publicData.ticker))) // + USD value - we expect we can convert a reserve asset to USD-equivalent-coin always
+          .filter(e => e._2.amount < config.minimumKeepReserveLiquidityPerAssetInUSD) // value below minimum asset liquidity value
           .map(_._1._1)
           .toSet
 
@@ -326,7 +325,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
       fromWallet ++ remainingReserveAssets
     } catch {
       case e: NoSuchElementException =>
-        throw new RuntimeException(s"Sorry, can't work with reserve assets in ${exchangeConfig.exchangeName} wallet, which cannot be converted to USDT. This is the wallet: $wallet")
+        throw new RuntimeException(s"Sorry, can't work with reserve assets in ${exchangeConfig.name} wallet, which cannot be converted to USD. This is the wallet: $wallet")
     }
   }
 
@@ -362,12 +361,12 @@ class LiquidityManager(val config: LiquidityManagerConfig,
     val reserveAssetsNeedFillUp: Set[Asset] = reserveAssetsWithLowLiquidity
     var destinationReserveAsset: Option[Asset] = bestAvailableReserveAssets.find(reserveAssetsNeedFillUp.contains) // [fill-up]
     if (destinationReserveAsset.isDefined) {
-      log.info(s"${Emoji.ThreeBitcoin}  ${exchangeConfig.exchangeName}: transferring $coins back to reserve asset ${destinationReserveAsset.get} [fill-up]")
+      log.info(s"${Emoji.ThreeBitcoin}  ${exchangeConfig.name}: transferring $coins back to reserve asset ${destinationReserveAsset.get} [fill-up]")
     }
 
     if (destinationReserveAsset.isEmpty) {
       destinationReserveAsset = Some(availableReserveAssets.head._1) // [play safe]
-      log.info(s"${Emoji.ThreeBitcoin}  ${exchangeConfig.exchangeName}: transferring $coins back to reserve asset ${destinationReserveAsset.get} [primary sink]")
+      log.info(s"${Emoji.ThreeBitcoin}  ${exchangeConfig.name}: transferring $coins back to reserve asset ${destinationReserveAsset.get} [primary sink]")
     }
 
     val tradePair = TradePair(coins.asset, destinationReserveAsset.get)
@@ -375,7 +374,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
     val orderRequest = OrderRequest(
       UUID.randomUUID(),
       None,
-      exchangeConfig.exchangeName,
+      exchangeConfig.name,
       tradePair,
       TradeSide.Sell,
       exchangeConfig.fee,
@@ -414,9 +413,9 @@ class LiquidityManager(val config: LiquidityManagerConfig,
               .sum
           )))
         .filter(_._2 > 0.0) // remove empty values
-        .filter(_._1.canConvertTo(USDT, publicData.ticker))
-        .map(e => (e._1, e._2, CryptoValue(e._1, e._2).convertTo(USDT, publicData.ticker))) // join USDT value
-        .filter(e => e._3.amount >= config.dustLevelInUsdt) // ignore values below the dust level
+        .filter(_._1.canConvertTo(exchangeConfig.usdEquivalentCoin, publicData.ticker))
+        .map(e => (e._1, e._2, CryptoValue(e._1, e._2).convertTo(exchangeConfig.usdEquivalentCoin, publicData.ticker))) // join USDT value
+        .filter(e => e._3.amount >= config.dustLevelInUSD) // ignore values below the dust level
         .map(e => (e._1, e._2))
         .toMap
 
@@ -446,28 +445,28 @@ class LiquidityManager(val config: LiquidityManagerConfig,
         .groupBy(_.asset)
         .map(e => CryptoValue(e._1, e._2.map(_.amount).sum))
 
-    val unableToConvert = virtualReserveAssetsAggregated.filter(e => !e.canConvertTo(USDT, publicData.ticker))
+    val unableToConvert = virtualReserveAssetsAggregated.filter(e => !e.canConvertTo(exchangeConfig.usdEquivalentCoin, publicData.ticker))
     if (unableToConvert.nonEmpty) {
-      log.warn(s"${Emoji.EyeRoll}  Some reserve assets cannot be judged, because we cannot convert them to USDT, so no liquidity transformation is possible for them: $unableToConvert")
+      log.warn(s"${Emoji.EyeRoll}  Some reserve assets cannot be judged, because we cannot convert them to USD, so no liquidity transformation is possible for them: $unableToConvert")
     }
 
-    // a bucket is a portion of an reserve asset having a specific value (value is configured in 'rebalance-tx-granularity-in-usdt')
+    // a bucket is a portion of an reserve asset having a specific value (value is configured in 'rebalance-tx-granularity-in-usd')
 
     // all reserve assets, that need more value : Map(Asset -> liquidity buckets missing)
     var liquiditySinkBuckets: Map[Asset, Int] = virtualReserveAssetsAggregated
-      .filter(_.canConvertTo(USDT, publicData.ticker))
-      .map(e => (e.asset, e.convertTo(USDT, referenceTicker()).amount)) // amount in USDT
-      .filter(_._2 < config.minimumKeepReserveLiquidityPerAssetInUSDT) // below min keep amount?
-      .map(e => (e._1, ((config.minimumKeepReserveLiquidityPerAssetInUSDT - e._2) / config.rebalanceTxGranularityInUSDT).ceil.toInt)) // buckets needed
+      .filter(_.canConvertTo(exchangeConfig.usdEquivalentCoin, publicData.ticker))
+      .map(e => (e.asset, e.convertTo(exchangeConfig.usdEquivalentCoin, referenceTicker()).amount)) // amount in USD
+      .filter(_._2 < config.minimumKeepReserveLiquidityPerAssetInUSD) // below min keep amount?
+      .map(e => (e._1, ((config.minimumKeepReserveLiquidityPerAssetInUSD - e._2) / config.rebalanceTxGranularityInUSD).ceil.toInt)) // buckets needed
       .toMap
     // all reserve assets, that have extra liquidity to distribute : Map(Asset -> liquidity buckets available for distribution)
     var liquiditySourcesBuckets: Map[Asset, Int] = currentReserveAssetsBalance // we can take coin only from currently really existing balance
-      .filter(_.canConvertTo(USDT, publicData.ticker))
-      .map(e => (e.asset, e.convertTo(USDT, referenceTicker()).amount)) // amount in USDT
+      .filter(_.canConvertTo(exchangeConfig.usdEquivalentCoin, publicData.ticker))
+      .map(e => (e.asset, e.convertTo(exchangeConfig.usdEquivalentCoin, referenceTicker()).amount)) // amount in USD
       // having more than the minimum limit + 150% tx-granularity (to avoid useless there-and-back transfers because of exchange rate fluctuations)
-      .filter(_._2 >= config.minimumKeepReserveLiquidityPerAssetInUSDT + config.rebalanceTxGranularityInUSDT * 1.5)
+      .filter(_._2 >= config.minimumKeepReserveLiquidityPerAssetInUSD + config.rebalanceTxGranularityInUSD * 1.5)
       // keep minimum reserve liquidity + 50% bucket value (we don't sell our last half-full extra bucket ^^^)
-      .map(e => (e._1, ((e._2 - config.minimumKeepReserveLiquidityPerAssetInUSDT - config.rebalanceTxGranularityInUSDT * 0.5) / config.rebalanceTxGranularityInUSDT).floor.toInt)) // buckets to provide
+      .map(e => (e._1, ((e._2 - config.minimumKeepReserveLiquidityPerAssetInUSD - config.rebalanceTxGranularityInUSD * 0.5) / config.rebalanceTxGranularityInUSD).floor.toInt)) // buckets to provide
       .toMap
 
     def removeBuckets(liquidityBuckets: Map[Asset, Int], asset: Asset, numBuckets: Int): Map[Asset, Int] = {
@@ -524,21 +523,25 @@ class LiquidityManager(val config: LiquidityManagerConfig,
             case tp if publicData.ticker.contains(tp) =>
               val tradePair = tp
               val tradeSide = TradeSide.Buy
-              val baseAssetBucketValue: Double = CryptoValue(USDT, config.rebalanceTxGranularityInUSDT).convertTo(tradePair.baseAsset, publicData.ticker).amount
+              val baseAssetBucketValue: Double = CryptoValue(exchangeConfig.usdEquivalentCoin, config.rebalanceTxGranularityInUSD)
+                .convertTo(tradePair.baseAsset, publicData.ticker).amount
+
               val orderAmountBaseAsset = bucketsToTransfer * baseAssetBucketValue
               val limit = determineRealisticLimit(tradePair, tradeSide, orderAmountBaseAsset)
-              OrderRequest(UUID.randomUUID(), None, exchangeConfig.exchangeName, tradePair, tradeSide, exchangeConfig.fee, orderAmountBaseAsset, limit)
+              OrderRequest(UUID.randomUUID(), None, exchangeConfig.name, tradePair, tradeSide, exchangeConfig.fee, orderAmountBaseAsset, limit)
 
             case tp if publicData.ticker.contains(tp.reverse) =>
               val tradePair = tp.reverse
               val tradeSide = TradeSide.Sell
-              val quoteAssetBucketValue: Double = CryptoValue(USDT, config.rebalanceTxGranularityInUSDT).convertTo(tradePair.quoteAsset, publicData.ticker).amount
+              val quoteAssetBucketValue: Double = CryptoValue(exchangeConfig.usdEquivalentCoin, config.rebalanceTxGranularityInUSD)
+                .convertTo(tradePair.quoteAsset, publicData.ticker).amount
+
               val amountBaseAssetEstimate = bucketsToTransfer * quoteAssetBucketValue / publicData.ticker(tradePair).priceEstimate
               val limit = determineRealisticLimit(tradePair, tradeSide, amountBaseAssetEstimate)
               val orderAmountBaseAsset = bucketsToTransfer * quoteAssetBucketValue / limit
-              OrderRequest(UUID.randomUUID(), None, exchangeConfig.exchangeName, tradePair, tradeSide, exchangeConfig.fee, orderAmountBaseAsset, limit)
+              OrderRequest(UUID.randomUUID(), None, exchangeConfig.name, tradePair, tradeSide, exchangeConfig.fee, orderAmountBaseAsset, limit)
 
-            case _ => throw new RuntimeException(s"${exchangeConfig.exchangeName}: No local tradepair found to convert $sourceAsset to $sinkAsset")
+            case _ => throw new RuntimeException(s"${exchangeConfig.name}: No local tradepair found to convert $sourceAsset to $sinkAsset")
           }
 
         liquidityTransactions = tx :: liquidityTransactions
@@ -559,7 +562,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
       }.toList
 
     if (liquidityTransactions.nonEmpty) {
-      log.info(s"${Emoji.ThreeBitcoin}  ${exchangeConfig.exchangeName}: re-balance reserve assets: $virtualReserveAssetsAggregated " +
+      log.info(s"${Emoji.ThreeBitcoin}  ${exchangeConfig.name}: re-balance reserve assets: $virtualReserveAssetsAggregated " +
         s"with following transactions:\n${liquidityTransactions.mkString("\n")}")
     }
     liquidityTransactions
@@ -591,7 +594,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
       }
     } catch {
       case e: OrderBookTooFlatException =>
-        log.warn(s"[to be improved] Cannot perform liquidity housekeeping on ${exchangeConfig.exchangeName} because the order book of tradepair ${e.tradePair} was too flat")
+        log.warn(s"[to be improved] Cannot perform liquidity housekeeping on ${exchangeConfig.name} because the order book of tradepair ${e.tradePair} was too flat")
     }
   }
 
