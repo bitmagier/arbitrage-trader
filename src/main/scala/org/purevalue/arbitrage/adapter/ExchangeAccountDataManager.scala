@@ -17,6 +17,83 @@ import scala.collection._
 import scala.concurrent.duration.DurationInt
 
 
+
+trait ExchangeAccountStreamData
+
+case class Balance(asset: Asset, amountAvailable: Double, amountLocked: Double) {
+  override def toString: String = s"Balance(${asset.officialSymbol}: " +
+    s"available:${formatDecimal(amountAvailable, asset.defaultFractionDigits)}, " +
+    s"locked: ${formatDecimal(amountLocked, asset.defaultFractionDigits)})"
+}
+// we use a [var immutable map] instead of mutable one here, to be able to update the whole map at once without a race condition
+case class Wallet(exchange: String, @volatile var balance: Map[Asset, Balance], exchangeConfig: ExchangeConfig) {
+
+  def toOverviewString(aggregateAsset: Asset, ticker: collection.Map[TradePair, Ticker]): String = {
+    val liquidity = this.liquidCryptoValueSum(aggregateAsset, ticker)
+    val inconvertible = this.inconvertibleCryptoValues(aggregateAsset, ticker)
+    s"Wallet [$exchange]: Liquid crypto total: $liquidity" +
+      (if (inconvertible.nonEmpty) s""", Inconvertible to ${aggregateAsset.officialSymbol}: ${inconvertible.mkString(", ")}""" else "") +
+      (if (this.fiatMoney.nonEmpty) s""", Fiat Money: ${this.fiatMoney.mkString(", ")}""" else "") +
+      (if (this.notTouchValues.nonEmpty) s""", Not-touching: ${this.notTouchValues.mkString(", ")}""" else "")
+  }
+
+  override def toString: String = s"""Wallet($exchange, ${balance.mkString(",")})"""
+
+  def inconvertibleCryptoValues(aggregateAsset: Asset, ticker: collection.Map[TradePair, Ticker]): Seq[CryptoValue] =
+    balance
+      .filterNot(_._1.isFiat)
+      .map(e => CryptoValue(e._1, e._2.amountAvailable))
+      .filter(e => !e.canConvertTo(aggregateAsset, ticker))
+      .toSeq
+      .sortBy(_.asset.officialSymbol)
+
+  def notTouchValues: Seq[CryptoValue] =
+    balance
+      .filter(e => exchangeConfig.doNotTouchTheseAssets.contains(e._1))
+      .map(e => CryptoValue(e._1, e._2.amountAvailable))
+      .toSeq
+      .sortBy(_.asset.officialSymbol)
+
+  def fiatMoney: Seq[FiatMoney] =
+    balance
+      .filter(_._1.isFiat)
+      .map(e => FiatMoney(e._1, e._2.amountAvailable))
+      .toSeq
+      .sortBy(_.asset.officialSymbol)
+
+  // "liquid crypto values" are our wallet value of crypt assets, which are available for trading and converting-calculations
+  def liquidCryptoValues(aggregateAsset: Asset, ticker: collection.Map[TradePair, Ticker]): Iterable[CryptoValue] =
+    balance
+      .filterNot(_._1.isFiat)
+      .filterNot(b => exchangeConfig.doNotTouchTheseAssets.contains(b._1))
+      .map(b => CryptoValue(b._1, b._2.amountAvailable))
+      .filter(_.canConvertTo(aggregateAsset, ticker))
+
+  def liquidCryptoValueSum(aggregateAsset: Asset, ticker: collection.Map[TradePair, Ticker]): CryptoValue = {
+    liquidCryptoValues(aggregateAsset, ticker)
+      .map(_.convertTo(aggregateAsset, ticker))
+      .foldLeft(CryptoValue(aggregateAsset, 0.0))((a, x) => CryptoValue(a.asset, a.amount + x.amount))
+  }
+}
+
+case class CompleteWalletUpdate(balance: Map[Asset, Balance]) extends ExchangeAccountStreamData
+case class WalletAssetUpdate(balance: Map[Asset, Balance]) extends ExchangeAccountStreamData
+case class WalletBalanceUpdate(asset: Asset, amountDelta: Double) extends ExchangeAccountStreamData
+
+/**
+ * @see https://academy.binance.com/economics/what-are-makers-and-takers
+ */
+case class Fee(exchange: String,
+               makerFee: Double,
+               takerFee: Double) {
+  def average: Double = (makerFee + takerFee) / 2
+}
+
+case class ExchangeAccountData(wallet: Wallet,
+                               activeOrders: concurrent.Map[OrderRef, Order])
+
+
+
 object ExchangeAccountDataManager {
   case class IncomingData(data: Seq[ExchangeAccountStreamData])
   case class Initialized()
@@ -125,78 +202,3 @@ class ExchangeAccountDataManager(globalConfig: GlobalConfig,
   }
   // @formatter:on
 }
-
-
-trait ExchangeAccountStreamData
-
-case class Balance(asset: Asset, amountAvailable: Double, amountLocked: Double) {
-  override def toString: String = s"Balance(${asset.officialSymbol}: " +
-    s"available:${formatDecimal(amountAvailable, asset.defaultFractionDigits)}, " +
-    s"locked: ${formatDecimal(amountLocked, asset.defaultFractionDigits)})"
-}
-// we use a [var immutable map] instead of mutable one here, to be able to update the whole map at once without a race condition
-case class Wallet(exchange: String, @volatile var balance: Map[Asset, Balance], exchangeConfig: ExchangeConfig) {
-
-  def toOverviewString(aggregateAsset: Asset, ticker: collection.Map[TradePair, Ticker]): String = {
-    val liquidity = this.liquidCryptoValueSum(aggregateAsset, ticker)
-    val inconvertible = this.inconvertibleCryptoValues(aggregateAsset, ticker)
-    s"Wallet [$exchange]: Liquid crypto total: $liquidity" +
-      (if (inconvertible.nonEmpty) s""", Inconvertible to ${aggregateAsset.officialSymbol}: ${inconvertible.mkString(", ")}""" else "") +
-      (if (this.fiatMoney.nonEmpty) s""", Fiat Money: ${this.fiatMoney.mkString(", ")}""" else "") +
-      (if (this.notTouchValues.nonEmpty) s""", Not-touching: ${this.notTouchValues.mkString(", ")}""" else "")
-  }
-
-  override def toString: String = s"""Wallet($exchange, ${balance.mkString(",")})"""
-
-  def inconvertibleCryptoValues(aggregateAsset: Asset, ticker: collection.Map[TradePair, Ticker]): Seq[CryptoValue] =
-    balance
-      .filterNot(_._1.isFiat)
-      .map(e => CryptoValue(e._1, e._2.amountAvailable))
-      .filter(e => !e.canConvertTo(aggregateAsset, ticker))
-      .toSeq
-      .sortBy(_.asset.officialSymbol)
-
-  def notTouchValues: Seq[CryptoValue] =
-    balance
-      .filter(e => exchangeConfig.doNotTouchTheseAssets.contains(e._1))
-      .map(e => CryptoValue(e._1, e._2.amountAvailable))
-      .toSeq
-      .sortBy(_.asset.officialSymbol)
-
-  def fiatMoney: Seq[FiatMoney] =
-    balance
-      .filter(_._1.isFiat)
-      .map(e => FiatMoney(e._1, e._2.amountAvailable))
-      .toSeq
-      .sortBy(_.asset.officialSymbol)
-
-  // "liquid crypto values" are our wallet value of crypt assets, which are available for trading and converting-calculations
-  def liquidCryptoValues(aggregateAsset: Asset, ticker: collection.Map[TradePair, Ticker]): Iterable[CryptoValue] =
-    balance
-      .filterNot(_._1.isFiat)
-      .filterNot(b => exchangeConfig.doNotTouchTheseAssets.contains(b._1))
-      .map(b => CryptoValue(b._1, b._2.amountAvailable))
-      .filter(_.canConvertTo(aggregateAsset, ticker))
-
-  def liquidCryptoValueSum(aggregateAsset: Asset, ticker: collection.Map[TradePair, Ticker]): CryptoValue = {
-    liquidCryptoValues(aggregateAsset, ticker)
-      .map(_.convertTo(aggregateAsset, ticker))
-      .foldLeft(CryptoValue(aggregateAsset, 0.0))((a, x) => CryptoValue(a.asset, a.amount + x.amount))
-  }
-}
-
-case class CompleteWalletUpdate(balance: Map[Asset, Balance]) extends ExchangeAccountStreamData
-case class WalletAssetUpdate(balance: Map[Asset, Balance]) extends ExchangeAccountStreamData
-case class WalletBalanceUpdate(asset: Asset, amountDelta: Double) extends ExchangeAccountStreamData
-
-/**
- * @see https://academy.binance.com/economics/what-are-makers-and-takers
- */
-case class Fee(exchange: String,
-               makerFee: Double,
-               takerFee: Double) {
-  def average: Double = (makerFee + takerFee) / 2
-}
-
-case class ExchangeAccountData(wallet: Wallet,
-                               activeOrders: concurrent.Map[OrderRef, Order])

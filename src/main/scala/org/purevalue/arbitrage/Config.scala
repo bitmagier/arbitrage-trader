@@ -23,7 +23,8 @@ case class ExchangeConfig(name: String,
                           takerFee: Double,
                           doNotTouchTheseAssets: Seq[Asset],
                           secrets: SecretsConfig,
-                          refCode: Option[String]) {
+                          refCode: Option[String],
+                          assetSourceWeight: Int) {
   def fee: Fee = Fee(name, makerFee, takerFee)
 }
 
@@ -46,13 +47,14 @@ object ExchangeConfig {
       doNotTouchTheseAssets,
       secretsConfig(c.getConfig("secrets")),
       if (c.hasPath("ref-code")) Some(c.getString("ref-code")) else None,
+      c.getInt("asset-source-weight")
     )
   }
 
   private def secretsConfig(c: com.typesafe.config.Config) = SecretsConfig(
     c.getString("api-key"),
     c.getString("api-secret-key"),
-    if (c.getConfig("api-key-passphrase").isEmpty) None else Some(c.getString("api-key-passphrase"))
+    if (c.hasPath("api-key-passphrase")) Some(c.getString("api-key-passphrase")) else None
   )
 }
 

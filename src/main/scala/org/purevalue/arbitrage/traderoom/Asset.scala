@@ -1,6 +1,5 @@
 package org.purevalue.arbitrage.traderoom
 
-import org.purevalue.arbitrage.StaticConfig
 import org.purevalue.arbitrage.adapter.Ticker
 import org.purevalue.arbitrage.traderoom.Asset.Bitcoin
 import org.purevalue.arbitrage.traderoom.TradeRoom.TickersReadonly
@@ -8,8 +7,13 @@ import org.purevalue.arbitrage.util.Util.formatDecimal
 
 
 // Crypto asset / coin.
-// It should NOT be created somewhere else. The way to get it is via Asset(officialSymbol)
-case class Asset(officialSymbol: String, name: String, defaultFractionDigits: Int = 5, isFiat: Boolean = false) {
+// It should NOT be created somewhere else - but registered via Asset.register().
+// The way to get it is via Asset(officialSymbol)
+class Asset(val officialSymbol: String,
+            val name: Option[String],
+            val isFiat: Boolean,
+            val defaultFractionDigits: Int = 5,
+            val sourceWeight: Int = 0) {
 
   private def canConvertIndirectly(targetAsset: Asset, intermediateAsset: Asset, conversionRateExists: TradePair => Boolean): Boolean = {
     canConvertDirectlyTo(intermediateAsset, conversionRateExists) &&
@@ -38,24 +42,60 @@ case class Asset(officialSymbol: String, name: String, defaultFractionDigits: In
 
   override def hashCode: Int = officialSymbol.hashCode
 
-  override def toString: String = s"$officialSymbol ($name)"
+  override def toString: String = s"""$officialSymbol (${name.getOrElse("n/a")})"""
 }
 
 object Asset {
-  // very often used assets
-  val Euro: Asset = Asset("EUR")
-  val USDollar: Asset = Asset("USD")
-  val Bitcoin: Asset = Asset("BTC")
+  // often used assets
+  lazy val Euro: Asset = Asset("EUR")
+  lazy val USDollar: Asset = Asset("USD")
+  lazy val Bitcoin: Asset = Asset("BTC")
 
-  val AssetUSDT: Asset = Asset("USDT")
-  val AssetUSDC: Asset = Asset("USDC")
+  lazy val AssetUSDT: Asset = Asset("USDT")
+  lazy val AssetUSDC: Asset = Asset("USDC")
+
+  private val KnownFiatAssets: Set[String] = Set("EUR", "USD", "GBP", "AUD", "CAD", "IDR", "HKD", "INR", "CHF", "MAD", "PLN", "RUB", "TRY", "CNY")
+
+  // some essential values we need everywhere
+  private val FixAssets: Seq[Asset] = Seq(
+    new Asset("EUR", Some("Euro"), isFiat = true, 2, 10),
+    new Asset("USD", Some("U.S. Dollar"), isFiat = true, 2, 10),
+    new Asset("BTC", Some("Bitcoin"), isFiat = false, 8, 10),
+    new Asset("USDT", Some("Tether"), isFiat = false, 2, 10),
+    new Asset("USDC", Some("USD Coin"), isFiat = false, 2, 10)
+  )
+
+  // this is the reference to know exactly about which asset (or coin) we are talking (no matter at which exchange)
+  private var allAssets: Map[String, Asset] = Map()
+
+  def isKnown(officialSymbol: String): Boolean = allAssets.contains(officialSymbol)
+
+  def register(officialSymbol: String, name: Option[String], _isFiat: Option[Boolean], defaultFractionDigits: Int = 5, sourceWeight: Int = 0): Unit = {
+    val isFiat: Boolean = KnownFiatAssets.contains(officialSymbol) || _isFiat.contains(true)
+    synchronized {
+      allAssets =
+        allAssets.get(officialSymbol) match {
+          case None => allAssets + (officialSymbol -> new Asset(officialSymbol, name, isFiat, defaultFractionDigits, sourceWeight))
+          case Some(oldValue) if oldValue.sourceWeight < sourceWeight => allAssets + (officialSymbol -> new Asset(officialSymbol, name, isFiat, defaultFractionDigits, sourceWeight))
+          case Some(oldValue) if oldValue.name.isEmpty && name.isDefined => allAssets + // merge name
+            (oldValue.officialSymbol -> new Asset(oldValue.officialSymbol, name, oldValue.isFiat, oldValue.defaultFractionDigits, oldValue.sourceWeight))
+          case _ => allAssets
+        }
+    }
+  }
 
   def apply(officialSymbol: String): Asset = {
-    if (!StaticConfig.AllAssets.contains(officialSymbol)) {
+    val result: Option[Asset] =
+      synchronized {
+        allAssets.get(officialSymbol)
+      }
+    if (result.isEmpty) {
       throw new RuntimeException(s"Unknown asset with officialSymbol $officialSymbol")
     }
-    StaticConfig.AllAssets(officialSymbol)
+    result.get
   }
+
+  FixAssets.foreach(e => register(e.officialSymbol, e.name, Some(e.isFiat), e.defaultFractionDigits, e.sourceWeight))
 }
 
 

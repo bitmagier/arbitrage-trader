@@ -41,6 +41,9 @@ object Util {
     else tickSize * (price / tickSize).round
   }
 
+  // determines the number of fraction digits to show, for a stepSize. e.g. stepSize = 0.00001 => 5
+  def stepSizeToFractionDigits(stepSize: Double): Int = Math.log10(1.0 / stepSize).ceil.toInt
+
   def convertBytesToLowerCaseHex(bytes: Seq[Byte]): String = {
     val sb = new StringBuilder
     for (b <- bytes) {

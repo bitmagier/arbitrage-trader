@@ -184,9 +184,10 @@ case class Exchange(exchangeName: String,
         InitStep("start account-data-manager", () => startAccountDataManager()),
         InitStep("start public-data-manager", () => startPublicDataManager()),
         InitStep("wait until account-data-manager initialized", () => accountDataManagerInitialized.await(maxWaitTime)),
-        InitStep("wait until wallet data arrives", () => {
-          walletInitialized.await(maxWaitTime); Thread.sleep(2000)
-        }), // wait another 2 seconds for all wallet entries to arrive (bitfinex)
+        InitStep("wait until wallet data arrives", () => { // wait another 2 seconds for all wallet entries to arrive (bitfinex)
+          walletInitialized.await(maxWaitTime)
+          Thread.sleep(2000)
+        }),
         InitStep("wait until public-data-manager initialized", () => publicDataManagerInitialized.await(maxWaitTime)),
         InitStep("check if balance is sufficient for trading", () => checkIfBalanceIsSufficientForTrading()),
         InitStep("warmup channels for 3 seconds", () => Thread.sleep(3000)),
@@ -214,6 +215,7 @@ case class Exchange(exchangeName: String,
 
     } catch {
       case e: Exception => log.error(s"$exchangeName: preStart failed", e)
+      // TODO coordinated shudown
     }
   }
 

@@ -305,13 +305,11 @@ private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
 
   import BitfinexAccountDataJsonProtocoll._
 
-  def symbolToAsset(symbol: String): Asset = bitfinexAssets.find(_.apiSymbol == symbol) match {
-    case Some(bitfinexAsset) => bitfinexAsset.asset
-    case None => StaticConfig.AllAssets.find(_._1 == symbol) match {
-      case Some(globalAsset) => globalAsset._2
-      case None => throw new IllegalArgumentException(s"unable to find Asset for bitfinex symbol $symbol. Bitfinex has: $bitfinexAssets")
+  def symbolToAsset(symbol: String): Asset =
+    bitfinexAssets.find(_.apiSymbol == symbol) match {
+      case Some(bitfinexAsset) => bitfinexAsset.asset
+      case None => Asset(symbol)
     }
-  }
 
   def exchangeDataMapping(in: Seq[IncomingBitfinexAccountJson]): Seq[ExchangeAccountStreamData] = in.map {
     // @formatter:off

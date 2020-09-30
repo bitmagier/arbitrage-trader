@@ -7,6 +7,7 @@ import org.purevalue.arbitrage.adapter.{Ask, Bid}
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.{GetTradePairs, TradePairs}
 import org.purevalue.arbitrage.traderoom.{Asset, TradePair}
 import org.purevalue.arbitrage.util.HttpUtil.httpGetJson
+import org.purevalue.arbitrage.util.Util.stepSizeToFractionDigits
 import org.slf4j.LoggerFactory
 import spray.json._
 
@@ -116,12 +117,11 @@ private[binance] class BinancePublicDataInquirer(globalConfig: GlobalConfig,
         case Right(errorResponse) => throw new RuntimeException(s"query exchange info failed: $errorResponse")
       }
 
-      binanceTradePairs = exchangeInfo.symbols
-        .filter(s => s.status == "TRADING" && s.orderTypes.contains("LIMIT") /* && s.orderTypes.contains("LIMIT_MAKER")*/ && s.permissions.contains("SPOT"))
-        .filter(s => StaticConfig.AllAssets.contains(s.baseAsset) && StaticConfig.AllAssets.contains(s.quoteAsset))
-        .map(s => BinanceTradePair(
-          Asset(s.baseAsset),
-          Asset(s.quoteAsset),
+      val rawBinanceTradePairs = exchangeInfo.symbols
+        .filter(s => s.status == "TRADING" && s.orderTypes.contains("LIMIT") && s.permissions.contains("SPOT"))
+        .map(s => (
+          s.baseAsset,
+          s.quoteAsset,
           s.symbol,
           s.baseAssetPrecision,
           s.quotePrecision,
@@ -129,6 +129,22 @@ private[binance] class BinancePublicDataInquirer(globalConfig: GlobalConfig,
           s.filters.find(_.fields("filterType") == JsString("LOT_SIZE")).get.convertTo[LotSizeJson].toLotSize,
           s.filters.find(_.fields("filterType") == JsString("MIN_NOTIONAL")).get.fields("minNotional").convertTo[String].toDouble
         ))
+
+      val baseAssetsToRegister: Map[String, Int] =
+        rawBinanceTradePairs.groupBy(_._1)
+          .map(e => (e._1, stepSizeToFractionDigits(e._2.head._7.stepSize)))
+      val furtherQuoteAssetsToRegister: Set[String] =
+        rawBinanceTradePairs.map(_._2).toSet -- baseAssetsToRegister.keys
+
+      baseAssetsToRegister.foreach { e =>
+        Asset.register(e._1, None, None, e._2, exchangeConfig.assetSourceWeight)
+      }
+      furtherQuoteAssetsToRegister.foreach { e =>
+        Asset.register(e, None, None)
+      }
+
+      binanceTradePairs = rawBinanceTradePairs
+        .map(e => BinanceTradePair(Asset(e._1), Asset(e._2), e._3, e._4, e._5, e._6, e._7, e._8))
         .filterNot(e => exchangeConfig.assetBlocklist.contains(e.baseAsset) || exchangeConfig.assetBlocklist.contains(e.quoteAsset))
         .toSet
 

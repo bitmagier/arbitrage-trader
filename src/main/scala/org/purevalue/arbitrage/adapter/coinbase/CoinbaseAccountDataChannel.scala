@@ -43,16 +43,19 @@ private[coinbase] object CoinbaseOrder {
     case "limit" => OrderType.LIMIT
     case "market" => OrderType.MARKET
     case "stop" => OrderType.STOP_LOSS_LIMIT
+    case _ => throw new NotImplementedError()
   }
 
   def toString(t: OrderType): String = t match {
     case OrderType.LIMIT => "limit"
     case OrderType.MARKET => "market"
+    case _ => throw new NotImplementedError()
   }
 
   def toTradeSide(side: String): TradeSide = side match {
     case "buy" => TradeSide.Buy
     case "sell" => TradeSide.Sell
+    case _ => throw new NotImplementedError()
   }
 
   def toString(side: TradeSide): String = side match {

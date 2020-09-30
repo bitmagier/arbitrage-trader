@@ -37,10 +37,10 @@ private[binance] case class BalanceJson(asset: String, free: String, locked: Str
   def toBalance: Option[Balance] = {
     if (free.toDouble == 0.0 && locked.toDouble == 0.0)
       None
-    else if (!StaticConfig.AllAssets.keySet.contains(asset))
+    else if (!Asset.isKnown(asset))
       throw new Exception(s"We need to ignore a filled balance here, because it's asset is unknown: $this")
     else
-      Some(adapter.Balance(
+      Some(Balance(
         Asset(asset),
         free.toDouble,
         locked.toDouble
@@ -90,7 +90,7 @@ private[binance] case class BalanceUpdateJson(e: String, // event type
                                               T: Long // clear time
                                              ) extends IncomingBinanceAccountJson {
   def toWalletBalanceUpdate: WalletBalanceUpdate = {
-    if (!StaticConfig.AllAssets.keySet.contains(a)) throw new Exception(s"We need to ignore a BalanceUpdateJson here, because it's asset is unknown: $this")
+    if (!Asset.isKnown(a)) throw new Exception(s"We need to ignore a BalanceUpdateJson here, because it's asset is unknown: $this")
     adapter.WalletBalanceUpdate(Asset(a), d.toDouble)
   }
 }

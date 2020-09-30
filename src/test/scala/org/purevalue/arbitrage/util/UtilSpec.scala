@@ -23,5 +23,12 @@ class UtilSpec extends TestSuite
     "formatDecimal" in {
       Util.formatDecimal(-0.0012333, 5) shouldBe "-0.00123"
     }
+
+    "convert step size to fraction digits" in {
+      Util.stepSizeToFractionDigits(0.01) shouldBe 2
+      Util.stepSizeToFractionDigits(0.000001) shouldBe 6
+      Util.stepSizeToFractionDigits(0.000002) shouldBe 6
+      Util.stepSizeToFractionDigits(0.000005) shouldBe 6
+    }
   }
 }

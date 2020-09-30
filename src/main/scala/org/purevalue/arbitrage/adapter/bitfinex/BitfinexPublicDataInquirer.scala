@@ -73,11 +73,17 @@ private[bitfinex] class BitfinexPublicDataInquirer(globalConfig: GlobalConfig,
 
     if (log.isTraceEnabled) log.trace(s"currencies received: $currencies")
 
-    bitfinexAssets = currencies // apiSymbol, name
+    val rawBitfinexAssets = currencies // apiSymbol, name
       .map(e => (e._1, apiSymbolToOfficialCurrencySymbolMapping.getOrElse(e._1, e._1))) // apiSymbol, officialSymbol
-      .filter(e => StaticConfig.AllAssets.keySet.contains(e._2)) // global crosscheck
+
+    rawBitfinexAssets.foreach { e =>
+      Asset.register(e._2, None, None)
+    }
+
+    bitfinexAssets = rawBitfinexAssets
       .map(e => BitfinexSymbol(Asset(e._2), e._1))
       .toSet
+
     if (log.isTraceEnabled) log.trace(s"bitfinexAssets: $bitfinexAssets")
 
     val rawTradePairs: List[String] =
@@ -95,9 +101,6 @@ private[bitfinex] class BitfinexPublicDataInquirer(globalConfig: GlobalConfig,
       .map(e =>
         (apiSymbolToOfficialCurrencySymbolMapping.getOrElse(e._1, e._1), // resolve official currency symbols
           apiSymbolToOfficialCurrencySymbolMapping.getOrElse(e._2, e._2), e._3))
-      .filter(e =>
-        StaticConfig.AllAssets.keySet.contains(e._1)
-          && StaticConfig.AllAssets.keySet.contains(e._2)) // crosscheck with global assets
       .filter(e =>
         bitfinexAssets.exists(_.asset.officialSymbol == e._1)
           && bitfinexAssets.exists(_.asset.officialSymbol == e._2)) // crosscheck with bitfinex (configured) assets

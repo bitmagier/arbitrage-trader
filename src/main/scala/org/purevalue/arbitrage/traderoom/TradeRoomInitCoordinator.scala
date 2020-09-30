@@ -3,19 +3,27 @@ package org.purevalue.arbitrage.traderoom
 import akka.actor.{Actor, ActorRef, Props}
 import akka.pattern.ask
 import akka.util.Timeout
+import org.purevalue.arbitrage.Config
 import org.purevalue.arbitrage.adapter._
+import org.purevalue.arbitrage.adapter.binance.{BinanceAccountDataChannel, BinancePublicDataChannel, BinancePublicDataInquirer}
+import org.purevalue.arbitrage.adapter.bitfinex.{BitfinexAccountDataChannel, BitfinexPublicDataChannel, BitfinexPublicDataInquirer}
+import org.purevalue.arbitrage.adapter.coinbase.{CoinbaseAccountDataChannel, CoinbasePublicDataChannel, CoinbasePublicDataInquirer}
 import org.purevalue.arbitrage.traderoom.Asset.Bitcoin
 import org.purevalue.arbitrage.traderoom.TradeRoom.{ConcurrentMap, OrderRef}
 import org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator.InitializedTradeRoom
 import org.purevalue.arbitrage.traderoom.exchange.Exchange
-import org.purevalue.arbitrage.traderoom.exchange.Exchange.{GetTradePairs, RemoveTradePair, StartStreaming}
+import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.util.Emoji
-import org.purevalue.arbitrage.{Config, ExchangeInitStuff, StaticConfig}
 import org.slf4j.LoggerFactory
 
 import scala.collection.concurrent.TrieMap
 import scala.concurrent.Await
 import scala.concurrent.duration.DurationInt
+
+
+case class ExchangeInitStuff(exchangePublicDataInquirerProps: ExchangePublicDataInquirerInit,
+                             exchangePublicDataChannelProps: ExchangePublicDataChannelInit,
+                             exchangeAccountDataChannelProps: ExchangeAccountDataChannelInit)
 
 object TradeRoomInitCoordinator {
   case class InitializedTradeRoom(tradeRoom: ActorRef)
@@ -36,6 +44,24 @@ class TradeRoomInitCoordinator(val config: Config,
   var wallets:      Map[String, Wallet] = Map()
   var activeOrders: Map[String, ConcurrentMap[OrderRef, Order]] = Map()
   // @formatter:on
+
+  val AllExchanges: Map[String, ExchangeInitStuff] = Map(
+    "binance" -> ExchangeInitStuff(
+      BinancePublicDataInquirer.props,
+      BinancePublicDataChannel.props,
+      BinanceAccountDataChannel.props
+    ),
+    "bitfinex" -> ExchangeInitStuff(
+      BitfinexPublicDataInquirer.props,
+      BitfinexPublicDataChannel.props,
+      BitfinexAccountDataChannel.props
+    ),
+    "coinbase" -> ExchangeInitStuff(
+      CoinbasePublicDataInquirer.props,
+      CoinbasePublicDataChannel.props,
+      CoinbaseAccountDataChannel.props
+    )
+  )
 
   def queryTradePairs(exchange: String): Set[TradePair] = {
     implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
@@ -96,7 +122,7 @@ class TradeRoomInitCoordinator(val config: Config,
           .filter(e => e._2.baseAsset == asset && e._2.quoteAsset != config.tradeRoom.exchanges(e._1).usdEquivalentCoin) // keep :USD-equivalent TradePairs because we want them for currency calculations (and in the ReferenceTicker)
           .filterNot(e =>
             !eTradePairs.exists(x => x._1 == e._1 && x._2 == TradePair(e._2.baseAsset, config.tradeRoom.exchanges(e._1).usdEquivalentCoin)) && // when no :USD-eqiv tradepair exists
-            e._2 == TradePair(e._2.baseAsset, Bitcoin)) // keep :BTC tradepair (for currency conversion via x -> BTC -> USD-equiv)
+              e._2 == TradePair(e._2.baseAsset, Bitcoin)) // keep :BTC tradepair (for currency conversion via x -> BTC -> USD-equiv)
 
       if (tradePairsToDrop.nonEmpty) {
         log.debug(s"${Emoji.Robot}  Dropping some TradePairs involving $asset, because we don't have a use for it:  $tradePairsToDrop")
@@ -136,7 +162,7 @@ class TradeRoomInitCoordinator(val config: Config,
 
   def startExchanges(): Unit = {
     for (name: String <- config.tradeRoom.exchanges.keys) {
-      startExchange(name, StaticConfig.AllExchanges(name))
+      startExchange(name, AllExchanges(name))
     }
   }
 

@@ -26,6 +26,7 @@ class LiquidityManagerSpec
     with AnyWordSpecLike
     with Matchers
     with BeforeAndAfterAll {
+
   private val liquidityManagerConfig = LiquidityManagerConfig(
     Duration.ofSeconds(5),
     Duration.ofSeconds(5),
@@ -36,7 +37,13 @@ class LiquidityManagerSpec
     rebalanceTxGranularityInUSD = 20.0,
     dustLevelInUSD = 0.05)
 
-  private val exchangeConfig: ExchangeConfig =
+  Asset.register("ETH", Some("Ethereum"), Some(false))
+  Asset.register("ALGO", Some("Algorand"), Some(false))
+  Asset.register("ADA", Some("Cardano"), Some(false))
+  Asset.register("LINK", Some("Chainlink"), Some(false))
+  Asset.register("OMG", None, Some(false))
+
+  private lazy val exchangeConfig: ExchangeConfig =
     ExchangeConfig(
       name = "e1",
       reserveAssets = List(AssetUSDT, Bitcoin, Asset("ETH")),
@@ -46,12 +53,13 @@ class LiquidityManagerSpec
       usdEquivalentCoin = AssetUSDT,
       doNotTouchTheseAssets = Seq(Asset("OMG")),
       secrets = SecretsConfig("", "", None),
-      refCode = None
+      refCode = None,
+      assetSourceWeight = 1
     )
 
   private val BitcoinPriceUSD = 10200.24
   private val EthPriceUSD = 342.12
-  private val referenceTicker =
+  private lazy val referenceTicker =
     Map[TradePair, Double](
       TradePair(Bitcoin, AssetUSDT) -> BitcoinPriceUSD,
       TradePair(Asset("ETH"), AssetUSDT) -> EthPriceUSD,
@@ -68,7 +76,6 @@ class LiquidityManagerSpec
     ).map(e => e._1 -> Ticker("e1", e._1, e._2, None, e._2, None, Some(e._2)))
 
   private val tradePairs: Set[TradePair] = referenceTicker.keySet
-
 
   private val tickers: Map[String, Map[TradePair, Ticker]] =
     Map("e1" -> referenceTicker)
