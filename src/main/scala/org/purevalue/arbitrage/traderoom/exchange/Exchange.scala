@@ -106,9 +106,9 @@ case class Exchange(exchangeName: String,
 
     if (!balanceSufficient) {
       throw new RuntimeException(s"Insufficient balance for trading on $exchangeName. " +
-        s"Expectation is to have at least ${tradeRoomConfig.pioneerOrderValueUSD} USD for the pioneer order " +
+        s"Expectation is to have at least ${tradeRoomConfig.pioneerOrderValueUSD} ${exchangeConfig.usdEquivalentCoin.officialSymbol} for the pioneer order " +
         s"and a cumulated amount of at least $minRequiredBalance USD available for trading. " +
-        s"Wallet:\n${accountData.wallet.balance.values.mkString("\n")}")
+        s"Wallet:\n${accountData.wallet.balance.values.filter(_.amountAvailable > 0.0).mkString("\n")}")
     }
   }
 

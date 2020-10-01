@@ -124,8 +124,8 @@ class FooTrader(traderConfig: Config, tradeRoom: ActorRef, tc: TradeContext) ext
         buyExchange,
         tradePair,
         TradeSide.Buy,
-        tc.fees(buyExchange),
-        tradeAmountBaseAsset / (1.0 - tc.fees(buyExchange).average), // usually we have to buy X + fee, because fee gets substracted; an exeption is on binance when paying with BNB
+        tc.feeRates(buyExchange),
+        tradeAmountBaseAsset / (1.0 - tc.feeRates(buyExchange)), // usually we have to buy X + fee, because fee gets substracted; an exeption is on binance when paying with BNB
         buyLimit
       )
     val ourSellBaseAssetOrder =
@@ -135,7 +135,7 @@ class FooTrader(traderConfig: Config, tradeRoom: ActorRef, tc: TradeContext) ext
         sellExchange,
         tradePair,
         TradeSide.Sell,
-        tc.fees(sellExchange),
+        tc.feeRates(sellExchange),
         tradeAmountBaseAsset,
         sellLimit
       )

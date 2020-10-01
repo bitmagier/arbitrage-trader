@@ -2,7 +2,6 @@ package org.purevalue.arbitrage.traderoom
 
 import java.util.UUID
 
-import org.purevalue.arbitrage.adapter.Fee
 import org.purevalue.arbitrage.traderoom.Asset.Bitcoin
 import org.scalatest.TestSuite
 import org.scalatest.matchers.should.Matchers
@@ -27,7 +26,7 @@ class OrderSpec extends TestSuite
           "e1",
           TradePair(Asset("ALGO"), Bitcoin),
           TradeSide.Buy,
-          Fee("e1", 0.01, 0.01),
+          0.01,
           100.0,
           0.42
         ))
@@ -44,7 +43,7 @@ class OrderSpec extends TestSuite
           "e1",
           TradePair(Asset("ALGO"), Bitcoin),
           TradeSide.Sell,
-          Fee("e1", 0.01, 0.01),
+          0.01,
           100.0,
           0.42
         ))

@@ -148,7 +148,7 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
           e.exchange,
           tradePair,
           TradeSide.Buy,
-          exchangesConfig(e.exchange).fee,
+          exchangesConfig(e.exchange).feeRate,
           e.amount,
           tc.tickers(e.exchange)(tradePair).priceEstimate
         )
@@ -159,7 +159,7 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
           e.exchange,
           tradePair,
           TradeSide.Sell,
-          exchangesConfig(e.exchange).fee,
+          exchangesConfig(e.exchange).feeRate,
           e.amount,
           tc.tickers(e.exchange)(tradePair).priceEstimate
         )

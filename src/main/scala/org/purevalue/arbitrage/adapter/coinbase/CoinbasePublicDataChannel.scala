@@ -8,7 +8,6 @@ import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebS
 import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
-import jdk.jshell.spi.ExecutionControl.NotImplementedException
 import org.purevalue.arbitrage.adapter.ExchangePublicDataManager.IncomingData
 import org.purevalue.arbitrage.adapter._
 import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataChannel.{CoinbaseWebSocketEndpoint, Connect}
@@ -197,7 +196,7 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
     implicit val timeout: Timeout = globalConfig.internalCommunicationTimeoutDuringInit
     coinbaseTradePairByProductId = Await.result(
       (coinbasePublicDataInquirer ? GetCoinbaseTradePairs()).mapTo[Set[CoinbaseTradePair]],
-      globalConfig.internalCommunicationTimeout.duration.plus(500.millis))
+      timeout.duration.plus(500.millis))
       .map(e => (e.id, e))
       .toMap
   }

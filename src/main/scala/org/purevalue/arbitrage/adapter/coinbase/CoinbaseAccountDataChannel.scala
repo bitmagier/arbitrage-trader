@@ -11,7 +11,6 @@ import akka.http.scaladsl.model.{HttpMethods, StatusCodes}
 import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
-import jdk.jshell.spi.ExecutionControl.NotImplementedException
 import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager._
 import org.purevalue.arbitrage.adapter.coinbase.CoinbaseAccountDataChannel.{Connect, OnStreamsRunning}
 import org.purevalue.arbitrage.adapter.coinbase.CoinbaseHttpUtil.{Signature, httpRequestCoinbaseAccount, httpRequestJsonCoinbaseAccount}
@@ -64,6 +63,13 @@ private[coinbase] object CoinbaseOrder {
     case TradeSide.Buy => "buy"
     case TradeSide.Sell => "sell"
   }
+
+  def toOrderStatus(status: String): OrderStatus = status match {
+    case "open" => OrderStatus.NEW
+    case "pending" => OrderStatus.NEW
+    case "active" => OrderStatus.PARTIALLY_FILLED
+    case "done" => OrderStatus.FILLED
+  }
 }
 // A valid order has been received and is now active.
 // This message is emitted for every single valid order as soon as the matching engine receives it whether it fills immediately or not.
@@ -92,6 +98,7 @@ private[coinbase] case class CoinbaseOrderReceivedJson(`type`: String,
       Some(OrderStatus.NEW),
       None,
       None,
+      None,
       ts
     )
   }
@@ -115,6 +122,7 @@ private[coinbase] case class CoinbaseOrderChangedJson(`type`: String,
     Some(price.toDouble),
     None,
     Some(new_size.toDouble),
+    None,
     None,
     None,
     None,
@@ -147,6 +155,7 @@ private[coinbase] case class CoinbaseOrderDoneJson(`type`: String,
       case "canceled" => Some(OrderStatus.CANCELED)
     },
     None,
+    Some(remaining_size.toDouble),
     None,
     Instant.parse(time)
   )
@@ -161,13 +170,41 @@ private[coinbase] case class NewOrderRequestJson(client_oid: String,
                                                 ) // not needed: stop, stop_price
 
 private[coinbase] case class NewOrderResponseJson(id: String,
-                                                  product_id: String
-                                                  //"settled": false "price": "0.10000000", "size": "0.01000000",
-                                                  //"side": "buy", "stp": "dc", "type": "limit", "time_in_force": "GTC",
-                                                  //"post_only": false, "created_at": "2016-12-08T20:02:28.53864Z",
-                                                  //"fill_fees": "0.0000000000000000", "filled_size": "0.00000000",
-                                                  //"executed_value": "0.0000000000000000", "status": "pending",
+                                                  product_id: String,
+                                                  settled: Boolean,
+                                                  price: String,
+                                                  size: String,
+                                                  side: String,
+                                                  stp: String,
+                                                  `type`: String,
+                                                  time_in_force: String,
+                                                  post_only: Boolean,
+                                                  created_at: String,
+                                                  fill_fees: String,
+                                                  filled_size: String,
+                                                  executed_value: String,
+                                                  status: String // "pending"
                                                  ) {
+  def toOrderUpdate(exchange: String, resolveProductId: String => TradePair): OrderUpdate = {
+    val ts = Instant.parse(created_at)
+    OrderUpdate(
+      id,
+      exchange,
+      resolveProductId(product_id),
+      CoinbaseOrder.toTradeSide(side),
+      Some(CoinbaseOrder.toOrderType(`type`)),
+      Some(price.toDouble),
+      None,
+      Some(size.toDouble),
+      Some(ts),
+      Some(CoinbaseOrder.toOrderStatus(status)),
+      Some(filled_size.toDouble),
+      None,
+      Some(executed_value.toDouble / filled_size.toDouble),
+      ts
+    )
+  }
+
   def toNewOrderAck(exchange: String, resolveProductId: String => TradePair, ourOrderId: UUID): NewOrderAck =
     NewOrderAck(
       exchange,
@@ -197,7 +234,7 @@ private[coinbase] object CoinbaseAccountJsonProtocol extends DefaultJsonProtocol
   implicit val coinbaseOrderChangedJson: RootJsonFormat[CoinbaseOrderChangedJson] = jsonFormat9(CoinbaseOrderChangedJson)
   implicit val coinbaseOrderDoneJson: RootJsonFormat[CoinbaseOrderDoneJson] = jsonFormat9(CoinbaseOrderDoneJson)
   implicit val newOrderRequestJson: RootJsonFormat[NewOrderRequestJson] = jsonFormat6(NewOrderRequestJson)
-  implicit val newOrderResponseJson: RootJsonFormat[NewOrderResponseJson] = jsonFormat2(NewOrderResponseJson)
+  implicit val newOrderResponseJson: RootJsonFormat[NewOrderResponseJson] = jsonFormat15(NewOrderResponseJson)
   implicit val coinbaseAccountJson: RootJsonFormat[CoinbaseAccountJson] = jsonFormat7(CoinbaseAccountJson)
 }
 
@@ -219,7 +256,7 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
-  val DeliverAccountsSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(1.second, 600.millis, self, DeliverAccounts())
+  val DeliverAccountsSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(1.second, 1500.millis, self, DeliverAccounts())
 
   val UserChannelName: String = "user"
 
@@ -281,9 +318,9 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
   }
 
   // coinbase allows a maximum diff of 30 seconds between their server time and the timestamp value in the request
-  def queryServerTime(): Future[Double] = {
+  def queryServerTime(): Future[Instant] = {
     HttpUtil.httpGetPureJson(s"$CoinbaseBaseRestEndpoint/time") map {
-      case (statusCode, j) if statusCode.isSuccess() => j.asJsObject.fields("epoch").convertTo[Double]
+      case (statusCode, j) if statusCode.isSuccess() => Instant.parse(j.asJsObject.fields("iso").convertTo[String])
       case (statusCode, j) => throw new RuntimeException(s"coinbase: GET /time failed with: $statusCode, $j")
     }
   }
@@ -341,7 +378,7 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
 
   def newLimitOrder(o: OrderRequest): Future[NewOrderAck] = {
 
-    def newLimitOrder(o: OrderRequest, serverTime: Double): Future[NewOrderAck] = {
+    def newLimitOrder(o: OrderRequest, serverTime: Instant): Future[NewOrderAck] = {
       val coinbaseTradepair = coinbaseTradePairsByTradePair(o.tradePair)
 
       val size: String = formatDecimalWithFixPrecision(
@@ -361,7 +398,9 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
 
       httpRequestJsonCoinbaseAccount[NewOrderResponseJson, String](HttpMethods.POST, s"$CoinbaseBaseRestEndpoint/orders", Some(requestBody), exchangeConfig.secrets, serverTime)
         .map {
-          case Left(response) => response.toNewOrderAck(exchangeConfig.name, id => coinbaseTradePairsByProductId(id).toTradePair, o.id)
+          case Left(newOrderResponse) =>
+            exchangeAccountDataManager ! IncomingData(Seq(newOrderResponse.toOrderUpdate(exchangeConfig.name, id => coinbaseTradePairsByProductId(id).toTradePair)))
+            newOrderResponse.toNewOrderAck(exchangeConfig.name, id => coinbaseTradePairsByProductId(id).toTradePair, o.id)
           case Right(error) => throw new RuntimeException(s"newLimitOrder failed: $error")
         } recover {
         case e: Exception =>
@@ -378,7 +417,7 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
 
   def cancelOrder(ref: OrderRef): Future[CancelOrderResult] = {
 
-    def cancelOrder(ref: OrderRef, serverTime: Double): Future[CancelOrderResult] = {
+    def cancelOrder(ref: OrderRef, serverTime: Instant): Future[CancelOrderResult] = {
       val productId: String = coinbaseTradePairsByTradePair(ref.tradePair).id
       val uri = s"$CoinbaseBaseRestEndpoint/orders/${ref.externalOrderId}?product_id=$productId"
       httpRequestCoinbaseAccount(
@@ -386,7 +425,8 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
         uri,
         None,
         exchangeConfig.secrets,
-        serverTime) map {
+        serverTime
+      ) map {
         case (statusCode, j) if statusCode.isSuccess() => CancelOrderResult(exchangeConfig.name, ref.tradePair, productId, success = statusCode.isSuccess(), Some(s"HTTP-$statusCode $j"))
         case (statusCode, j) => throw new RuntimeException(s"DELETE $uri failed with: $statusCode, $j")
       }
@@ -400,18 +440,20 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
 
   def deliverAccounts(): Unit = {
 
-    def queryAccounts(serverTime: Double): Future[IncomingData] = {
-      httpRequestJsonCoinbaseAccount[Seq[CoinbaseAccountJson], String](HttpMethods.GET, s"$CoinbaseBaseRestEndpoint/accounts", None, exchangeConfig.secrets, serverTime)
+    def queryAccounts(serverTime: Instant): Future[IncomingData] = {
+      httpRequestJsonCoinbaseAccount[Seq[CoinbaseAccountJson], JsObject](HttpMethods.GET, s"$CoinbaseBaseRestEndpoint/accounts", None, exchangeConfig.secrets, serverTime)
         .map {
-          case Left(accounts) => CompleteWalletUpdate(
+          case Left(accounts) => Seq(CompleteWalletUpdate(
             accounts
               .map(_.toBalance)
               .map(e => e.asset -> e)
               .toMap
-          )
-          case Right(error) => throw new RuntimeException(s"coinbase: queryAccounts() failed: $error")
+          ))
+          case Right(error) =>
+            log.warn(s"coinbase: queryAccounts() failed: $error")
+            Nil
         }
-        .map(e => IncomingData(Seq(e)))
+        .map(e => IncomingData(e))
     }
 
     (for {

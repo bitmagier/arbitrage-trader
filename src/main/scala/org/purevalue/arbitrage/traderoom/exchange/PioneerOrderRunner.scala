@@ -8,7 +8,7 @@ import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, PoisonPill, Props}
 import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager.{CancelOrder, CancelOrderResult, NewLimitOrder, NewOrderAck}
-import org.purevalue.arbitrage.adapter.{ExchangeAccountData, ExchangePublicData, Fee}
+import org.purevalue.arbitrage.adapter.{ExchangeAccountData, ExchangePublicData}
 import org.purevalue.arbitrage.traderoom.TradeRoom._
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.PioneerOrderRunner.{PioneerOrder, PioneerOrderFailed, PioneerOrderSucceeded, Watch}
@@ -92,7 +92,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
       if (request.tradeSide == TradeSide.Sell && (order.priceAverage.isDefined && order.priceAverage.get < request.limit)) failed("price average below limit")
 
       val incomingRequested = request.calcIncomingLiquidity
-      val incomingReal = order.calcIncomingLiquidity(request.fee)
+      val incomingReal = order.calcIncomingLiquidity(request.feeRate)
       val expectedIncomingAsset: Asset = request.tradeSide match {
         case TradeSide.Buy => request.tradePair.baseAsset
         case TradeSide.Sell => request.tradePair.quoteAsset
@@ -106,7 +106,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
         case TradeSide.Sell => request.tradePair.baseAsset
       }
       val outgoingRequested = request.calcOutgoingLiquidity
-      val outgoingReal = order.calcOutgoingLiquidity(request.fee)
+      val outgoingReal = order.calcOutgoingLiquidity(request.feeRate)
       if (outgoingReal.asset != expectedOutgoingAsset) failed("outgoing asset mismatch")
       if (outgoingReal.amount > outgoingRequested.amount && diffMoreThan(outgoingReal.amount, outgoingRequested.amount, 0.001))
         failed("outgoing amount mismatch")
@@ -114,10 +114,11 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
       // We can check the balance only against local ticker, because reference-ticker is not available at this point.
       // The local ticker might not be very up-to-date (like on bitfinex), so we need to be more tolerant regarding the max-diff
       val sumUSD = OrderBill.aggregateValues(
-        OrderBill.calcBalanceSheet(order, Fee(ExchangeName, 0.0, 0.0)),
+        OrderBill.calcBalanceSheet(order, request.feeRate),
         exchangeConfig.usdEquivalentCoin,
         (_, tradePair) => publicData.ticker.get(tradePair).map(_.priceEstimate))
-      if (sumUSD < -0.03) failed(s"unexpected loss of ${formatDecimal(sumUSD, 4)} USD") // more than 3 cent loss is absolutely unacceptable
+      val maxAcceptableLoss = 0.03 + (request.feeRate * tradeRoomConfig.pioneerOrderValueUSD)
+      if (sumUSD < -maxAcceptableLoss) failed(s"unexpected loss of ${formatDecimal(sumUSD, 4)} USD") // more than 3 cent + fee loss is absolutely unacceptable
     }
   }
 
@@ -218,7 +219,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
       realisticLimit
     }
 
-    val orderRequest = OrderRequest(UUID.randomUUID(), None, ExchangeName, tradePair, tradeSide, exchangeConfig.fee,
+    val orderRequest = OrderRequest(UUID.randomUUID(), None, ExchangeName, tradePair, tradeSide, exchangeConfig.feeRate,
       amountBaseAsset, limit)
 
     log.debug(s"[$ExchangeName] pioneer order: ${orderRequest.shortDesc}")

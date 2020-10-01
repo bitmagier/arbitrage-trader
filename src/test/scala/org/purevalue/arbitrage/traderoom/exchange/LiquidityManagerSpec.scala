@@ -48,8 +48,7 @@ class LiquidityManagerSpec
       name = "e1",
       reserveAssets = List(AssetUSDT, Bitcoin, Asset("ETH")),
       assetBlocklist = Set(),
-      makerFee = 0.0, // TODO make everything working including fees
-      takerFee = 0.0,
+      feeRate = 0.0, // TODO make everything working including fees
       usdEquivalentCoin = AssetUSDT,
       doNotTouchTheseAssets = Seq(Asset("OMG")),
       secrets = SecretsConfig("", "", None),
@@ -234,7 +233,7 @@ class LiquidityManagerSpec
       message1.orderRequest.calcOutgoingLiquidity.amount shouldBe 200.0 +- CheckSpread
       message1.orderRequest.calcIncomingLiquidity.asset shouldBe AssetUSDT
       message1.orderRequest.calcIncomingLiquidity.amount shouldBe
-        (200.0 * tickers("e1")(TradePair(Asset("ALGO"), AssetUSDT)).priceEstimate * (1.0 - exchangeConfig.fee.average)) +- CheckSpread
+        (200.0 * tickers("e1")(TradePair(Asset("ALGO"), AssetUSDT)).priceEstimate * (1.0 - exchangeConfig.feeRate)) +- CheckSpread
 
       // now we clear the lock and watch the locked 400 ALOG's going back to USDT
 

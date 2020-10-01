@@ -12,10 +12,11 @@ import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig, Main, TradeRoomCon
 import org.slf4j.LoggerFactory
 
 import scala.collection._
-import scala.concurrent.ExecutionContextExecutor
 import scala.concurrent.duration.DurationInt
+import scala.concurrent.{ExecutionContextExecutor, Future}
 
-trait ExchangePublicStreamData
+trait ExchangePublicStreamData extends Retryable
+
 case class Heartbeat(ts: Instant) extends ExchangePublicStreamData
 case class Ticker(exchange: String,
                   tradePair: TradePair,
@@ -128,6 +129,19 @@ case class ExchangePublicDataManager(globalConfig: GlobalConfig,
     }
   }
 
+  def guardedRetry(e: ExchangePublicStreamData): Unit = {
+    if (e.applyDeadline.isEmpty) e.applyDeadline = Some(Instant.now.plus(e.MaxApplyDelay))
+    if (Instant.now.isAfter(e.applyDeadline.get)) {
+      log.warn(s"ignoring update [timeout] $e")
+    } else {
+      log.debug(s"scheduling retry of $e")
+      Future.apply({
+        Thread.sleep(20)
+        self ! IncomingData(Seq(e))
+      })
+    }
+  }
+
   private def applyDataset(data: Seq[ExchangePublicStreamData]): Unit = {
     data.foreach {
       case h: Heartbeat =>
@@ -143,15 +157,19 @@ case class ExchangePublicDataManager(globalConfig: GlobalConfig,
         publicData.age.orderBookTS = Some(Instant.now)
 
       case b: OrderBookUpdate =>
-        val book = publicData.orderBook(b.tradePair)
-        if (book.exchange != b.exchange) throw new IllegalArgumentException
-        val newBids: Map[Double, Bid] =
-          (book.bids -- b.bidUpdates.filter(_.quantity == 0.0).map(_.price)) ++ b.bidUpdates.filter(_.quantity != 0.0).map(e => e.price -> e)
-        val newAsks: Map[Double, Ask] =
-          (book.asks -- b.askUpdates.filter(_.quantity == 0.0).map(_.price)) ++ b.askUpdates.filter(_.quantity != 0.0).map(e => e.price -> e)
+        val book: Option[OrderBook] = publicData.orderBook.get(b.tradePair)
+        if (book.isEmpty) {
+          guardedRetry(b)
+        } else {
+          if (book.get.exchange != b.exchange) throw new IllegalArgumentException
+          val newBids: Map[Double, Bid] =
+            (book.get.bids -- b.bidUpdates.filter(_.quantity == 0.0).map(_.price)) ++ b.bidUpdates.filter(_.quantity != 0.0).map(e => e.price -> e)
+          val newAsks: Map[Double, Ask] =
+            (book.get.asks -- b.askUpdates.filter(_.quantity == 0.0).map(_.price)) ++ b.askUpdates.filter(_.quantity != 0.0).map(e => e.price -> e)
 
-        publicData.orderBook.update(b.tradePair, OrderBook(book.exchange, book.tradePair, newBids, newAsks))
-        publicData.age.orderBookTS = Some(Instant.now)
+          publicData.orderBook.update(b.tradePair, OrderBook(book.get.exchange, book.get.tradePair, newBids, newAsks))
+          publicData.age.orderBookTS = Some(Instant.now)
+        }
     }
   }
 

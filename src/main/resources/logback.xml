@@ -10,7 +10,6 @@
     </appender>
 
     <logger name="org.purevalue.arbitrage" level="INFO"/>
-    <logger name="org.purevalue.arbitrage.adapter.coinbase" level="DEBUG"/>
 
     <root level="INFO">
         <appender-ref ref="STDOUT"/>

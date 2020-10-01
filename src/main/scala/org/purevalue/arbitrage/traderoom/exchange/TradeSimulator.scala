@@ -29,13 +29,13 @@ class TradeSimulator(exchangeConfig: ExchangeConfig,
   }
 
   def newLimitOrder(externalOrderId: String, creationTime: Instant, o: OrderRequest): OrderUpdate =
-    OrderUpdate(externalOrderId, o.exchange, o.tradePair, o.tradeSide, Some(OrderType.LIMIT), Some(o.limit), None, Some(o.amountBaseAsset), Some(creationTime), Some(OrderStatus.NEW), None, Some(o.limit), creationTime)
+    OrderUpdate(externalOrderId, o.exchange, o.tradePair, o.tradeSide, Some(OrderType.LIMIT), Some(o.limit), None, Some(o.amountBaseAsset), Some(creationTime), Some(OrderStatus.NEW), None, None, Some(o.limit), creationTime)
 
   def limitOrderPartiallyFilled(externalOrderId: String, creationTime: Instant, o: OrderRequest): OrderUpdate =
-    OrderUpdate(externalOrderId, o.exchange, o.tradePair, o.tradeSide, Some(OrderType.LIMIT), Some(o.limit), None, Some(o.amountBaseAsset), Some(creationTime), Some(OrderStatus.PARTIALLY_FILLED), Some(o.amountBaseAsset / 2.0), Some(o.limit), Instant.now)
+    OrderUpdate(externalOrderId, o.exchange, o.tradePair, o.tradeSide, Some(OrderType.LIMIT), Some(o.limit), None, Some(o.amountBaseAsset), Some(creationTime), Some(OrderStatus.PARTIALLY_FILLED), Some(o.amountBaseAsset / 2.0), None, Some(o.limit), Instant.now)
 
   def limitOrderFilled(externalOrderId: String, creationTime: Instant, o: OrderRequest): OrderUpdate =
-    OrderUpdate(externalOrderId, o.exchange, o.tradePair, o.tradeSide, Some(OrderType.LIMIT), Some(o.limit), None, Some(o.amountBaseAsset), Some(creationTime), Some(OrderStatus.FILLED), Some(o.amountBaseAsset), Some(o.limit), Instant.now)
+    OrderUpdate(externalOrderId, o.exchange, o.tradePair, o.tradeSide, Some(OrderType.LIMIT), Some(o.limit), None, Some(o.amountBaseAsset), Some(creationTime), Some(OrderStatus.FILLED), Some(o.amountBaseAsset), None, Some(o.limit), Instant.now)
 
   def walletBalanceUpdate(delta: LocalCryptoValue): WalletBalanceUpdate = adapter.WalletBalanceUpdate(delta.asset, delta.amount)
 

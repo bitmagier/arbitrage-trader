@@ -129,6 +129,7 @@ private[binance] case class OpenOrderJson(symbol: String,
     Some(Instant.ofEpochMilli(time)),
     Some(toOrderStatus(status)),
     Some(cummulativeQuoteQty.toDouble),
+    None,
     Some(cummulativeQuoteQty.toDouble / executedQty.toDouble),
     Instant.ofEpochMilli(updateTime))
 }
@@ -185,6 +186,7 @@ private[binance] case class OrderExecutionReportJson(e: String, // Event type
     Some(Instant.ofEpochMilli(O)),
     Some(toOrderStatus(X)),
     Some(z.toDouble),
+    None,
     Some(Z.toDouble / z.toDouble),
     Instant.ofEpochMilli(E))
 }
@@ -308,6 +310,7 @@ private[binance] case class CancelOrderResponseJson(symbol: String,
     None,
     Some(BinanceOrder.toOrderStatus(status)),
     Some(executedQty.toDouble),
+    None,
     None,
     Instant.now // we don't have any better
   )

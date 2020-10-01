@@ -214,7 +214,7 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
     implicit val timeout: Timeout = globalConfig.internalCommunicationTimeoutDuringInit
     binanceTradePairBySymbol = Await.result(
       (binancePublicDataInquirer ? GetBinanceTradePairs()).mapTo[Set[BinanceTradePair]],
-      globalConfig.internalCommunicationTimeout.duration.plus(500.millis))
+      timeout.duration.plus(500.millis))
       .map(e => (e.symbol, e))
       .toMap
   }

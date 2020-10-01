@@ -1,5 +1,6 @@
 package org.purevalue.arbitrage.adapter
 
+import java.time.{Duration, Instant}
 import java.util.UUID
 
 import akka.actor.Status.Failure
@@ -14,11 +15,17 @@ import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig, TradeRoomConfig}
 import org.slf4j.LoggerFactory
 
 import scala.collection._
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.Future
 import scala.concurrent.duration.DurationInt
 
 
+trait Retryable {
+  val MaxApplyDelay: Duration = Duration.ofMillis(200)
+  var applyDeadline: Option[Instant] = None // when this dataset can be applied latest before timing out
+}
 
-trait ExchangeAccountStreamData
+trait ExchangeAccountStreamData extends Retryable
 
 case class Balance(asset: Asset, amountAvailable: Double, amountLocked: Double) {
   override def toString: String = s"Balance(${asset.officialSymbol}: " +
@@ -80,15 +87,6 @@ case class CompleteWalletUpdate(balance: Map[Asset, Balance]) extends ExchangeAc
 case class WalletAssetUpdate(balance: Map[Asset, Balance]) extends ExchangeAccountStreamData
 case class WalletBalanceUpdate(asset: Asset, amountDelta: Double) extends ExchangeAccountStreamData
 
-/**
- * @see https://academy.binance.com/economics/what-are-makers-and-takers
- */
-case class Fee(exchange: String,
-               makerFee: Double,
-               takerFee: Double) {
-  def average: Double = (makerFee + takerFee) / 2
-}
-
 case class ExchangeAccountData(wallet: Wallet,
                                activeOrders: concurrent.Map[OrderRef, Order])
 
@@ -125,6 +123,19 @@ class ExchangeAccountDataManager(globalConfig: GlobalConfig,
 
   var accountDataChannel: ActorRef = _
 
+  private def guardedRetry(e: ExchangeAccountStreamData): Unit = {
+    if (e.applyDeadline.isEmpty) e.applyDeadline = Some(Instant.now.plus(e.MaxApplyDelay))
+    if (Instant.now.isAfter(e.applyDeadline.get)) {
+      log.warn(s"ignoring update [timeout] $e")
+    } else {
+      log.debug(s"scheduling retry of $e")
+      Future.apply({
+        Thread.sleep(20)
+        self ! IncomingData(Seq(e))
+      })
+    }
+  }
+
   private def applyData(data: ExchangeAccountStreamData): Unit = {
     if (log.isTraceEnabled) log.trace(s"applying incoming $data")
 
@@ -134,16 +145,18 @@ class ExchangeAccountDataManager(globalConfig: GlobalConfig,
           case (a: Asset, b: Balance) if a == w.asset =>
             (a, Balance(b.asset, b.amountAvailable + w.amountDelta, b.amountLocked))
           case (a: Asset, b: Balance) => (a, b)
-        }
+        }.filterNot(e => e._2.amountAvailable == 0.0 && e._2.amountLocked == 0.0)
         exchange ! WalletUpdateTrigger()
 
       case w: WalletAssetUpdate =>
-        accountData.wallet.balance = accountData.wallet.balance ++ w.balance
+        accountData.wallet.balance = (accountData.wallet.balance ++ w.balance)
+          .filterNot(e => e._2.amountAvailable == 0.0 && e._2.amountLocked == 0.0)
         exchange ! WalletUpdateTrigger()
 
       case w: CompleteWalletUpdate =>
-        if (w.balance != accountData.wallet) { // we get snapshots delivered here, so updates are needed only, when something changed
-          accountData.wallet.balance = w.balance
+        val nonEmptyBalance = w.balance.filterNot(e => e._2.amountAvailable == 0.0 && e._2.amountLocked == 0.0)
+        if (nonEmptyBalance != accountData.wallet) { // we get snapshots delivered here, so updates are needed only, when something changed
+          accountData.wallet.balance = nonEmptyBalance
           exchange ! WalletUpdateTrigger()
         }
 
@@ -152,7 +165,12 @@ class ExchangeAccountDataManager(globalConfig: GlobalConfig,
         if (accountData.activeOrders.contains(ref)) {
           accountData.activeOrders(ref).applyUpdate(o)
         } else {
-          accountData.activeOrders.update(ref, o.toOrder) // covers a restart-scenario (tradeRoom / arbitrage-trader)
+          if (o.orderType.isDefined) {
+            accountData.activeOrders.update(ref, o.toOrder)
+          } else {
+            // better wait for initial order update before applying this one
+            guardedRetry(o)
+          }
         }
         exchange ! OrderUpdateTrigger(ref)
 

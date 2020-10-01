@@ -12,7 +12,6 @@ import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager.{CancelOrder, CancelOrderResult, NewLimitOrder, NewOrderAck}
 import org.purevalue.arbitrage.adapter._
 import org.purevalue.arbitrage.trader.FooTrader
-import org.purevalue.arbitrage.traderoom.Asset.AssetUSDT
 import org.purevalue.arbitrage.traderoom.OrderSetPlacer.NewOrderSet
 import org.purevalue.arbitrage.traderoom.TradeRoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.{OrderUpdateTrigger, RemoveOrphanOrder}
@@ -40,7 +39,7 @@ object TradeRoom {
                           referenceTickerExchange: String,
                           orderBooks: collection.Map[String, collection.Map[TradePair, OrderBook]],
                           balances: collection.Map[String, Wallet],
-                          fees: collection.Map[String, Fee],
+                          feeRates: collection.Map[String, Double],
                           doNotTouch: Map[String, Seq[Asset]]) {
     def referenceTicker: collection.Map[TradePair, Ticker] = tickers(referenceTickerExchange)
   }
@@ -123,7 +122,7 @@ class TradeRoom(val config: Config,
   private var finishedOrderBundles: List[FinishedOrderBundle] = List()
   private var finishedLiquidityTxs: List[FinishedLiquidityTx] = List()
 
-  private val fees: Map[String, Fee] = config.tradeRoom.exchanges.values.map(e => (e.name, e.fee)).toMap // TODO query from exchange
+  private val feeRates: Map[String, Double] = config.tradeRoom.exchanges.values.map(e => (e.name, e.feeRate)).toMap // TODO query from exchange
   private val doNotTouchAssets: Map[String, Seq[Asset]] = config.tradeRoom.exchanges.values.map(e => (e.name, e.doNotTouchTheseAssets)).toMap
   private val tradeContext: TradeContext =
     TradeContext(
@@ -132,7 +131,7 @@ class TradeRoom(val config: Config,
       config.tradeRoom.referenceTickerExchange,
       orderBooks,
       wallets,
-      fees,
+      feeRates,
       doNotTouchAssets)
 
   private val orderBundleSafetyGuard = new OrderBundleSafetyGuard(config.tradeRoom.orderBundleSafetyGuard, config.tradeRoom.exchanges, tradeContext, dataAge, activeOrderBundles)
@@ -256,12 +255,13 @@ class TradeRoom(val config: Config,
     }
 
     def logOrderGainStats(): Unit = {
-      val lastHourArbitrageSumUSDT: Double =
+      val reportingUsdEquivalentCoin: Asset = config.tradeRoom.exchanges(config.tradeRoom.referenceTickerExchange).usdEquivalentCoin
+      val lastHourArbitrageSumUSD: Double =
         OrderBill.aggregateValues(
           finishedOrderBundles
             .filter(b => Duration.between(b.finishTime, now).toHours < 1)
             .flatMap(_.bill.balanceSheet),
-          AssetUSDT,
+          reportingUsdEquivalentCoin,
           (_, tp) => referenceTicker.get(tp).map(_.priceEstimate))
 
       val lastHourLiquidityTxSumUSDT: Double =
@@ -269,26 +269,26 @@ class TradeRoom(val config: Config,
           finishedLiquidityTxs
             .filter(b => Duration.between(b.finishTime, now).toHours < 1)
             .flatMap(_.bill.balanceSheet),
-          AssetUSDT,
+          reportingUsdEquivalentCoin,
           (_, tp) => referenceTicker.get(tp).map(_.priceEstimate))
 
       // TODO log a info message with aggregation on currency level
-      val lastHourSumUSDT: Double = lastHourArbitrageSumUSDT + lastHourLiquidityTxSumUSDT
+      val lastHourSumUSDT: Double = lastHourArbitrageSumUSD + lastHourLiquidityTxSumUSDT
       log.info(s"${Emoji.Robot}  Last 1h: cumulated gain: ${formatDecimal(lastHourSumUSDT, 2)} USD " +
-        s"(arbitrage orders: ${formatDecimal(lastHourArbitrageSumUSDT, 2)} USD, " +
+        s"(arbitrage orders: ${formatDecimal(lastHourArbitrageSumUSD, 2)} USD, " +
         s"liquidity tx: ${formatDecimal(lastHourLiquidityTxSumUSDT, 2)} USD) ")
 
       val totalArbitrageSumUSDT: Double =
         OrderBill.aggregateValues(
           finishedOrderBundles
             .flatMap(_.bill.balanceSheet),
-          AssetUSDT,
+          reportingUsdEquivalentCoin,
           (_, tp) => referenceTicker.get(tp).map(_.priceEstimate))
       val totalLiquidityTxSumUSDT: Double =
         OrderBill.aggregateValues(
           finishedLiquidityTxs
             .flatMap(_.bill.balanceSheet),
-          AssetUSDT,
+          reportingUsdEquivalentCoin,
           (_, tp) => referenceTicker.get(tp).map(_.priceEstimate))
       val totalSumUSDT: Double = totalArbitrageSumUSDT + totalLiquidityTxSumUSDT
       log.info(s"${Emoji.Robot}  Total cumulated gain: ${formatDecimal(totalSumUSDT, 2)} USD " +
@@ -336,7 +336,8 @@ class TradeRoom(val config: Config,
     val orders: Seq[Order] = bundle.ordersRefs.flatMap(activeOrder)
     val finishTime = orders.map(_.lastUpdateTime).max
 
-    val bill: OrderBill = OrderBill.calc(orders, referenceTicker, AssetUSDT, config.tradeRoom.exchanges.map(e => (e._1, e._2.fee)))
+    val usdEquivalentCoin: Asset = config.tradeRoom.exchanges(config.tradeRoom.referenceTickerExchange).usdEquivalentCoin
+    val bill: OrderBill = OrderBill.calc(orders, referenceTicker, usdEquivalentCoin, config.tradeRoom.exchanges.map(e => (e._1, e._2.feeRate)))
     val finishedOrderBundle = FinishedOrderBundle(bundle, orders, finishTime, bill)
     this.synchronized {
       finishedOrderBundles = finishedOrderBundle :: finishedOrderBundles
@@ -361,7 +362,8 @@ class TradeRoom(val config: Config,
 
   def cleanupLiquidityTxOrder(tx: LiquidityTx): Unit = {
     val order: Order = activeOrder(tx.orderRef).get // must exist
-    val bill: OrderBill = OrderBill.calc(Seq(order), referenceTicker, AssetUSDT, fees)
+    val usdEquivalentCoin: Asset = config.tradeRoom.exchanges(order.exchange).usdEquivalentCoin
+    val bill: OrderBill = OrderBill.calc(Seq(order), referenceTicker, usdEquivalentCoin, feeRates)
     val finishedLiquidityTx = FinishedLiquidityTx(tx, order, order.lastUpdateTime, bill)
     this.synchronized {
       finishedLiquidityTxs = finishedLiquidityTx :: finishedLiquidityTxs

@@ -46,24 +46,26 @@ class Asset(val officialSymbol: String,
 }
 
 object Asset {
-  // often used assets
-  lazy val Euro: Asset = Asset("EUR")
-  lazy val USDollar: Asset = Asset("USD")
-  lazy val Bitcoin: Asset = Asset("BTC")
-
-  lazy val AssetUSDT: Asset = Asset("USDT")
-  lazy val AssetUSDC: Asset = Asset("USDC")
-
   private val KnownFiatAssets: Set[String] = Set("EUR", "USD", "GBP", "AUD", "CAD", "IDR", "HKD", "INR", "CHF", "MAD", "PLN", "RUB", "TRY", "CNY")
 
   // some essential values we need everywhere
-  private val FixAssets: Seq[Asset] = Seq(
+  private val PredefinedAssets: Seq[Asset] = Seq(
     new Asset("EUR", Some("Euro"), isFiat = true, 2, 10),
     new Asset("USD", Some("U.S. Dollar"), isFiat = true, 2, 10),
     new Asset("BTC", Some("Bitcoin"), isFiat = false, 8, 10),
     new Asset("USDT", Some("Tether"), isFiat = false, 2, 10),
     new Asset("USDC", Some("USD Coin"), isFiat = false, 2, 10)
   )
+
+  // often used assets
+  lazy val Euro: Asset = Asset("EUR")
+  lazy val USDollar: Asset = Asset("USD")
+
+  lazy val Bitcoin: Asset = Asset("BTC")
+  lazy val AssetUSDT: Asset = Asset("USDT")
+
+  lazy val AssetUSDC: Asset = Asset("USDC")
+  lazy val UsdEquivalentCoins: Set[Asset] = Set(AssetUSDT, AssetUSDC)
 
   // this is the reference to know exactly about which asset (or coin) we are talking (no matter at which exchange)
   private var allAssets: Map[String, Asset] = Map()
@@ -99,7 +101,7 @@ object Asset {
     result.get
   }
 
-  FixAssets.foreach(register)
+  PredefinedAssets.foreach(register)
 }
 
 

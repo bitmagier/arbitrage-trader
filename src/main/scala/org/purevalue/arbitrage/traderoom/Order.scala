@@ -3,7 +3,7 @@ package org.purevalue.arbitrage.traderoom
 import java.time.Instant
 import java.util.UUID
 
-import org.purevalue.arbitrage.adapter.{ExchangeAccountStreamData, Fee, Ticker}
+import org.purevalue.arbitrage.adapter.{ExchangeAccountStreamData, Ticker}
 import org.purevalue.arbitrage.traderoom.Asset.{AssetUSDC, AssetUSDT}
 import org.purevalue.arbitrage.traderoom.TradeRoom.{OrderRef, TickersReadonly}
 import org.purevalue.arbitrage.util.IncomingDataError
@@ -13,7 +13,10 @@ import org.slf4j.LoggerFactory
 
 /**
  * A (real) order, which comes from exchange data feed
+ *
+ * @see https://academy.binance.com/economics/what-are-makers-and-takers
  */
+
 case class Order(externalId: String,
                  exchange: String,
                  tradePair: TradePair,
@@ -44,38 +47,58 @@ case class Order(externalId: String,
   // In case of a buy, the fee needs to be subtracted from the buy side.
 
   // absolute (positive) amount minus fees
-  def calcOutgoingLiquidity(fee: Fee): LocalCryptoValue = side match {
-    case TradeSide.Buy => LocalCryptoValue(
-      exchange,
-      tradePair.quoteAsset,
-      (priceAverage, cumulativeFilledQuantity) match {
-        case (Some(p), Some(q)) => p * q
-        case _ => 0.0
-      })
-    case TradeSide.Sell => LocalCryptoValue(
-      exchange,
-      tradePair.baseAsset,
-      cumulativeFilledQuantity match {
-        case Some(q) => q * (1.0 + fee.average)
-        case None => 0.0
-      })
+  def calcOutgoingLiquidity(feeRate: Double): LocalCryptoValue = side match {
+    case TradeSide.Buy =>
+      if (Seq(OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED).contains(orderStatus))
+        LocalCryptoValue(
+          exchange,
+          tradePair.quoteAsset,
+          (priceAverage, cumulativeFilledQuantity) match {
+            case (Some(p), Some(q)) => p * q
+            case (Some(p), None) => p * quantity
+            case (None, Some(q)) if orderPrice.isDefined => orderPrice.get * q
+            case _ if orderPrice.isDefined => orderPrice.get * quantity
+            // if something falls through here, we have to avoid using this function in this case
+          })
+      else LocalCryptoValue(exchange, tradePair.quoteAsset, 0.0)
+
+    case TradeSide.Sell =>
+      if (Seq(OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED).contains(orderStatus))
+        LocalCryptoValue(
+          exchange,
+          tradePair.baseAsset,
+          cumulativeFilledQuantity match {
+            case Some(q) => q * (1.0 + feeRate)
+            case None => quantity * (1.0 + feeRate)
+          })
+      else LocalCryptoValue(exchange, tradePair.baseAsset, 0.0)
   }
 
   // absolute (positive) amount minus fees
-  def calcIncomingLiquidity(fee: Fee): LocalCryptoValue = side match {
-    case TradeSide.Buy => LocalCryptoValue(exchange,
-      tradePair.baseAsset,
-      cumulativeFilledQuantity match {
-        case Some(q) => q * (1.0 - fee.average)
-        case None => 0.0
-      })
-    case TradeSide.Sell => LocalCryptoValue(
-      exchange,
-      tradePair.quoteAsset,
-      (priceAverage, cumulativeFilledQuantity) match {
-        case (Some(p), Some(q)) => p * q
-        case _ => 0.0
-      })
+  def calcIncomingLiquidity(feeRate: Double): LocalCryptoValue = side match {
+    case TradeSide.Buy =>
+      if (Seq(OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED).contains(orderStatus))
+        LocalCryptoValue(exchange,
+          tradePair.baseAsset,
+          cumulativeFilledQuantity match {
+            case Some(q) => q * (1.0 - feeRate)
+            case None => quantity * (1.0 - feeRate)
+          })
+      else LocalCryptoValue(exchange, tradePair.baseAsset, 0.0)
+
+    case TradeSide.Sell =>
+      if (Seq(OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED).contains(orderStatus))
+        LocalCryptoValue(
+          exchange,
+          tradePair.quoteAsset,
+          (priceAverage, cumulativeFilledQuantity) match {
+            case (Some(p), Some(q)) => p * q
+            case (Some(p), None) => p * quantity
+            case (None, Some(q)) if orderPrice.isDefined => orderPrice.get * q
+            case _ if orderPrice.isDefined => orderPrice.get * quantity
+            // if something falls through here, we have to avoid using this function in this case
+          })
+      else LocalCryptoValue(exchange, tradePair.quoteAsset, 0.0)
   }
 
   def ref: TradeRoom.OrderRef = OrderRef(exchange, tradePair, externalId)
@@ -93,14 +116,15 @@ case class Order(externalId: String,
     if (u.updateTime.isBefore(lastUpdateTime)) {
       log.warn(s"Ignoring $u, because updateTime is not after order's lastUpdateTime: $this")
     } else if (u.updateTime.equals(lastUpdateTime) && orderStatus.isFinal) log.info(s"Ignoring $u, because it has same timestamp and we already have a final order-status here")
-    else if (u.updateTime.equals(lastUpdateTime) && cumulativeFilledQuantity.isDefined &&
-      (u.cumulativeFilledQuantity.isEmpty || u.cumulativeFilledQuantity.get < cumulativeFilledQuantity.get))
-      log.info(s"Ignoring $u, because it has same timestamp and we have alread higher filled quantity here")
     else {
       if (u.orderStatus.isDefined) orderStatus = u.orderStatus.get
       if (u.priceAverage.isDefined) priceAverage = u.priceAverage
       if (u.originalQuantity.isDefined) quantity = u.originalQuantity.get
-      if (u.cumulativeFilledQuantity.isDefined) cumulativeFilledQuantity = u.cumulativeFilledQuantity
+      cumulativeFilledQuantity = u.cumulativeFilledQuantity match {
+        case Some(q) => Some(q)
+        case None if u.remainingQuantity.isDefined => Some(quantity - u.remainingQuantity.get)
+        case _ => cumulativeFilledQuantity
+      }
       lastUpdateTime = u.updateTime
     }
   }
@@ -157,6 +181,7 @@ case class OrderUpdate(externalOrderId: String,
                        orderCreationTime: Option[Instant],
                        orderStatus: Option[OrderStatus],
                        cumulativeFilledQuantity: Option[Double],
+                       remainingQuantity: Option[Double], // on coinbase we get that insteas of a cumulativeFilledQuantity
                        priceAverage: Option[Double],
                        updateTime: Instant) extends ExchangeAccountStreamData {
 
@@ -184,7 +209,11 @@ case class OrderUpdate(externalOrderId: String,
       case Some(_) => OrderStatus.NEW
       case None => OrderStatus.NEW
     }),
-    cumulativeFilledQuantity,
+    cumulativeFilledQuantity match {
+      case Some(q) => Some(q)
+      case None if originalQuantity.isDefined && remainingQuantity.isDefined => Some(originalQuantity.get - remainingQuantity.get)
+      case _ => None
+    },
     priceAverage,
     updateTime
   )
@@ -200,7 +229,7 @@ case class OrderRequest(id: UUID,
                         exchange: String,
                         tradePair: TradePair,
                         tradeSide: TradeSide,
-                        fee: Fee,
+                        feeRate: Double,
                         amountBaseAsset: Double,
                         limit: Double) {
   def tradeDesc: String = {
@@ -216,18 +245,18 @@ case class OrderRequest(id: UUID,
   def shortDesc: String = s"OrderRequest($exchange: $tradeDesc)"
 
 
-  override def toString: String = s"OrderRequest($id, orderBundleId:$orderBundleId, $exchange, $tradePair, $tradeSide, $fee, " +
+  override def toString: String = s"OrderRequest($id, orderBundleId:$orderBundleId, $exchange, $tradePair, $tradeSide, $feeRate, " +
     s"amountBaseAsset:${formatDecimal(amountBaseAsset)}, limit:${formatDecimal(limit)})"
 
   // absolute (positive) amount minus fees
   def calcOutgoingLiquidity: LocalCryptoValue = tradeSide match {
     case TradeSide.Buy => LocalCryptoValue(exchange, tradePair.quoteAsset, limit * amountBaseAsset)
-    case TradeSide.Sell => LocalCryptoValue(exchange, tradePair.baseAsset, amountBaseAsset * (1.0 + fee.average))
+    case TradeSide.Sell => LocalCryptoValue(exchange, tradePair.baseAsset, amountBaseAsset * (1.0 + feeRate))
   }
 
   // absolute (positive) amount minus fees
   def calcIncomingLiquidity: LocalCryptoValue = tradeSide match {
-    case TradeSide.Buy => LocalCryptoValue(exchange, tradePair.baseAsset, amountBaseAsset * (1.0 - fee.average))
+    case TradeSide.Buy => LocalCryptoValue(exchange, tradePair.baseAsset, amountBaseAsset * (1.0 - feeRate))
     case TradeSide.Sell => LocalCryptoValue(exchange, tradePair.quoteAsset, limit * amountBaseAsset)
   }
 }
@@ -248,8 +277,8 @@ object OrderBill {
     Seq(order.calcIncomingLiquidity, order.calcOutgoingLiquidity.negate)
   }
 
-  def calcBalanceSheet(order: Order, fee: Fee): Seq[LocalCryptoValue] = {
-    Seq(order.calcIncomingLiquidity(fee), order.calcOutgoingLiquidity(fee).negate)
+  def calcBalanceSheet(order: Order, feeRate: Double): Seq[LocalCryptoValue] = {
+    Seq(order.calcIncomingLiquidity(feeRate), order.calcOutgoingLiquidity(feeRate).negate)
   }
 
   def aggregateValues(balanceSheet: Iterable[LocalCryptoValue],
@@ -276,20 +305,19 @@ object OrderBill {
     if (aggregateUSDxAsset != AssetUSDT && aggregateUSDxAsset != AssetUSDC) throw new IllegalArgumentException("not a USD equivalent asset")
 
     val balanceSheet: Seq[LocalCryptoValue] = orders.flatMap(calcBalanceSheet)
-    val sumUSD: Double = aggregateValues(balanceSheet, aggregateUSDxAsset, (_,tradePair) => referenceTicker.get(tradePair).map(_.priceEstimate))
+    val sumUSD: Double = aggregateValues(balanceSheet, aggregateUSDxAsset, (_, tradePair) => referenceTicker.get(tradePair).map(_.priceEstimate))
     OrderBill(balanceSheet, sumUSD)
   }
 
-  // TODO handle non-FILLED orders correctly
   def calc(orders: Seq[Order],
            referenceTicker: collection.Map[TradePair, Ticker],
            aggregateUSDxAsset: Asset,
-           fees: Map[String, Fee]): OrderBill = {
-    if (aggregateUSDxAsset != AssetUSDT && aggregateUSDxAsset != AssetUSDC) throw new IllegalArgumentException("not a USD equivalent asset")
+           feeRates: Map[String, Double]): OrderBill = {
+    if (!Asset.UsdEquivalentCoins.contains(aggregateUSDxAsset)) throw new IllegalArgumentException("not a USD equivalent asset")
 
     val balanceSheet: Seq[LocalCryptoValue] =
-      orders.flatMap(o => calcBalanceSheet(o, fees(o.exchange)))
-    val sumUSD: Double = aggregateValues(balanceSheet, aggregateUSDxAsset, (_,tradePair) => referenceTicker.get(tradePair).map(_.priceEstimate))
+      orders.flatMap(o => calcBalanceSheet(o, feeRates(o.exchange)))
+    val sumUSD: Double = aggregateValues(balanceSheet, aggregateUSDxAsset, (_, tradePair) => referenceTicker.get(tradePair).map(_.priceEstimate))
     OrderBill(balanceSheet, sumUSD)
   }
 }

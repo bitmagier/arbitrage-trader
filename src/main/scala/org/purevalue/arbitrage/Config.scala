@@ -5,7 +5,6 @@ import java.util.concurrent.TimeUnit
 
 import akka.util.Timeout
 import com.typesafe.config.ConfigFactory
-import org.purevalue.arbitrage.adapter.Fee
 import org.purevalue.arbitrage.traderoom.Asset
 
 import scala.collection.JavaConverters._
@@ -19,13 +18,11 @@ case class ExchangeConfig(name: String,
                           reserveAssets: List[Asset], // reserve assets in order of importance; first in list is the primary reserve asset
                           assetBlocklist: Set[Asset],
                           usdEquivalentCoin: Asset, // primary local USD equivalent coin. USDT, USDC etc. for amount calculations
-                          makerFee: Double,
-                          takerFee: Double,
+                          feeRate: Double, // average rate
                           doNotTouchTheseAssets: Seq[Asset],
                           secrets: SecretsConfig,
                           refCode: Option[String],
                           assetSourceWeight: Int) {
-  def fee: Fee = Fee(name, makerFee, takerFee)
 }
 
 object ExchangeConfig {
@@ -52,8 +49,7 @@ object ExchangeConfig {
       reserveAssets,
       assetBlocklist.map(e => Asset(e)).toSet,
       Asset(usdEquivalentCoin),
-      c.getDouble("fee.maker"),
-      c.getDouble("fee.taker"),
+      c.getDouble("fee-rate"),
       doNotTouchTheseAssets,
       secretsConfig(c.getConfig("secrets")),
       if (c.hasPath("ref-code")) Some(c.getString("ref-code")) else None,

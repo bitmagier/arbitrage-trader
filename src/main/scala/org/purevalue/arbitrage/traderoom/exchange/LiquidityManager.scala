@@ -276,7 +276,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
       val orderAmount: Double = demand.amount * (1.0 + config.providingLiquidityExtra)
       val tradePair = TradePair(demand.asset, bestReserveAssets.get._1)
       val limit = determineRealisticLimit(tradePair, TradeSide.Buy, orderAmount)
-      val orderRequest = OrderRequest(UUID.randomUUID(), None, exchangeConfig.name, tradePair, TradeSide.Buy, exchangeConfig.fee, orderAmount, limit)
+      val orderRequest = OrderRequest(UUID.randomUUID(), None, exchangeConfig.name, tradePair, TradeSide.Buy, exchangeConfig.feeRate, orderAmount, limit)
 
       log.info(s"${Emoji.Robot}  placing liquidity providing order: ${orderRequest.shortDesc}")
       tradeRoom ! LiquidityTransformationOrder(orderRequest)
@@ -378,7 +378,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
       exchangeConfig.name,
       tradePair,
       TradeSide.Sell,
-      exchangeConfig.fee,
+      exchangeConfig.feeRate,
       coins.amount,
       limit
     )
@@ -529,7 +529,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
 
               val orderAmountBaseAsset = bucketsToTransfer * baseAssetBucketValue
               val limit = determineRealisticLimit(tradePair, tradeSide, orderAmountBaseAsset)
-              OrderRequest(UUID.randomUUID(), None, exchangeConfig.name, tradePair, tradeSide, exchangeConfig.fee, orderAmountBaseAsset, limit)
+              OrderRequest(UUID.randomUUID(), None, exchangeConfig.name, tradePair, tradeSide, exchangeConfig.feeRate, orderAmountBaseAsset, limit)
 
             case tp if publicData.ticker.contains(tp.reverse) =>
               val tradePair = tp.reverse
@@ -540,7 +540,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
               val amountBaseAssetEstimate = bucketsToTransfer * quoteAssetBucketValue / publicData.ticker(tradePair).priceEstimate
               val limit = determineRealisticLimit(tradePair, tradeSide, amountBaseAssetEstimate)
               val orderAmountBaseAsset = bucketsToTransfer * quoteAssetBucketValue / limit
-              OrderRequest(UUID.randomUUID(), None, exchangeConfig.name, tradePair, tradeSide, exchangeConfig.fee, orderAmountBaseAsset, limit)
+              OrderRequest(UUID.randomUUID(), None, exchangeConfig.name, tradePair, tradeSide, exchangeConfig.feeRate, orderAmountBaseAsset, limit)
 
             case _ => throw new RuntimeException(s"${exchangeConfig.name}: No local tradepair found to convert $sourceAsset to $sinkAsset")
           }
@@ -559,7 +559,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
       .map { e =>
         val f = e._2.head
         val amount = e._2.map(_.amountBaseAsset).sum
-        OrderRequest(f.id, f.orderBundleId, f.exchange, f.tradePair, f.tradeSide, f.fee, amount, f.limit)
+        OrderRequest(f.id, f.orderBundleId, f.exchange, f.tradePair, f.tradeSide, f.feeRate, amount, f.limit)
       }.toList
 
     if (liquidityTransactions.nonEmpty) {
