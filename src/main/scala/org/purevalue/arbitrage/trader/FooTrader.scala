@@ -155,95 +155,6 @@ class FooTrader(traderConfig: Config, tradeRoom: ActorRef, tc: TradeContext) ext
     }
   }
 
-  //  def findBestShotBasedOnTicker(tradePair: TradePair): Either[OrderRequestBundle, NoResultReason] = {
-  //    // ignore wallet for now
-  //    val ticker4Buy: Iterable[Ticker] = tc.tickers.map(_._2(tradePair)).filter(e => canTrade(e.exchange, e.tradePair))
-  //    val ticker4Sell: Iterable[Ticker] = tc.tickers.map(_._2(tradePair)).filter(e => canTrade(e.exchange, e.tradePair))
-  //
-  //    // safety check
-  //    if (!ticker4Buy.forall(_.tradePair == tradePair)
-  //      || !ticker4Sell.forall(_.tradePair == tradePair)) {
-  //      throw new RuntimeException("safety-check failed")
-  //    }
-  //
-  //    if (ticker4Sell.isEmpty || ticker4Buy.isEmpty)
-  //      return Right(BuyOrSellBookEmpty())
-  //
-  //    val highestBid: Tuple2[String, Bid] = // that's what we try to sell to
-  //      ticker4Sell
-  //        .map(e => (e.exchange, Bid(e.highestBidPrice, e.highestBidQuantity.getOrElse(1))))
-  //        .maxBy(_._2.price)
-  //    val lowestAsk: Tuple2[String, Ask] = // that's what we try to buy
-  //      ticker4Buy
-  //        .map(e => (e.exchange, Ask(e.lowestAskPrice, e.lowestAskQuantity.getOrElse(1))))
-  //        .minBy(_._2.price)
-  //
-  //    if (highestBid._2.price <= lowestAsk._2.price) {
-  //      return Right(BidAskGap())
-  //    }
-  //
-  //    if (highestBid._1 == lowestAsk._1) {
-  //      log.warn(s"[$tradePair] found highest bid $highestBid and lowest ask $lowestAsk on the same exchange.")
-  //      return Right(Confused())
-  //    }
-  //
-  //    val orderBundleId = UUID.randomUUID()
-  //
-  //    val buyExchange: String = lowestAsk._1
-  //    val sellExchange: String = highestBid._1
-  //
-  //    // only want to have assets convertible to USDT here, to ignore the (~3%) complicated special cases for now
-  //    if (!CryptoValue(USDT, TradeAmountInUsdt).canConvertTo(tradePair.baseAsset, tc.tickers(buyExchange)) ||
-  //      !CryptoValue(USDT, TradeAmountInUsdt).canConvertTo(tradePair.baseAsset, tc.tickers(sellExchange))) {
-  //      log.warn(s"Unable to convert ${tradePair.baseAsset} to USDT")
-  //      return Right(NoUSDTConversion(tradePair.baseAsset))
-  //    }
-  //
-  //    val amountBaseAsset: Double = CryptoValue(USDT, TradeAmountInUsdt).convertTo(tradePair.baseAsset, tc.referenceTicker).amount
-  //    val buyLimit = new OrderLimitChooser(tc.orderBooks.get(buyExchange).map(_(tradePair)), tc.tickers(buyExchange)(tradePair))
-  //      .determineRealisticOrderLimit(TradeSide.Buy, amountBaseAsset, OrderLimitRealityAdjustmentRate)
-  //
-  //    val ourBuyBaseAssetOrder =
-  //      OrderRequest(
-  //        UUID.randomUUID(),
-  //        Some(orderBundleId),
-  //        buyExchange,
-  //        tradePair,
-  //        TradeSide.Buy,
-  //        tc.fees(buyExchange),
-  //        amountBaseAsset / (1.0 - tc.fees(buyExchange).average), // usually we have to buy X + fee, because fee gets substracted; an exeption is on binance when paying with BNB
-  //        buyLimit
-  //      )
-  //
-  //    val sellLimit = new OrderLimitChooser(tc.orderBooks.get(sellExchange).map(_(tradePair)), tc.tickers(sellExchange)(tradePair))
-  //      .determineRealisticOrderLimit(TradeSide.Sell, amountBaseAsset, OrderLimitRealityAdjustmentRate)
-  //
-  //    val ourSellBaseAssetOrder =
-  //      OrderRequest(
-  //        UUID.randomUUID(),
-  //        Some(orderBundleId),
-  //        sellExchange,
-  //        tradePair,
-  //        TradeSide.Sell,
-  //        tc.fees(sellExchange),
-  //        amountBaseAsset,
-  //        sellLimit
-  //      )
-  //
-  //    val bill: OrderBill = OrderBill.calc(Seq(ourBuyBaseAssetOrder, ourSellBaseAssetOrder), tc.tickers)
-  //    if (bill.sumUSDTAtCalcTime >= OrderBundleMinGainInUsdt) {
-  //      Left(OrderRequestBundle(
-  //        orderBundleId,
-  //        traderName,
-  //        LocalDateTime.now(),
-  //        List(ourBuyBaseAssetOrder, ourSellBaseAssetOrder),
-  //        bill
-  //      ))
-  //    } else {
-  //      Right(MinGainTooLow())
-  //    }
-  //  }
-
   var noResultReasonStats: Map[NoResultReason, Int] = Map()
 
   def findBestShots(topN: Int): Seq[OrderRequestBundle] = {
@@ -283,7 +194,7 @@ class FooTrader(traderConfig: Config, tradeRoom: ActorRef, tc: TradeContext) ext
     }
   }
 
-  log.info("FooTrader running")
+  log.info("FooTrader started")
 
   override def receive: Receive = {
 
