@@ -297,7 +297,7 @@ case class Exchange(exchangeName: String,
     case RemoveOrphanOrder(ref)    => removeOrphanOrder(ref)
     case HouseKeeping()            => houseKeeping()
     case s: TradeRoom.Stop         => onStop(s)
-    case Status.Failure(cause)     => log.error("received failure", cause)
+    case Status.Failure(cause)     => log.error("received failure", cause); self ! PoisonPill
   }
   // @formatter:off
 }

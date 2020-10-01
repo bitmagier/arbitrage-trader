@@ -3,7 +3,7 @@ package org.purevalue.arbitrage.adapter
 import java.time.Instant
 
 import akka.actor.SupervisorStrategy.Restart
-import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, OneForOneStrategy, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, OneForOneStrategy, PoisonPill, Props, Status}
 import org.purevalue.arbitrage.adapter.ExchangePublicDataManager._
 import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.ExchangePublicDataChannelInit
@@ -181,7 +181,7 @@ case class ExchangePublicDataManager(globalConfig: GlobalConfig,
     // @formatter:off
     case IncomingData(data)    => applyDataset(data)
     case InitTimeoutCheck()    => initTimeoutCheck()
-    case Status.Failure(cause) => log.error("received failure", cause)
+    case Status.Failure(cause) => log.error("received failure", cause); self ! PoisonPill
     // @formatter:on
   }
 }

@@ -70,6 +70,10 @@ object Asset {
 
   def isKnown(officialSymbol: String): Boolean = allAssets.contains(officialSymbol)
 
+  def register(a: Asset): Unit = register(a.officialSymbol, a.name, Some(a.isFiat), a.defaultFractionDigits, a.sourceWeight)
+
+  def register(officialSymbol: String, name: String, isFiat: Boolean): Unit = register(officialSymbol, Some(name), Some(isFiat))
+
   def register(officialSymbol: String, name: Option[String], _isFiat: Option[Boolean], defaultFractionDigits: Int = 5, sourceWeight: Int = 0): Unit = {
     val isFiat: Boolean = KnownFiatAssets.contains(officialSymbol) || _isFiat.contains(true)
     synchronized {
@@ -95,7 +99,7 @@ object Asset {
     result.get
   }
 
-  FixAssets.foreach(e => register(e.officialSymbol, e.name, Some(e.isFiat), e.defaultFractionDigits, e.sourceWeight))
+  FixAssets.foreach(register)
 }
 
 

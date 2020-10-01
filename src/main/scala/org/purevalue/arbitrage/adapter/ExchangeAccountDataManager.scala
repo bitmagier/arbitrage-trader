@@ -4,7 +4,7 @@ import java.util.UUID
 
 import akka.actor.Status.Failure
 import akka.actor.SupervisorStrategy.Restart
-import akka.actor.{Actor, ActorRef, OneForOneStrategy, Props}
+import akka.actor.{Actor, ActorRef, OneForOneStrategy, PoisonPill, Props}
 import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager._
 import org.purevalue.arbitrage.traderoom.TradeRoom.OrderRef
 import org.purevalue.arbitrage.traderoom._
@@ -198,7 +198,7 @@ class ExchangeAccountDataManager(globalConfig: GlobalConfig,
     case c: CancelOrder         => cancelOrderIfStillExist(c)
     case o: NewLimitOrder       => accountDataChannel.forward(o)
     case SimulatedData(dataset) => applySimulatedData(dataset)
-    case Failure(e)             => log.error("received failure", e)
+    case Failure(e)             => log.error("received failure", e); self ! PoisonPill
   }
   // @formatter:on
 }

@@ -33,6 +33,7 @@ private[coinbase] object CoinbaseHttpUtil {
     val contentToSign = s"""$timestamp${method.value}$requestPath${requestBody.getOrElse("")}"""
     val secretKey = Base64.getDecoder.decode(apiKeys.apiSecretKey)
     val signature = new String(Base64.getEncoder.encode(hmacSha256Signature(contentToSign, secretKey)), StandardCharsets.ISO_8859_1)
+    log.debug(s"signature for: '$contentToSign' => '$signature'")
     Signature(apiKeys.apiKey, signature, timestamp, apiKeys.apiKeyPassphrase.get)
   }
 

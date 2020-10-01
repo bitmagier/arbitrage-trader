@@ -12,6 +12,8 @@ class OrderSpec extends TestSuite
   with AnyWordSpecLike
   with Matchers {
 
+  Asset.register("ALGO", "Algorand", isFiat = false)
+
   // from cointracking.freshdesk.com/en/support/solutions/articles/29000021505-bnb-balance-wrong-due-to-fees-not-being-deducted-
   // In case of a sell, the fee needs to be entered as additional amount on the sell side.
   // In case of a buy, the fee needs to be subtracted from the buy side.

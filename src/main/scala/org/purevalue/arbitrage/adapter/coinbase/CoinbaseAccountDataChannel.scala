@@ -33,10 +33,10 @@ import scala.concurrent.{Await, ExecutionContextExecutor, Future, Promise}
 private[coinbase] case class SubscribeRequestWithAuthJson(`type`: String = "subscribe",
                                                           product_ids: Seq[String],
                                                           channels: Seq[String],
-                                                          `CB-ACCESS-KEY`: String,
-                                                          `CB-ACCESS-SIGN`: String,
-                                                          `CB-ACCESS-TIMESTAMP`: String,
-                                                          `CB-ACCESS-PASSPHRASE`: String)
+                                                          key: String,
+                                                          signature: String,
+                                                          timestamp: String,
+                                                          passphrase: String)
 
 private[coinbase] trait IncomingCoinbaseAccountJson
 
@@ -246,24 +246,24 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
   } // @formatter:on
 
   // @formatter:off
-  def decodeJsObject(messageType: String, j: JsObject): Option[IncomingCoinbaseAccountJson] = {
+  def decodeJsObject(messageType: String, j: JsObject): Seq[IncomingCoinbaseAccountJson] = {
     messageType match {
       case "subscriptions" =>
         if (log.isTraceEnabled) log.trace(j.compactPrint)
         self ! OnStreamsRunning()
-        None
-      case "received"      => Some(j.convertTo[CoinbaseOrderReceivedJson])
-      case "change"        => Some(j.convertTo[CoinbaseOrderChangedJson]) // An order has changed. This is the result of self-trade prevention adjusting the order size or available funds
-      case "done"          => Some(j.convertTo[CoinbaseOrderDoneJson])
-      case "open"          => None // ignore: This message will only be sent for orders which are not fully filled immediately.
-      case "match"         => None // ignore: A trade occurred between two orders.
-      case "activate"      => None // ignore: An activate message is sent when a stop order is placed.
+        Nil
+      case "received"      => Seq(j.convertTo[CoinbaseOrderReceivedJson])
+      case "change"        => Seq(j.convertTo[CoinbaseOrderChangedJson]) // An order has changed. This is the result of self-trade prevention adjusting the order size or available funds
+      case "done"          => Seq(j.convertTo[CoinbaseOrderDoneJson])
+      case "open"          => Nil // ignore: This message will only be sent for orders which are not fully filled immediately.
+      case "match"         => Nil // ignore: A trade occurred between two orders.
+      case "activate"      => Nil // ignore: An activate message is sent when a stop order is placed.
       case "error"         => throw new RuntimeException(j.prettyPrint)
-      case other           => throw new NotImplementedException(other)
+      case other           => log.warn(s"received unhandled message type: $j"); Nil
     }
   } // // @formatter:on
 
-  def decodeMessage(message: Message): Future[Option[IncomingCoinbaseAccountJson]] = message match {
+  def decodeMessage(message: Message): Future[Seq[IncomingCoinbaseAccountJson]] = message match {
     case msg: TextMessage =>
       msg.toStrict(globalConfig.httpTimeout)
         .map(_.getStrictText)
@@ -273,36 +273,36 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
             decodeJsObject(j.fields("type").convertTo[String], j)
           case j: JsObject =>
             log.warn(s"Unknown json object received: $j")
-            None
+            Nil
         })
     case _ =>
       log.warn(s"Received non TextMessage")
-      Future.successful(None)
+      Future.successful(Nil)
   }
 
-  var ws: (Future[WebSocketUpgradeResponse], Promise[Option[Message]]) = _
-  var connected: Future[Done.type] = _
+  // coinbase allows a maximum diff of 30 seconds between their server time and the timestamp value in the request
+  def queryServerTime(): Future[Double] = {
+    HttpUtil.httpGetPureJson(s"$CoinbaseBaseRestEndpoint/time") map {
+      case (statusCode, j) if statusCode.isSuccess() => j.asJsObject.fields("epoch").convertTo[Double]
+      case (statusCode, j) => throw new RuntimeException(s"coinbase: GET /time failed with: $statusCode, $j")
+    }
+  }
 
   def subscribeMessage: SubscribeRequestWithAuthJson = {
     Await.result(
-      HttpUtil.httpGetPureJson(s"$CoinbaseBaseRestEndpoint/time") map {
-        case (statusCode, j) if statusCode.isSuccess() =>
-          val serverTime = j.asJsObject.fields("epoch").convertTo[Double]
-          val s: Signature = CoinbaseHttpUtil.createSignature(HttpMethods.GET, s"$CoinbaseBaseRestEndpoint/users/self/verify", None, exchangeConfig.secrets, serverTime)
-          SubscribeRequestWithAuthJson("subscribe", coinbaseTradePairsByProductId.keys.toSeq, Seq(UserChannelName), s.cbAccessKey, s.cbAccessSign, s.cbAccessTimestamp, s.cbAccessPassphrase)
-        case (statusCode, j) => throw new RuntimeException(s"coinbase: GET /time failed with: $statusCode, $j")
+      queryServerTime().map { serverTime =>
+        val s: Signature = CoinbaseHttpUtil.createSignature(HttpMethods.GET, s"$CoinbaseBaseRestEndpoint/users/self/verify", None, exchangeConfig.secrets, serverTime)
+        SubscribeRequestWithAuthJson("subscribe", coinbaseTradePairsByProductId.keys.toSeq, Seq(UserChannelName), s.cbAccessKey, s.cbAccessSign, s.cbAccessTimestamp, s.cbAccessPassphrase)
       },
       globalConfig.httpTimeout.plus(1.second))
   }
 
-  def wsFlow: Flow[Message, Message, Promise[Option[Message]]] = {
+  def wsFlow(): Flow[Message, Message, Promise[Option[Message]]] = {
     Flow.fromSinkAndSourceCoupledMat(
       Sink.foreach[Message](message =>
         decodeMessage(message)
-          .filter(_.isDefined)
-          .map(_.get)
-          .map(exchangeDataMapping)
-          .map(e => IncomingData(Seq(e)))
+          .map(_.map(exchangeDataMapping))
+          .map(IncomingData)
           .pipeTo(exchangeAccountDataManager)
       ),
       Source(
@@ -310,6 +310,8 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
       ).concatMat(Source.maybe[Message])(Keep.right))(Keep.right)
   }
 
+  var ws: (Future[WebSocketUpgradeResponse], Promise[Option[Message]]) = _
+  var connected: Future[Done.type] = _
 
   def createConnected: Future[Done.type] =
     ws._1.flatMap { upgrade =>
@@ -323,7 +325,7 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
 
   def connect(): Unit = {
     log.trace(s"starting WebSocket stream using $CoinbaseWebSocketEndpoint")
-    ws = Http().singleWebSocketRequest(WebSocketRequest(CoinbaseWebSocketEndpoint), wsFlow)
+    ws = Http().singleWebSocketRequest(WebSocketRequest(CoinbaseWebSocketEndpoint), wsFlow())
     ws._2.future.onComplete { e =>
       log.info(s"connection closed: ${e.get}")
       self ! Kill
@@ -336,13 +338,6 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
     exchangeAccountDataManager ! Initialized()
   }
 
-  // coinbase allows a maximum diff of 30 seconds between their server time and the timestamp value in the request
-  def queryServerTime(): Future[Double] = {
-    HttpUtil.httpGetPureJson(s"$CoinbaseBaseRestEndpoint/time") map {
-      case (statusCode, j) if statusCode.isSuccess() => j.asJsObject.fields("epoch").convertTo[Double]
-      case (statusCode, j) => throw new RuntimeException(s"coinbase: GET /time failed with: $statusCode, $j")
-    }
-  }
 
   def newLimitOrder(o: OrderRequest): Future[NewOrderAck] = {
 

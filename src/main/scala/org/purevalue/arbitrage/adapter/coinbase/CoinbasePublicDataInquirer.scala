@@ -14,7 +14,7 @@ import spray.json.{DefaultJsonProtocol, RootJsonFormat}
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor}
 
-private[coinbase] case class CoinbaseTradePair(id: String, // product_id
+private[coinbase] case class CoinbaseTradePair(id: String, // = product_id
                                                baseAsset: Asset,
                                                quoteAsset: Asset,
                                                baseIncrement: Double,
@@ -56,7 +56,7 @@ private[coinbase] object CoinbaseJsonProtocol extends DefaultJsonProtocol {
 }
 
 object CoinbasePublicDataInquirer {
-  val CoinbaseBaseRestEndpoint: String = "https://api-public.sandbox.pro.coinbase.com" // "https://api.pro.coinbase.com"
+  val CoinbaseBaseRestEndpoint: String = "https://api.pro.coinbase.com" // "https://api-public.sandbox.pro.coinbase.com" //
 
   case class GetCoinbaseTradePairs()
   case class DeliverAccounts()

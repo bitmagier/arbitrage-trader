@@ -28,15 +28,10 @@ private[coinbase] case class SubscribeRequestJson(`type`: String = "subscribe",
 private[coinbase] trait IncomingPublicCoinbaseJson
 
 private[coinbase] case class TickerJson(`type`: String,
-//                                        trade_id: Long,
-                                        sequence: Long,
-                                        time: String,
                                         product_id: String,
                                         price: String,
-                                        side: String,
-                                        last_size: String,
-                                        best_bid: String,
-                                        best_ask: String
+                                        best_ask: String,
+                                        best_bid: String
                                        ) extends IncomingPublicCoinbaseJson {
   def toTicker(exchange: String, resolveProductId: String => TradePair): Ticker = Ticker(
     exchange,
@@ -84,14 +79,14 @@ private[coinbase] case class OrderBookUpdateJson(`type`: String,
 
 private[coinbase] object CoinbasePublicJsonProtocol extends DefaultJsonProtocol {
   implicit val subscribeRequestJson: RootJsonFormat[SubscribeRequestJson] = jsonFormat3(SubscribeRequestJson)
-  implicit val tickerJson: RootJsonFormat[TickerJson] = jsonFormat9(TickerJson)
+  implicit val tickerJson: RootJsonFormat[TickerJson] = jsonFormat5(TickerJson)
   implicit val orderBookSnapshotJson: RootJsonFormat[OrderBookSnapshotJson] = jsonFormat4(OrderBookSnapshotJson)
   implicit val orderBookUpdateJson: RootJsonFormat[OrderBookUpdateJson] = jsonFormat4(OrderBookUpdateJson)
 }
 
 object CoinbasePublicDataChannel {
   // The websocket feed is publicly available, but connections to it are rate-limited to 1 per 4 seconds per IP.
-  val CoinbaseWebSocketEndpoint: String = "wss://ws-feed-public.sandbox.pro.coinbase.com" //"wss://ws-feed.pro.coinbase.com"
+  val CoinbaseWebSocketEndpoint: String = "wss://ws-feed.pro.coinbase.com" // "wss://ws-feed-public.sandbox.pro.coinbase.com"
 
   private case class Connect()
 
@@ -126,31 +121,32 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
 
 
   // @formatter:off
-  def decodeJsObject(messageType: String, j: JsObject): IncomingPublicCoinbaseJson = {
+  def decodeJsObject(messageType: String, j: JsObject): Seq[IncomingPublicCoinbaseJson] = {
     if (log.isTraceEnabled) log.trace(s"received: $j")
     messageType match {
-      case TickerChannelName => j.convertTo[TickerJson]
-      case "snapshot"        => j.convertTo[OrderBookSnapshotJson]
-      case "l2update"        => j.convertTo[OrderBookUpdateJson]
+      case "subscriptions"   => log.debug(s"$j"); Nil
+      case TickerChannelName => Seq(j.convertTo[TickerJson])
+      case "snapshot"        => Seq(j.convertTo[OrderBookSnapshotJson])
+      case "l2update"        => Seq(j.convertTo[OrderBookUpdateJson])
       case "error"           => throw new RuntimeException(j.prettyPrint)
-      case other             => throw new NotImplementedException(other)
+      case other             => log.warn("received unhandled messageType: $j"); Nil
     }
   } // @formatter:on
 
-  def decodeMessage(message: Message): Future[Option[IncomingPublicCoinbaseJson]] = message match {
+  def decodeMessage(message: Message): Future[Seq[IncomingPublicCoinbaseJson]] = message match {
     case msg: TextMessage =>
       msg.toStrict(globalConfig.httpTimeout)
         .map(_.getStrictText)
         .map(s => JsonParser(s).asJsObject() match {
           case j: JsObject if j.fields.contains("type") =>
-            Some(decodeJsObject(j.fields("type").convertTo[String], j))
+            decodeJsObject(j.fields("type").convertTo[String], j)
           case j: JsObject =>
             log.warn(s"Unknown json object received: $j")
-            None
+            Nil
         })
     case _ =>
       log.warn(s"Received non TextMessage")
-      Future.successful(None)
+      Future.successful(Nil)
   }
 
   def subscribeMessage: SubscribeRequestJson = SubscribeRequestJson(
@@ -163,10 +159,8 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
     Flow.fromSinkAndSourceCoupledMat(
       Sink.foreach[Message](message =>
         decodeMessage(message)
-          .filter(_.isDefined)
-          .map(_.get)
-          .map(exchangeDataMapping)
-          .map(e => IncomingData(Seq(e)))
+          .map(_.map(exchangeDataMapping))
+          .map(IncomingData)
           .pipeTo(publicDataManager)
       ),
       Source(
