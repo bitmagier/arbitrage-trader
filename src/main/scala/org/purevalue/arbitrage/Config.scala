@@ -30,18 +30,28 @@ case class ExchangeConfig(name: String,
 
 object ExchangeConfig {
   def apply(name: String, c: com.typesafe.config.Config): ExchangeConfig = {
-    val doNotTouchTheseAssets = c.getStringList("do-not-touch-these-assets").asScala.map(e => Asset(e))
+    val rawDoNotTouchAssets = c.getStringList("do-not-touch-these-assets").asScala
+    rawDoNotTouchAssets.foreach(Asset.register(_, None, None))
+    val doNotTouchTheseAssets = rawDoNotTouchAssets.map(e => Asset(e))
     if (doNotTouchTheseAssets.exists(_.isFiat)) throw new IllegalArgumentException(s"$name: Don't worry bro, I'll never touch Fiat Money")
-    val reserveAssets = c.getStringList("reserve-assets").asScala.map(e => Asset(e)).toList
+    val rawReserveAssets = c.getStringList("reserve-assets").asScala
+    rawReserveAssets.foreach(Asset.register(_, None, None))
+    val reserveAssets = rawReserveAssets.map(e => Asset(e)).toList
     if (reserveAssets.exists(doNotTouchTheseAssets.contains)) throw new IllegalArgumentException(s"$name: reserve-assets & do-not-touch-these-assets overlap!")
     if (reserveAssets.exists(_.isFiat)) throw new IllegalArgumentException(s"$name: Cannot us a Fiat currency as reserve-asset")
     if (reserveAssets.size < 2) throw new IllegalArgumentException(s"$name: Need at least two reserve assets (more are better)")
 
+    val assetBlocklist = c.getStringList("assets-blocklist").asScala
+    assetBlocklist.foreach(Asset.register(_, None, None))
+
+    val usdEquivalentCoin = c.getString("usd-equivalent-coin")
+    Asset.register(usdEquivalentCoin, None, None)
+
     ExchangeConfig(
       name,
       reserveAssets,
-      c.getStringList("assets-blocklist").asScala.map(e => Asset(e)).toSet,
-      Asset(c.getString("usd-equivalent-coin")),
+      assetBlocklist.map(e => Asset(e)).toSet,
+      Asset(usdEquivalentCoin),
       c.getDouble("fee.maker"),
       c.getDouble("fee.taker"),
       doNotTouchTheseAssets,
@@ -86,21 +96,25 @@ case class TradeRoomConfig(tradeSimulation: Boolean,
   if (!exchanges.contains(referenceTickerExchange)) throw new IllegalArgumentException("reference-ticker-exchange not in list of active exchanges")
 }
 object TradeRoomConfig {
-  def apply(c: com.typesafe.config.Config): TradeRoomConfig = TradeRoomConfig(
-    c.getBoolean("trade-simulation"),
-    c.getString("reference-ticker-exchange"),
-    c.getDuration("max-order-lifetime"),
-    c.getDuration("restart-exchange-when-data-stream-is-older-than"),
-    c.getDouble("pioneer-order-value-usd"),
-    c.getDuration("data-manager-init-timeout"),
-    TradeRoomStatsConfig(
-      c.getDuration("stats.report-interval"),
-      Asset(c.getString("stats.aggregated-liquidity-report-asset"))
-    ),
-    OrderBundleSafetyGuardConfig(c.getConfig("order-bundle-safety-guard")),
-    LiquidityManagerConfig(c.getConfig("liquidity-manager")),
-    c.getStringList("active-exchanges").asScala.map(e => e -> ExchangeConfig(e, c.getConfig(s"exchange.$e"))).toMap
-  )
+  def apply(c: com.typesafe.config.Config): TradeRoomConfig = {
+    val aggregateLiquidityReportAsset: String = c.getString("stats.aggregated-liquidity-report-asset")
+    Asset.register(aggregateLiquidityReportAsset, None, None)
+    TradeRoomConfig(
+      c.getBoolean("trade-simulation"),
+      c.getString("reference-ticker-exchange"),
+      c.getDuration("max-order-lifetime"),
+      c.getDuration("restart-exchange-when-data-stream-is-older-than"),
+      c.getDouble("pioneer-order-value-usd"),
+      c.getDuration("data-manager-init-timeout"),
+      TradeRoomStatsConfig(
+        c.getDuration("stats.report-interval"),
+        Asset(aggregateLiquidityReportAsset)
+      ),
+      OrderBundleSafetyGuardConfig(c.getConfig("order-bundle-safety-guard")),
+      LiquidityManagerConfig(c.getConfig("liquidity-manager")),
+      c.getStringList("active-exchanges").asScala.map(e => e -> ExchangeConfig(e, c.getConfig(s"exchange.$e"))).toMap
+    )
+  }
 }
 
 case class TradeRoomStatsConfig(reportInterval: Duration,

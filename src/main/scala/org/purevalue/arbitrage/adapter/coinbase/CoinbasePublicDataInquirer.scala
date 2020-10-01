@@ -1,7 +1,7 @@
 package org.purevalue.arbitrage.adapter.coinbase
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
-import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataInquirer.GetCoinbaseTradePairs
+import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataInquirer.{CoinbaseBaseRestEndpoint, GetCoinbaseTradePairs}
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.{GetTradePairs, TradePairs}
 import org.purevalue.arbitrage.traderoom.{Asset, TradePair}
 import org.purevalue.arbitrage.util.HttpUtil
@@ -56,6 +56,8 @@ private[coinbase] object CoinbaseJsonProtocol extends DefaultJsonProtocol {
 }
 
 object CoinbasePublicDataInquirer {
+  val CoinbaseBaseRestEndpoint: String = "https://api-public.sandbox.pro.coinbase.com" // "https://api.pro.coinbase.com"
+
   case class GetCoinbaseTradePairs()
   case class DeliverAccounts()
 
@@ -69,8 +71,6 @@ private[coinbase] class CoinbasePublicDataInquirer(globalConfig: GlobalConfig,
   private val log = LoggerFactory.getLogger(classOf[CoinbasePublicDataInquirer])
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
-
-  val CoinbaseBaseRestEndpoint: String = "https://api.pro.coinbase.com"
 
   var tradePairs: Set[TradePair] = _
   var coinbaseTradePairs: Set[CoinbaseTradePair] = _

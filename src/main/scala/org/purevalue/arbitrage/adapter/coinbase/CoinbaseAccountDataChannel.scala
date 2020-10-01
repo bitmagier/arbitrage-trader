@@ -13,13 +13,14 @@ import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
 import jdk.jshell.spi.ExecutionControl.NotImplementedException
 import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager._
-import org.purevalue.arbitrage.adapter.{Balance, CompleteWalletUpdate, ExchangeAccountStreamData}
 import org.purevalue.arbitrage.adapter.coinbase.CoinbaseAccountDataChannel.{Connect, OnStreamsRunning}
 import org.purevalue.arbitrage.adapter.coinbase.CoinbaseHttpUtil.{Signature, httpRequestCoinbaseAccount, httpRequestJsonCoinbaseAccount}
-import org.purevalue.arbitrage.adapter.coinbase.CoinbaseJsonProtocol.jsonFormat7
-import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataInquirer.{DeliverAccounts, GetCoinbaseTradePairs}
+import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataChannel.CoinbaseWebSocketEndpoint
+import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataInquirer.{CoinbaseBaseRestEndpoint, DeliverAccounts, GetCoinbaseTradePairs}
+import org.purevalue.arbitrage.adapter.{Balance, CompleteWalletUpdate, ExchangeAccountStreamData}
 import org.purevalue.arbitrage.traderoom.TradeRoom.OrderRef
 import org.purevalue.arbitrage.traderoom._
+import org.purevalue.arbitrage.util.HttpUtil
 import org.purevalue.arbitrage.util.Util.{alignToStepSizeCeil, alignToStepSizeNearest, formatDecimalWithFixPrecision}
 import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig, Main}
 import org.slf4j.LoggerFactory
@@ -30,8 +31,9 @@ import scala.concurrent.{Await, ExecutionContextExecutor, Future, Promise}
 
 
 private[coinbase] case class SubscribeRequestWithAuthJson(`type`: String = "subscribe",
-                                                          channels: Seq[ChannelJson],
-                                                          `CB-ACCESS_KEY`: String,
+                                                          product_ids: Seq[String],
+                                                          channels: Seq[String],
+                                                          `CB-ACCESS-KEY`: String,
                                                           `CB-ACCESS-SIGN`: String,
                                                           `CB-ACCESS-TIMESTAMP`: String,
                                                           `CB-ACCESS-PASSPHRASE`: String)
@@ -190,8 +192,7 @@ private[coinbase] case class CoinbaseAccountJson(id: String,
 }
 
 private[coinbase] object CoinbaseAccountJsonProtocol extends DefaultJsonProtocol {
-  import CoinbasePublicJsonProtocol.channelJson
-  implicit val subscribeRequestWithAuthJson: RootJsonFormat[SubscribeRequestWithAuthJson] = jsonFormat6(SubscribeRequestWithAuthJson)
+  implicit val subscribeRequestWithAuthJson: RootJsonFormat[SubscribeRequestWithAuthJson] = jsonFormat7(SubscribeRequestWithAuthJson)
   implicit val coinbaseOrderReceivedJson: RootJsonFormat[CoinbaseOrderReceivedJson] = jsonFormat9(CoinbaseOrderReceivedJson)
   implicit val coinbaseOrderChangedJson: RootJsonFormat[CoinbaseOrderChangedJson] = jsonFormat9(CoinbaseOrderChangedJson)
   implicit val coinbaseOrderDoneJson: RootJsonFormat[CoinbaseOrderDoneJson] = jsonFormat9(CoinbaseOrderDoneJson)
@@ -220,14 +221,12 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
 
   val DeliverAccountsSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(1.second, 600.millis, self, DeliverAccounts())
 
-
   val UserChannelName: String = "user"
 
   var coinbaseTradePairsByProductId: Map[String, CoinbaseTradePair] = _
   var coinbaseTradePairsByTradePair: Map[TradePair, CoinbaseTradePair] = _
 
   import CoinbaseAccountJsonProtocol._
-
 
   def pullCoinbaseTradePairs(): Unit = {
     implicit val timeout: Timeout = globalConfig.internalCommunicationTimeoutDuringInit
@@ -259,6 +258,7 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
       case "open"          => None // ignore: This message will only be sent for orders which are not fully filled immediately.
       case "match"         => None // ignore: A trade occurred between two orders.
       case "activate"      => None // ignore: An activate message is sent when a stop order is placed.
+      case "error"         => throw new RuntimeException(j.prettyPrint)
       case other           => throw new NotImplementedException(other)
     }
   } // // @formatter:on
@@ -280,20 +280,22 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
       Future.successful(None)
   }
 
-
-  val CoinbaseBaseRestEndpoint: String = "https://api.pro.coinbase.com"
-  // The websocket feed is publicly available, but connections to it are rate-limited to 1 per 4 seconds per IP.
-  val CoinbaseWebSocketEndpoint: String = "wss://ws-feed.pro.coinbase.com"
-
   var ws: (Future[WebSocketUpgradeResponse], Promise[Option[Message]]) = _
   var connected: Future[Done.type] = _
 
   def subscribeMessage: SubscribeRequestWithAuthJson = {
-    val s: Signature = CoinbaseHttpUtil.createSignature(HttpMethods.GET, s"$CoinbaseBaseRestEndpoint/users/self/verify", None, exchangeConfig.secrets)
-    SubscribeRequestWithAuthJson("subscribe", Seq(ChannelJson(UserChannelName)), s.cbAccessKey, s.cbAccessSign, s.cbAccessTimestamp, s.cbAccessPassphrase)
+    Await.result(
+      HttpUtil.httpGetPureJson(s"$CoinbaseBaseRestEndpoint/time") map {
+        case (statusCode, j) if statusCode.isSuccess() =>
+          val serverTime = j.asJsObject.fields("epoch").convertTo[Double]
+          val s: Signature = CoinbaseHttpUtil.createSignature(HttpMethods.GET, s"$CoinbaseBaseRestEndpoint/users/self/verify", None, exchangeConfig.secrets, serverTime)
+          SubscribeRequestWithAuthJson("subscribe", coinbaseTradePairsByProductId.keys.toSeq, Seq(UserChannelName), s.cbAccessKey, s.cbAccessSign, s.cbAccessTimestamp, s.cbAccessPassphrase)
+        case (statusCode, j) => throw new RuntimeException(s"coinbase: GET /time failed with: $statusCode, $j")
+      },
+      globalConfig.httpTimeout.plus(1.second))
   }
 
-  val wsFlow: Flow[Message, Message, Promise[Option[Message]]] = {
+  def wsFlow: Flow[Message, Message, Promise[Option[Message]]] = {
     Flow.fromSinkAndSourceCoupledMat(
       Sink.foreach[Message](message =>
         decodeMessage(message)
@@ -334,55 +336,93 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
     exchangeAccountDataManager ! Initialized()
   }
 
-
-  def newLimitOrder(o: OrderRequest): Future[NewOrderAck] = {
-    val coinbaseTradepair = coinbaseTradePairsByTradePair(o.tradePair)
-
-    val size: String = formatDecimalWithFixPrecision(
-      Math.max(coinbaseTradepair.baseMinSize,
-        alignToStepSizeCeil(o.amountBaseAsset, coinbaseTradepair.baseIncrement)), 8) // The size must be greater than the base_min_size for the product and no larger than the base_max_size
-
-    val price: String = formatDecimalWithFixPrecision(
-      alignToStepSizeNearest(o.limit, coinbaseTradepair.quoteIncrement), 8) // The price must be specified in quote_increment product units.
-
-    val requestBody: String = NewOrderRequestJson(
-      o.id.toString,
-      coinbaseTradePairsByTradePair(o.tradePair).id,
-      CoinbaseOrder.toString(OrderType.LIMIT),
-      CoinbaseOrder.toString(o.tradeSide),
-      size,
-      price).toJson.compactPrint
-
-    httpRequestJsonCoinbaseAccount[NewOrderResponseJson, String](HttpMethods.POST, s"$CoinbaseBaseRestEndpoint/orders", Some(requestBody), exchangeConfig.secrets)
-      .map {
-        case Left(response) => response.toNewOrderAck(exchangeConfig.name, id => coinbaseTradePairsByProductId(id).toTradePair, o.id)
-        case Right(error) => throw new RuntimeException(s"newLimitOrder failed: $error")
-      } recover {
-      case e: Exception =>
-        log.error(s"NewLimitOrder failed. Request body:\n$requestBody\ncoinbaseTradePair:$coinbaseTradepair\n", e)
-        throw e
+  // coinbase allows a maximum diff of 30 seconds between their server time and the timestamp value in the request
+  def queryServerTime(): Future[Double] = {
+    HttpUtil.httpGetPureJson(s"$CoinbaseBaseRestEndpoint/time") map {
+      case (statusCode, j) if statusCode.isSuccess() => j.asJsObject.fields("epoch").convertTo[Double]
+      case (statusCode, j) => throw new RuntimeException(s"coinbase: GET /time failed with: $statusCode, $j")
     }
   }
 
-  def cancelOrder(ref:OrderRef): Future[CancelOrderResult] = {
-    val productId:String = coinbaseTradePairsByTradePair(ref.tradePair).id
-    httpRequestCoinbaseAccount(
-      HttpMethods.DELETE,
-      s"$CoinbaseBaseRestEndpoint/orders/${ref.externalOrderId}?product_id=$productId",
-      None,
-      exchangeConfig.secrets
-    ) map {
-      case (statusCode, response) => CancelOrderResult(exchangeConfig.name, ref.tradePair, productId, success = statusCode.isSuccess(), Some(s"HTTP-$statusCode $response"))
+  def newLimitOrder(o: OrderRequest): Future[NewOrderAck] = {
+
+    def newLimitOrder(o: OrderRequest, serverTime: Double): Future[NewOrderAck] = {
+      val coinbaseTradepair = coinbaseTradePairsByTradePair(o.tradePair)
+
+      val size: String = formatDecimalWithFixPrecision(
+        Math.max(coinbaseTradepair.baseMinSize,
+          alignToStepSizeCeil(o.amountBaseAsset, coinbaseTradepair.baseIncrement)), 8) // The size must be greater than the base_min_size for the product and no larger than the base_max_size
+
+      val price: String = formatDecimalWithFixPrecision(
+        alignToStepSizeNearest(o.limit, coinbaseTradepair.quoteIncrement), 8) // The price must be specified in quote_increment product units.
+
+      val requestBody: String = NewOrderRequestJson(
+        o.id.toString,
+        coinbaseTradePairsByTradePair(o.tradePair).id,
+        CoinbaseOrder.toString(OrderType.LIMIT),
+        CoinbaseOrder.toString(o.tradeSide),
+        size,
+        price).toJson.compactPrint
+
+      httpRequestJsonCoinbaseAccount[NewOrderResponseJson, String](HttpMethods.POST, s"$CoinbaseBaseRestEndpoint/orders", Some(requestBody), exchangeConfig.secrets, serverTime)
+        .map {
+          case Left(response) => response.toNewOrderAck(exchangeConfig.name, id => coinbaseTradePairsByProductId(id).toTradePair, o.id)
+          case Right(error) => throw new RuntimeException(s"newLimitOrder failed: $error")
+        } recover {
+        case e: Exception =>
+          log.error(s"NewLimitOrder failed. Request body:\n$requestBody\ncoinbaseTradePair:$coinbaseTradepair\n", e)
+          throw e
+      }
     }
+
+    for {
+      serverTime <- queryServerTime()
+      newOrderAck <- newLimitOrder(o, serverTime)
+    } yield newOrderAck
+  }
+
+  def cancelOrder(ref: OrderRef): Future[CancelOrderResult] = {
+
+    def cancelOrder(ref: OrderRef, serverTime: Double): Future[CancelOrderResult] = {
+      val productId: String = coinbaseTradePairsByTradePair(ref.tradePair).id
+      val uri = s"$CoinbaseBaseRestEndpoint/orders/${ref.externalOrderId}?product_id=$productId"
+      httpRequestCoinbaseAccount(
+        HttpMethods.DELETE,
+        uri,
+        None,
+        exchangeConfig.secrets,
+        serverTime) map {
+        case (statusCode, j) if statusCode.isSuccess() => CancelOrderResult(exchangeConfig.name, ref.tradePair, productId, success = statusCode.isSuccess(), Some(s"HTTP-$statusCode $j"))
+        case (statusCode, j) => throw new RuntimeException(s"DELETE $uri failed with: $statusCode, $j")
+      }
+    }
+
+    for {
+      serverTime <- queryServerTime()
+      cancelOrderResult <- cancelOrder(ref: OrderRef, serverTime)
+    } yield cancelOrderResult
   }
 
   def deliverAccounts(): Unit = {
-    httpRequestJsonCoinbaseAccount[Seq[CoinbaseAccountJson], String](HttpMethods.GET, s"$CoinbaseBaseRestEndpoint/accounts", None, exchangeConfig.secrets)
-      .map {
-        case Left(accounts) => CompleteWalletUpdate(accounts.map(_.toBalance).map(e => e.asset -> e).toMap)
-        case Right(error) => throw new RuntimeException(s"coinbase: queryAccounts() failed: $error")
-      }
-      .map(e => IncomingData(Seq(e)))
+
+    def queryAccounts(serverTime: Double): Future[IncomingData] = {
+      httpRequestJsonCoinbaseAccount[Seq[CoinbaseAccountJson], String](HttpMethods.GET, s"$CoinbaseBaseRestEndpoint/accounts", None, exchangeConfig.secrets, serverTime)
+        .map {
+          case Left(accounts) => CompleteWalletUpdate(
+            accounts
+              .map(_.toBalance)
+              .map(e => e.asset -> e)
+              .toMap
+          )
+          case Right(error) => throw new RuntimeException(s"coinbase: queryAccounts() failed: $error")
+        }
+        .map(e => IncomingData(Seq(e)))
+    }
+
+    (for {
+      serverTime <- queryServerTime()
+      accounts <- queryAccounts(serverTime)
+    } yield accounts)
       .pipeTo(exchangeAccountDataManager)
   }
 

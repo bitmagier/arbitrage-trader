@@ -11,7 +11,7 @@ import akka.util.Timeout
 import jdk.jshell.spi.ExecutionControl.NotImplementedException
 import org.purevalue.arbitrage.adapter.ExchangePublicDataManager.IncomingData
 import org.purevalue.arbitrage.adapter._
-import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataChannel.Connect
+import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataChannel.{CoinbaseWebSocketEndpoint, Connect}
 import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataInquirer.GetCoinbaseTradePairs
 import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig, Main}
@@ -21,22 +21,22 @@ import spray.json.{DefaultJsonProtocol, JsObject, JsonParser, RootJsonFormat, en
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor, Future, Promise}
 
-private[coinbase] case class ChannelJson(name: String)
 private[coinbase] case class SubscribeRequestJson(`type`: String = "subscribe",
-                                                  channels: Seq[ChannelJson])
+                                                  product_ids: Seq[String],
+                                                  channels: Seq[String])
 
 private[coinbase] trait IncomingPublicCoinbaseJson
 
 private[coinbase] case class TickerJson(`type`: String,
-                                        trade_id: Long,
+//                                        trade_id: Long,
                                         sequence: Long,
                                         time: String,
                                         product_id: String,
-                                        price: Double,
+                                        price: String,
                                         side: String,
-                                        last_size: Double,
-                                        best_bid: Double,
-                                        best_ask: Double
+                                        last_size: String,
+                                        best_bid: String,
+                                        best_ask: String
                                        ) extends IncomingPublicCoinbaseJson {
   def toTicker(exchange: String, resolveProductId: String => TradePair): Ticker = Ticker(
     exchange,
@@ -45,7 +45,7 @@ private[coinbase] case class TickerJson(`type`: String,
     None,
     best_ask.toDouble,
     None,
-    Some(price))
+    Some(price.toDouble))
 }
 
 private[coinbase] case class OrderBookSnapshotJson(`type`: String,
@@ -83,14 +83,16 @@ private[coinbase] case class OrderBookUpdateJson(`type`: String,
 }
 
 private[coinbase] object CoinbasePublicJsonProtocol extends DefaultJsonProtocol {
-  implicit val channelJson: RootJsonFormat[ChannelJson] = jsonFormat1(ChannelJson)
-  implicit val subscribeRequestJson: RootJsonFormat[SubscribeRequestJson] = jsonFormat2(SubscribeRequestJson)
-  implicit val tickerJson: RootJsonFormat[TickerJson] = jsonFormat10(TickerJson)
+  implicit val subscribeRequestJson: RootJsonFormat[SubscribeRequestJson] = jsonFormat3(SubscribeRequestJson)
+  implicit val tickerJson: RootJsonFormat[TickerJson] = jsonFormat9(TickerJson)
   implicit val orderBookSnapshotJson: RootJsonFormat[OrderBookSnapshotJson] = jsonFormat4(OrderBookSnapshotJson)
   implicit val orderBookUpdateJson: RootJsonFormat[OrderBookUpdateJson] = jsonFormat4(OrderBookUpdateJson)
 }
 
 object CoinbasePublicDataChannel {
+  // The websocket feed is publicly available, but connections to it are rate-limited to 1 per 4 seconds per IP.
+  val CoinbaseWebSocketEndpoint: String = "wss://ws-feed-public.sandbox.pro.coinbase.com" //"wss://ws-feed.pro.coinbase.com"
+
   private case class Connect()
 
   def props(globalConfig: GlobalConfig,
@@ -105,10 +107,6 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
   private val log = LoggerFactory.getLogger(classOf[CoinbasePublicDataChannel])
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
-
-  val BaseRestEndpoint: String = "https://api.pro.coinbase.com"
-  // The websocket feed is publicly available, but connections to it are rate-limited to 1 per 4 seconds per IP.
-  val WebSocketEndpoint: String = "wss://ws-feed.pro.coinbase.com"
 
   val TickerChannelName: String = "ticker"
   val OrderBookChannelname: String = "level2"
@@ -129,10 +127,12 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
 
   // @formatter:off
   def decodeJsObject(messageType: String, j: JsObject): IncomingPublicCoinbaseJson = {
+    if (log.isTraceEnabled) log.trace(s"received: $j")
     messageType match {
       case TickerChannelName => j.convertTo[TickerJson]
       case "snapshot"        => j.convertTo[OrderBookSnapshotJson]
       case "l2update"        => j.convertTo[OrderBookUpdateJson]
+      case "error"           => throw new RuntimeException(j.prettyPrint)
       case other             => throw new NotImplementedException(other)
     }
   } // @formatter:on
@@ -153,13 +153,13 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
       Future.successful(None)
   }
 
-  val SubscribeMessage: SubscribeRequestJson = SubscribeRequestJson(channels = Seq(
-    ChannelJson(TickerChannelName),
-    ChannelJson(OrderBookChannelname)
-  ))
+  def subscribeMessage: SubscribeRequestJson = SubscribeRequestJson(
+    product_ids = coinbaseTradePairByProductId.keys.toSeq,
+    channels = Seq(TickerChannelName, OrderBookChannelname)
+  )
 
   // flow to us
-  val wsFlow: Flow[Message, Message, Promise[Option[Message]]] = {
+  def wsFlow: Flow[Message, Message, Promise[Option[Message]]] = {
     Flow.fromSinkAndSourceCoupledMat(
       Sink.foreach[Message](message =>
         decodeMessage(message)
@@ -170,7 +170,7 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
           .pipeTo(publicDataManager)
       ),
       Source(
-        List(TextMessage(SubscribeMessage.toJson.compactPrint))
+        List(TextMessage(subscribeMessage.toJson.compactPrint))
       ).concatMat(Source.maybe[Message])(Keep.right))(Keep.right)
   }
 
@@ -189,7 +189,7 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
   def connect(): Unit = {
     log.trace("open WebSocket stream...")
 
-    ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow)
+    ws = Http().singleWebSocketRequest(WebSocketRequest(CoinbaseWebSocketEndpoint), wsFlow)
     ws._2.future.onComplete { e =>
       log.info(s"connection closed: ${e.get}")
       self ! Kill
