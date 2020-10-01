@@ -558,7 +558,7 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
       case Left(response) => response.listenKey
       case Right(errorResponse) => throw new RuntimeException(s"createListenKey failed: $errorResponse")
     }
-    log.trace(s"got listenKey: $listenKey")
+    log.debug(s"got listenKey: $listenKey")
   }
 
   def pullBinanceTradePairs(): Unit = {
