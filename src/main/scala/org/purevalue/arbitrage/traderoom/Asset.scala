@@ -26,7 +26,7 @@ class Asset(val officialSymbol: String,
       conversionRateExists.apply(TradePair(targetAsset, this))
   }
 
-  private def canConvertTo(targetAsset: Asset, conversionRateExists: TradePair => Boolean): Boolean = {
+  def canConvertTo(targetAsset: Asset, conversionRateExists: TradePair => Boolean): Boolean = {
     canConvertDirectlyTo(targetAsset, conversionRateExists) ||
       canConvertIndirectly(targetAsset, Bitcoin, conversionRateExists)
   }

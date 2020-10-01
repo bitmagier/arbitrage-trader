@@ -87,8 +87,9 @@ class FooTrader(traderConfig: Config, tradeRoom: ActorRef, tc: TradeContext) ext
 
     if (availableExchanges.size <= 1) return Right(NotEnoughExchangesAvailableForTrading())
 
-    val USDT = Asset("USDT")
-    val tradeAmountBaseAsset: Double = CryptoValue(USDT, TradeAmountInUSD)
+    val usdEquivatentCalcCoin: Asset = Asset.UsdEquivalentCoins
+      .find(_.canConvertTo(tradePair.baseAsset, tp => findPrice(tp, availableExchanges).isDefined)).get // there must be one exchange having that trade pair
+    val tradeAmountBaseAsset: Double = CryptoValue(usdEquivatentCalcCoin, TradeAmountInUSD)
       .convertTo(tradePair.baseAsset, tp => findPrice(tp, availableExchanges))
       .amount
 
@@ -112,7 +113,7 @@ class FooTrader(traderConfig: Config, tradeRoom: ActorRef, tc: TradeContext) ext
     val minGainInUSD: Double = OrderBundleMinGainInUSD
 
     val calculatedPureWinUSD: Double = CryptoValue(tradePair.baseAsset, tradeAmountBaseAsset * sellLimit - tradeAmountBaseAsset * buyLimit)
-      .convertTo(USDT, tp => findPrice(tp, availableExchanges)).amount
+      .convertTo(usdEquivatentCalcCoin, tp => findPrice(tp, availableExchanges)).amount
 
     if (calculatedPureWinUSD < minGainInUSD) return Right(MinGainTooLow())
 
@@ -140,8 +141,7 @@ class FooTrader(traderConfig: Config, tradeRoom: ActorRef, tc: TradeContext) ext
         sellLimit
       )
 
-    // TODO don't use ticker, use reference-ticker
-    val bill: OrderBill = OrderBill.calc(Seq(ourBuyBaseAssetOrder, ourSellBaseAssetOrder), Asset.AssetUSDT, tc.referenceTicker)
+    val bill: OrderBill = OrderBill.calc(Seq(ourBuyBaseAssetOrder, ourSellBaseAssetOrder), usdEquivatentCalcCoin, tc.referenceTicker)
     if (bill.sumUSDAtCalcTime < OrderBundleMinGainInUSD) {
       Right(MinGainTooLow2())
     } else {

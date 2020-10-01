@@ -84,7 +84,7 @@ case class TradeRoomConfig(tradeSimulation: Boolean,
                            restarExchangeWhenDataStreamIsOlderThan: Duration,
                            pioneerOrderValueUSD: Double,
                            dataManagerInitTimeout: Duration,
-                           stats: TradeRoomStatsConfig,
+                           statsReportInterval: Duration,
                            orderBundleSafetyGuard: OrderBundleSafetyGuardConfig,
                            liquidityManager: LiquidityManagerConfig,
                            exchanges: Map[String, ExchangeConfig]) {
@@ -93,8 +93,6 @@ case class TradeRoomConfig(tradeSimulation: Boolean,
 }
 object TradeRoomConfig {
   def apply(c: com.typesafe.config.Config): TradeRoomConfig = {
-    val aggregateLiquidityReportAsset: String = c.getString("stats.aggregated-liquidity-report-asset")
-    Asset.register(aggregateLiquidityReportAsset, None, None)
     TradeRoomConfig(
       c.getBoolean("trade-simulation"),
       c.getString("reference-ticker-exchange"),
@@ -102,19 +100,13 @@ object TradeRoomConfig {
       c.getDuration("restart-exchange-when-data-stream-is-older-than"),
       c.getDouble("pioneer-order-value-usd"),
       c.getDuration("data-manager-init-timeout"),
-      TradeRoomStatsConfig(
-        c.getDuration("stats.report-interval"),
-        Asset(aggregateLiquidityReportAsset)
-      ),
+      c.getDuration("stats-report-interval"),
       OrderBundleSafetyGuardConfig(c.getConfig("order-bundle-safety-guard")),
       LiquidityManagerConfig(c.getConfig("liquidity-manager")),
       c.getStringList("active-exchanges").asScala.map(e => e -> ExchangeConfig(e, c.getConfig(s"exchange.$e"))).toMap
     )
   }
 }
-
-case class TradeRoomStatsConfig(reportInterval: Duration,
-                                aggregatedliquidityReportAsset: Asset)
 
 case class LiquidityManagerConfig(liquidityLockMaxLifetime: Duration, // when a liquidity lock is not cleared, this is the maximum time, it can stay active
                                   liquidityDemandActiveTime: Duration, // when demanded liquidity is not requested within that time, the coins are transferred back to a reserve asset

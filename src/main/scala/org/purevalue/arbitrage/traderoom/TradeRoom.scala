@@ -137,7 +137,7 @@ class TradeRoom(val config: Config,
   private val orderBundleSafetyGuard = new OrderBundleSafetyGuard(config.tradeRoom.orderBundleSafetyGuard, config.tradeRoom.exchanges, tradeContext, dataAge, activeOrderBundles)
 
   val houseKeepingSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(5.seconds, 3.seconds, self, HouseKeeping())
-  val logScheduleRate: FiniteDuration = FiniteDuration(config.tradeRoom.stats.reportInterval.toNanos, TimeUnit.NANOSECONDS)
+  val logScheduleRate: FiniteDuration = FiniteDuration(config.tradeRoom.statsReportInterval.toNanos, TimeUnit.NANOSECONDS)
   val logSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(3.minutes, logScheduleRate, self, LogStats())
 
   /**
@@ -245,7 +245,7 @@ class TradeRoom(val config: Config,
 
     def logWalletOverview(): Unit = {
       for (w <- wallets.values) {
-        val walletOverview: String = w.toOverviewString(config.tradeRoom.stats.aggregatedliquidityReportAsset, tickers(w.exchange))
+        val walletOverview: String = w.toOverviewString(config.tradeRoom.exchanges(w.exchange).usdEquivalentCoin, tickers(w.exchange))
         log.info(s"${Emoji.Robot}  $walletOverview")
       }
     }
