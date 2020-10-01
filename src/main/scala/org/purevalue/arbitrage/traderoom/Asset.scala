@@ -162,11 +162,10 @@ case class CryptoValue(asset: Asset, amount: Double) {
           CryptoValue(targetAsset, amount * rate)
         case None =>
           findConversionRate(TradePair(targetAsset, this.asset)) match { // try reverse ticker
-            case Some(rate) =>
-              CryptoValue(targetAsset, amount / rate)
+            case Some(rate) => CryptoValue(targetAsset, amount / rate)
             case None => // try conversion via BTC as last option
               if ((this.asset != Bitcoin && targetAsset != Bitcoin)
-                && findConversionRate(TradePair(this.asset, Bitcoin)).isDefined
+                && (findConversionRate(TradePair(this.asset, Bitcoin)).isDefined || findConversionRate(TradePair(Bitcoin, this.asset)).isDefined)
                 && (findConversionRate(TradePair(targetAsset, Bitcoin)).isDefined || findConversionRate(TradePair(Bitcoin, targetAsset)).isDefined)) {
                 this.convertTo(Bitcoin, findConversionRate).convertTo(targetAsset, findConversionRate)
               } else {

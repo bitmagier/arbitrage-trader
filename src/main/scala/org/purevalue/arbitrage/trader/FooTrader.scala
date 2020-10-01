@@ -89,9 +89,10 @@ class FooTrader(traderConfig: Config, tradeRoom: ActorRef, tc: TradeContext) ext
 
     val usdEquivatentCalcCoin: Asset = Asset.UsdEquivalentCoins
       .find(_.canConvertTo(tradePair.baseAsset, tp => findPrice(tp, availableExchanges).isDefined)).get // there must be one exchange having that trade pair
-    val tradeAmountBaseAsset: Double = CryptoValue(usdEquivatentCalcCoin, TradeAmountInUSD)
-      .convertTo(tradePair.baseAsset, tp => findPrice(tp, availableExchanges))
-      .amount
+    val tradeAmountBaseAsset: Double =
+      CryptoValue(usdEquivatentCalcCoin, TradeAmountInUSD)
+        .convertTo(tradePair.baseAsset, tp => findPrice(tp, availableExchanges))
+        .amount
 
     val buyLimits: Map[String, Double] = availableExchanges
       .map(exchange => exchange -> determineLimit(exchange, tradePair, TradeSide.Buy, tradeAmountBaseAsset))
