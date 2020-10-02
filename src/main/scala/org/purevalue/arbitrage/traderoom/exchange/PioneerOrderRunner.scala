@@ -79,7 +79,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
     if (order.side != request.tradeSide) failed("trade side mismatch")
     if (order.tradePair != request.tradePair) failed("trade pair mismatch")
     if (order.orderType != OrderType.LIMIT) failed("order type mismatch")
-    if (diffMoreThan(order.quantity, request.amountBaseAsset, 0.001)) failed("quantity mismatch")
+    if (diffMoreThan(order.quantity, request.amountBaseAsset, 0.003)) failed("quantity mismatch")
 
     if (order.orderStatus.isFinal) {
       if (order.price.isEmpty) failed("order price not set")
