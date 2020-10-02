@@ -4,7 +4,6 @@ import java.time.Instant
 import java.util.UUID
 
 import org.purevalue.arbitrage.adapter.{ExchangeAccountStreamData, Ticker}
-import org.purevalue.arbitrage.traderoom.Asset.{AssetUSDC, AssetUSDT}
 import org.purevalue.arbitrage.traderoom.TradeRoom.{OrderRef, TickersReadonly}
 import org.purevalue.arbitrage.util.IncomingDataError
 import org.purevalue.arbitrage.util.Util.formatDecimal
@@ -22,7 +21,7 @@ case class Order(externalId: String,
                  tradePair: TradePair,
                  side: TradeSide,
                  orderType: OrderType,
-                 orderPrice: Option[Double], // may not be there for MARKET orders
+                 price: Option[Double], // may not be there for MARKET orders
                  stopPrice: Option[Double], // [candidate for removal] for STOP_LIMIT - but i've not found that attribute on all exchanges
                  creationTime: Instant,
                  @volatile var quantity: Double,
@@ -38,7 +37,7 @@ case class Order(externalId: String,
     s"[$exchange side ${cumulativeFilledQuantity.map(formatDecimal(_, tradePair.baseAsset.defaultFractionDigits))} " +
       s"${tradePair.baseAsset.officialSymbol}$direction${tradePair.quoteAsset.officialSymbol} " +
       s"""filled ${if (cumulativeFilledQuantity.isDefined && priceAverage.isDefined) formatDecimal(cumulativeFilledQuantity.get * priceAverage.get, tradePair.quoteAsset.defaultFractionDigits) else "n/a"} """ +
-      s"price ${orderPrice.map(formatDecimal(_, tradePair.quoteAsset.defaultFractionDigits))} $orderStatus]"
+      s"price ${price.map(formatDecimal(_, tradePair.quoteAsset.defaultFractionDigits))} $orderStatus]"
   }
 
 
@@ -56,8 +55,8 @@ case class Order(externalId: String,
           (priceAverage, cumulativeFilledQuantity) match {
             case (Some(p), Some(q)) => p * q
             case (Some(p), None) => p * quantity
-            case (None, Some(q)) if orderPrice.isDefined => orderPrice.get * q
-            case _ if orderPrice.isDefined => orderPrice.get * quantity
+            case (None, Some(q)) if price.isDefined => price.get * q
+            case _ if price.isDefined => price.get * quantity
             // if something falls through here, we have to avoid using this function in this case
           })
       else LocalCryptoValue(exchange, tradePair.quoteAsset, 0.0)
@@ -94,8 +93,8 @@ case class Order(externalId: String,
           (priceAverage, cumulativeFilledQuantity) match {
             case (Some(p), Some(q)) => p * q
             case (Some(p), None) => p * quantity
-            case (None, Some(q)) if orderPrice.isDefined => orderPrice.get * q
-            case _ if orderPrice.isDefined => orderPrice.get * quantity
+            case (None, Some(q)) if price.isDefined => price.get * q
+            case _ if price.isDefined => price.get * quantity
             // if something falls through here, we have to avoid using this function in this case
           })
       else LocalCryptoValue(exchange, tradePair.quoteAsset, 0.0)
@@ -302,7 +301,7 @@ object OrderBill {
   def calc(orders: Seq[OrderRequest],
            aggregateUSDxAsset: Asset,
            referenceTicker: collection.Map[TradePair, Ticker]): OrderBill = {
-    if (aggregateUSDxAsset != AssetUSDT && aggregateUSDxAsset != AssetUSDC) throw new IllegalArgumentException("not a USD equivalent asset")
+    if (!Asset.UsdEquivalentCoins.contains(aggregateUSDxAsset)) throw new IllegalArgumentException("not a USD equivalent asset")
 
     val balanceSheet: Seq[LocalCryptoValue] = orders.flatMap(calcBalanceSheet)
     val sumUSD: Double = aggregateValues(balanceSheet, aggregateUSDxAsset, (_, tradePair) => referenceTicker.get(tradePair).map(_.priceEstimate))

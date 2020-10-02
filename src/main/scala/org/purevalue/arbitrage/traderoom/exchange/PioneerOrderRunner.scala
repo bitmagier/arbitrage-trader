@@ -82,14 +82,14 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
     if (diffMoreThan(order.quantity, request.amountBaseAsset, 0.001)) failed("quantity mismatch")
 
     if (order.orderStatus.isFinal) {
-      if (order.orderPrice.isEmpty) failed("order price not set")
-      if (diffMoreThan(order.orderPrice.get, request.limit, 0.001)) failed("order price mismatch")
+      if (order.price.isEmpty) failed("order price not set")
+      if (diffMoreThan(order.price.get, request.limit, 0.001)) failed("order limit/price mismatch")
       if (order.orderStatus != OrderStatus.FILLED) failed("order status mismatch")
 
       if (order.cumulativeFilledQuantity.isEmpty) failed("cumulativeFilledQuantity not set")
       if (diffMoreThan(order.cumulativeFilledQuantity.get, request.amountBaseAsset, 0.003)) failed("cumulative filled quantity mismatch") // in most cases the fee is substracted from the amount we get
-      if (request.tradeSide == TradeSide.Buy && (order.priceAverage.isDefined && order.priceAverage.get > request.limit)) failed("price average above limit")
-      if (request.tradeSide == TradeSide.Sell && (order.priceAverage.isDefined && order.priceAverage.get < request.limit)) failed("price average below limit")
+      if (request.tradeSide == TradeSide.Buy && (order.priceAverage.isDefined && order.priceAverage.get > order.price.get)) failed("price average above price/limit")
+      if (request.tradeSide == TradeSide.Sell && (order.priceAverage.isDefined && order.priceAverage.get < order.price.get)) failed("price average below price/limit")
 
       val incomingRequested = request.calcIncomingLiquidity
       val incomingReal = order.calcIncomingLiquidity(request.feeRate)
@@ -130,8 +130,8 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
     if (order.side != request.tradeSide) failed("trade side mismatch")
     if (order.tradePair != request.tradePair) failed("trade pair mismatch")
     if (order.orderType != OrderType.LIMIT) failed("order type mismatch")
-    if (order.orderPrice.isEmpty) failed("orderPrice not set")
-    if (diffMoreThan(order.orderPrice.get, request.limit, 0.001)) failed("order price mismatch")
+    if (order.price.isEmpty) failed("orderPrice not set")
+    if (diffMoreThan(order.price.get, request.limit, 0.001)) failed("order price mismatch")
     if (diffMoreThan(order.quantity, request.amountBaseAsset, 0.001)) failed("quantity mismatch")
 
     if (order.orderStatus.isFinal) {
@@ -197,7 +197,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
           s"validated: [${order1Validated.isArrived}, ${order2Validated.isArrived}, ${order3Validated.isArrived}]")
     } catch {
       case e: Throwable =>
-        log.error(s"[$ExchangeName] PioneerOrderRUnner failed", e)
+        log.error(s"[$ExchangeName] PioneerOrderRunner failed", e)
         exchange ! PioneerOrderFailed(e)
         stop()
     }
