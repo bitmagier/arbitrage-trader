@@ -160,7 +160,8 @@ class FooTrader(traderConfig: Config, tradeRoom: ActorRef, tc: TradeContext) ext
 
   def findBestShots(topN: Int): Seq[OrderRequestBundle] = {
     var result: List[OrderRequestBundle] = List()
-    for (tradePair: TradePair <- tc.tickers.values.flatMap(_.keys).toSet) {
+    val cryptoTradePairs = tc.tickers.values.flatMap(_.keys).filterNot(_.involvedAssets.exists(_.isFiat))
+    for (tradePair: TradePair <- cryptoTradePairs) {
       if (tc.tickers.count(_._2.keySet.contains(tradePair)) > 1) {
         numSingleSearchesDiff += 1
         findBestShot(tradePair) match {

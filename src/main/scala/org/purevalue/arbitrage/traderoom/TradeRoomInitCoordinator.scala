@@ -81,7 +81,9 @@ class TradeRoomInitCoordinator(val config: Config,
 
 
   /**
-   * Select none-reserve assets, where not at least two connected compatible TradePairs can be found looking at all exchanges.
+   * First of all we drop tradepairs, where one part is a FIAT currency.
+   *
+   * Also we select none-reserve assets, where not at least two connected compatible TradePairs can be found looking at all exchanges.
    * Then we drop all TradePairs, connected to the selected ones.
    *
    * Reason: We need two TradePairs at least, to have one for the main-trdade and the other for the reserve-liquidity transaction.
@@ -97,8 +99,8 @@ class TradeRoomInitCoordinator(val config: Config,
    * Parallel optimization is possible but not necessary for this small task
    *
    * Note:
-   * For liquidity conversion and some calculations we need USDT pairs in ReferenceTicker, so for now we don't drop x:USDT pairs (until ReferenceTicker is decoupled from exchange TradePairs)
-   * Also - if no x:USDT pair is available, we don't drop the x:BTC pair (like for IOTA on Bitfinex we only have IOTA:BTC & IOTA:ETH)
+   * For liquidity conversion and some calculations we need USD equivalent  pairs in ReferenceTicker, so we don't drop x:USDT or x:USDC pairs
+   * Also - if no x:USDT/USDC pair is available, we don't drop the x:BTC pair (like for IOTA on Bitfinex we only have IOTA:BTC & IOTA:ETH)
    */
   def dropUnusableTradePairsSync(): Unit = {
     var eTradePairs: Set[Tuple2[String, TradePair]] = Set()
@@ -106,17 +108,25 @@ class TradeRoomInitCoordinator(val config: Config,
       val tp: Set[TradePair] = queryTradePairs(exchange)
       eTradePairs = eTradePairs ++ tp.map(e => (exchange, e))
     }
-    val assetsToRemove: Set[Asset] = eTradePairs
-      .map(_._2.baseAsset) // set of candidate assets
-      .filterNot(e => config.tradeRoom.exchanges.values.exists(_.reserveAssets.contains(e))) // don't select reserve assets
-      .filterNot(a =>
-        eTradePairs
-          .filter(_._2.baseAsset == a) // all connected tradepairs X -> ...
-          .groupBy(_._2.quoteAsset) // grouped by other side of TradePair (trade options)
-          .count(e => e._2.size > 1) > 1 // tests, if at least two trade options exists (for our candidate base asset), that are present on at least two exchanges
-      )
+    val cryptoAssetsToRemove: Set[Asset] =
+      eTradePairs
+        .filterNot(_._2.involvedAssets.exists(_.isFiat)) // we talk about non-FIAT tradepairs only here
+        .map(_._2.baseAsset) // set of candidate assets
+        .filterNot(e => config.tradeRoom.exchanges.values.exists(_.reserveAssets.contains(e))) // don't select reserve assets
+        .filterNot(a =>
+          eTradePairs
+            .filter(_._2.baseAsset == a) // all connected tradepairs X -> ...
+            .groupBy(_._2.quoteAsset) // grouped by other side of TradePair (trade options)
+            .count(e => e._2.size > 1) > 1 // tests, if at least two trade options exists (for our candidate base asset), that are present on at least two exchanges
+        )
 
-    for (asset <- assetsToRemove) {
+    val fiatTradePairs: Set[Tuple2[String, TradePair]] = eTradePairs.filter(_._2.involvedAssets.exists(_.isFiat))
+    log.debug(s"${Emoji.Robot}  Dropping all FIAT trade pairs: $fiatTradePairs")
+    for ((exchange,tp) <- fiatTradePairs) {
+      dropTradePairSync(exchange, tp)
+    }
+
+    for (asset <- cryptoAssetsToRemove) {
       val tradePairsToDrop: Set[Tuple2[String, TradePair]] =
         eTradePairs
           .filter(e => e._2.baseAsset == asset && e._2.quoteAsset != config.tradeRoom.exchanges(e._1).usdEquivalentCoin) // keep :USD-equivalent TradePairs because we want them for currency calculations (and in the ReferenceTicker)
@@ -125,7 +135,7 @@ class TradeRoomInitCoordinator(val config: Config,
               e._2 == TradePair(e._2.baseAsset, Bitcoin)) // keep :BTC tradepair (for currency conversion via x -> BTC -> USD-equiv)
 
       if (tradePairsToDrop.nonEmpty) {
-        log.debug(s"${Emoji.Robot}  Dropping some TradePairs involving $asset, because we don't have a use for it:  $tradePairsToDrop")
+        log.debug(s"${Emoji.Robot}  Dropping some trade pairs involving $asset, because we don't have a use for it:  $tradePairsToDrop")
         tradePairsToDrop.foreach(e => dropTradePairSync(e._1, e._2))
       }
     }
