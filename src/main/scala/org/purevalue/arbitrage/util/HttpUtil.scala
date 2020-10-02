@@ -14,8 +14,8 @@ object HttpUtil {
   private val log = LoggerFactory.getLogger(HttpUtil.getClass)
   private val globalConfig: GlobalConfig = Main.config().global
 
-  def query(uri: String)
-           (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[HttpResponse] = {
+  def httpGet(uri: String)
+             (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[HttpResponse] = {
     Http().singleRequest(
       HttpRequest(
         method = HttpMethods.GET,
@@ -45,7 +45,7 @@ object HttpUtil {
 
   def httpGetPureJson(uri: String)
                      (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[(StatusCode, JsValue)] = {
-    query(uri)
+    httpGet(uri)
       .flatMap {
         response: HttpResponse =>
           if (!response.status.isSuccess()) log.warn(s"$response")

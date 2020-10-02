@@ -7,13 +7,13 @@ import akka.Done
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, Props, Status}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
-import akka.http.scaladsl.model.{HttpMethods, StatusCodes}
+import akka.http.scaladsl.model.{HttpMethods, HttpResponse, StatusCodes}
 import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
 import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager._
 import org.purevalue.arbitrage.adapter.coinbase.CoinbaseAccountDataChannel.{Connect, OnStreamsRunning}
-import org.purevalue.arbitrage.adapter.coinbase.CoinbaseHttpUtil.{Signature, httpRequestCoinbaseAccount, httpRequestJsonCoinbaseAccount}
+import org.purevalue.arbitrage.adapter.coinbase.CoinbaseHttpUtil.{Signature, httpRequestCoinbaseAccount, httpRequestJsonCoinbaseAccount, parseServerTime}
 import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataChannel.CoinbaseWebSocketEndpoint
 import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataInquirer.{CoinbaseBaseRestEndpoint, DeliverAccounts, GetCoinbaseTradePairs}
 import org.purevalue.arbitrage.adapter.{Balance, CompleteWalletUpdate, ExchangeAccountStreamData}
@@ -318,10 +318,17 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
   }
 
   // coinbase allows a maximum diff of 30 seconds between their server time and the timestamp value in the request
-  def queryServerTime(): Future[Instant] = {
-    HttpUtil.httpGetPureJson(s"$CoinbaseBaseRestEndpoint/time") map {
-      case (statusCode, j) if statusCode.isSuccess() => Instant.parse(j.asJsObject.fields("iso").convertTo[String])
-      case (statusCode, j) => throw new RuntimeException(s"coinbase: GET /time failed with: $statusCode, $j")
+  def queryServerTime(): Future[Double] = {
+    // the returned format from coinbase is not always JSON-compatible (no zeros after decimal point at the full second
+    // so we parse it manually
+    HttpUtil.httpGet(s"$CoinbaseBaseRestEndpoint/time") flatMap {
+      case HttpResponse(code, headers, entity, protocol) =>
+        (code,
+          entity.toStrict(globalConfig.httpTimeout)
+          .map(_.data.utf8String)) match {
+          case (code, entity) if code.isSuccess() => entity.map(parseServerTime)
+          case (code, entity) => throw new RuntimeException(s"coinbase: GET /time failed with: $code, $entity")
+        }
     }
   }
 
@@ -378,7 +385,7 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
 
   def newLimitOrder(o: OrderRequest): Future[NewOrderAck] = {
 
-    def newLimitOrder(o: OrderRequest, serverTime: Instant): Future[NewOrderAck] = {
+    def newLimitOrder(o: OrderRequest, serverTime: Double): Future[NewOrderAck] = {
       val coinbaseTradepair = coinbaseTradePairsByTradePair(o.tradePair)
 
       val size: String = formatDecimalWithFixPrecision(
@@ -417,7 +424,7 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
 
   def cancelOrder(ref: OrderRef): Future[CancelOrderResult] = {
 
-    def cancelOrder(ref: OrderRef, serverTime: Instant): Future[CancelOrderResult] = {
+    def cancelOrder(ref: OrderRef, serverTime: Double): Future[CancelOrderResult] = {
       val productId: String = coinbaseTradePairsByTradePair(ref.tradePair).id
       val uri = s"$CoinbaseBaseRestEndpoint/orders/${ref.externalOrderId}?product_id=$productId"
       httpRequestCoinbaseAccount(
@@ -440,7 +447,7 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
 
   def deliverAccounts(): Unit = {
 
-    def queryAccounts(serverTime: Instant): Future[IncomingData] = {
+    def queryAccounts(serverTime: Double): Future[IncomingData] = {
       httpRequestJsonCoinbaseAccount[Seq[CoinbaseAccountJson], JsObject](HttpMethods.GET, s"$CoinbaseBaseRestEndpoint/accounts", None, exchangeConfig.secrets, serverTime)
         .map {
           case Left(accounts) => Seq(CompleteWalletUpdate(

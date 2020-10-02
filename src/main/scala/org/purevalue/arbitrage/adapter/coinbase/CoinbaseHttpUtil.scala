@@ -1,7 +1,6 @@
 package org.purevalue.arbitrage.adapter.coinbase
 
 import java.nio.charset.StandardCharsets
-import java.time.Instant
 import java.util.Base64
 
 import akka.actor.ActorSystem
@@ -18,17 +17,23 @@ import scala.concurrent.{ExecutionContext, Future}
 
 private[coinbase] object CoinbaseHttpUtil {
   private val log = LoggerFactory.getLogger("org.purevalue.arbitrage.adapter.coinbase.CoinbaseHttpUtil")
-  private val globalConfig: GlobalConfig = Main.config().global
+  private lazy val globalConfig: GlobalConfig = Main.config().global
 
+  // {"iso":"2020-10-01T21:22:24Z","epoch":1601587344.} <- spray cannot parse that, but we can
+  def parseServerTime(jsonLike:String): Double = {
+    val end = jsonLike.lastIndexOf('}')
+    val start = jsonLike.lastIndexOf(':')+1
+    jsonLike.substring(start, end).toDouble
+  }
 
   case class Signature(cbAccessKey: String, cbAccessSign: String, cbAccessTimestamp: String, cbAccessPassphrase: String)
 
-  def createSignature(method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig, serverTime:Instant): Signature = {
+  def createSignature(method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig, serverTime:Double): Signature = {
     // [coinbase documentation]
     // The CB-ACCESS-TIMESTAMP header MUST be number of seconds since Unix Epoch in UTC. Decimal values are allowed
     // Your timestamp must be within 30 seconds of the api service time or your request will be considered expired and rejected.
     // We recommend using the time endpoint to query for the API server time if you believe there many be time skew between your server and the API servers.
-    val timestamp: String = serverTime.getEpochSecond.toString
+    val timestamp: String = serverTime.toString
     val requestPath = Uri(uri).toRelative.toString()
     val contentToSign = s"""$timestamp${method.value}$requestPath${requestBody.getOrElse("")}"""
     val secretKey = Base64.getDecoder.decode(apiKeys.apiSecretKey)
@@ -37,7 +42,7 @@ private[coinbase] object CoinbaseHttpUtil {
   }
 
   // https://docs.pro.coinbase.com/#api-key-permissions
-  def httpRequestCoinbaseHmacSha256(method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig, serverTime:Instant)
+  def httpRequestCoinbaseHmacSha256(method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig, serverTime:Double)
                                    (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[HttpResponse] = {
     val signature = createSignature(method, uri, requestBody, apiKeys, serverTime)
 
@@ -58,7 +63,7 @@ private[coinbase] object CoinbaseHttpUtil {
       ))
   }
 
-  def httpRequestCoinbaseAccount(method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig, serverTime:Instant)
+  def httpRequestCoinbaseAccount(method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig, serverTime:Double)
                                 (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[(StatusCode, String)] = {
     httpRequestCoinbaseHmacSha256(method, uri, requestBody, apiKeys, serverTime)
       .flatMap {
@@ -70,7 +75,7 @@ private[coinbase] object CoinbaseHttpUtil {
       }
   }
 
-  def httpRequestPureJsonCoinbaseAccount(method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig, serverTime:Instant)
+  def httpRequestPureJsonCoinbaseAccount(method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig, serverTime:Double)
                                         (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[(StatusCode, JsValue)] = {
     httpRequestCoinbaseHmacSha256(method, uri, requestBody, apiKeys, serverTime)
       .flatMap {
@@ -85,7 +90,7 @@ private[coinbase] object CoinbaseHttpUtil {
       }
   }
 
-  def httpRequestJsonCoinbaseAccount[T, E](method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig, serverTime:Instant)
+  def httpRequestJsonCoinbaseAccount[T, E](method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig, serverTime:Double)
                                           (implicit evidence1: JsonReader[T], evidence2: JsonReader[E], system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[Either[T, E]] = {
     httpRequestPureJsonCoinbaseAccount(method, uri, requestBody, apiKeys, serverTime).map {
       case (statusCode, j) =>
