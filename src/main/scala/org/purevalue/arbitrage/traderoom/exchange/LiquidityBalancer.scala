@@ -119,8 +119,8 @@ class LiquidityBalancer(val config: LiquidityManagerConfig,
     tradePairs.contains(TradePair(a, b)) || tradePairs.contains(TradePair(b, a))
   }
 
-  def determineRebalanceReserveAssetsAmountOrders(pendingIncomingReserveLiquidity: List[CryptoValue],
-                                                  wc: WorkingContext): List[OrderRequest] = {
+  def rebalanceReserveAssets(pendingIncomingReserveLiquidity: List[CryptoValue],
+                             wc: WorkingContext): Unit = {
     if (log.isTraceEnabled) log.trace(s"re-balancing reserve asset wallet:${wc.balanceSnapshot} with pending incoming $pendingIncomingReserveLiquidity")
     val currentReserveAssetsBalance: List[CryptoValue] = wc.balanceSnapshot
       .filter(e => exchangeConfig.reserveAssets.contains(e._1))
@@ -251,7 +251,10 @@ class LiquidityBalancer(val config: LiquidityManagerConfig,
         OrderRequest(f.id, f.orderBundleId, f.exchange, f.tradePair, f.tradeSide, f.feeRate, amount, f.limit)
       }.toList
 
-    liquidityTransactions
+    liquidityTransactions.foreach { o =>
+        log.debug(s"${Emoji.ThreeBitcoin}  [${exchangeConfig.name}] re-balance reserve assets with: $o")
+        tradeRoom ! LiquidityTransformationOrder(o)
+      }
   }
 
   def convertBackLiquidityTxActive(source: Asset): Boolean = {
@@ -379,11 +382,7 @@ class LiquidityBalancer(val config: LiquidityManagerConfig,
       val demanded: List[CryptoValue] = provideDemandedLiquidity(wc)
       val incomingReserveLiquidity = convertBackNotNeededNoneReserveAssetLiquidity(wc)
       val totalIncomingReserveLiquidity = incomingReserveLiquidity ::: demanded.filter(e => exchangeConfig.reserveAssets.contains(e.asset))
-
-      determineRebalanceReserveAssetsAmountOrders(totalIncomingReserveLiquidity, wc).foreach { o =>
-        log.debug(s"${Emoji.ThreeBitcoin}  [${exchangeConfig.name}] re-balance reserve assets with: $o")
-        tradeRoom ! LiquidityTransformationOrder(o)
-      }
+      rebalanceReserveAssets(totalIncomingReserveLiquidity, wc)
     } catch {
       case e: OrderBookTooFlatException =>
         log.warn(s"[to be improved] [${exchangeConfig.name}] Cannot perform liquidity housekeeping because the order book of tradepair ${e.tradePair} was too flat")

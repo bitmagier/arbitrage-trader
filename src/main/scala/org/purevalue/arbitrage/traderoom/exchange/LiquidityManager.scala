@@ -172,6 +172,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
 
   var houseKeepingSchedule: Cancellable = actorSystem.scheduler.scheduleWithFixedDelay(1.minute, 30.seconds, self, HouseKeeping())
   var liquidityBalancer: ActorRef = _
+  var houseKeepingRunning: Boolean = false
   var shutdownInitiated: Boolean = false
 
   // Map(uk:"trade-pattern + asset", UniqueDemand))
@@ -247,6 +248,9 @@ class LiquidityManager(val config: LiquidityManagerConfig,
   // Management takes care, that we follow the liquidity providing & back-converting strategy (described above)
   def houseKeeping(): Unit = {
     if (shutdownInitiated) return
+    if (houseKeepingRunning) return
+
+    houseKeepingRunning = true
 
     clearObsoleteLocks()
     clearObsoleteDemands()
@@ -255,6 +259,8 @@ class LiquidityManager(val config: LiquidityManagerConfig,
         wallet.balance.map(e => e._1 -> e._2).toMap,
         liquidityDemand,
         liquidityLocks)
+
+    houseKeepingRunning = false
   }
 
   override def preStart(): Unit = {
