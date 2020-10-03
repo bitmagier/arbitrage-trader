@@ -113,7 +113,7 @@ case class Order(externalId: String,
       throw new IllegalArgumentException(s"$u does not match \n$this")
 
     if (u.updateTime.isBefore(lastUpdateTime)) {
-      log.warn(s"Ignoring $u, because updateTime is not after order's lastUpdateTime: $this")
+      log.debug(s"Ignoring $u, because updateTime is not after order's lastUpdateTime: $this")
     } else if (u.updateTime.equals(lastUpdateTime) && orderStatus.isFinal) log.info(s"Ignoring $u, because it has same timestamp and we already have a final order-status here")
     else {
       if (u.orderStatus.isDefined) orderStatus = u.orderStatus.get

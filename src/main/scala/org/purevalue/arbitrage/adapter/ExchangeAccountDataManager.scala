@@ -126,7 +126,7 @@ class ExchangeAccountDataManager(globalConfig: GlobalConfig,
   private def guardedRetry(e: ExchangeAccountStreamData): Unit = {
     if (e.applyDeadline.isEmpty) e.applyDeadline = Some(Instant.now.plus(e.MaxApplyDelay))
     if (Instant.now.isAfter(e.applyDeadline.get)) {
-      log.warn(s"ignoring update [timeout] $e")
+      log.debug(s"ignoring update [timeout] $e")
     } else {
       log.debug(s"scheduling retry of $e")
       Future.apply({

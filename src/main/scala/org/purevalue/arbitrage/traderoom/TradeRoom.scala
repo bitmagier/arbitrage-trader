@@ -59,6 +59,7 @@ object TradeRoom {
   }
   case class LiquidityTx(orderRequest: OrderRequest,
                          orderRef: OrderRef,
+                         lockedLiquidity: LiquidityLock,
                          creationTime: Instant)
   case class FinishedLiquidityTx(liquidityTx: LiquidityTx,
                                  finishedOrder: Order,
@@ -145,7 +146,7 @@ class TradeRoom(val config: Config,
    *
    * @return all (locked=true) or nothing
    */
-  def lockRequiredLiquidity(tradePattern: String, coins: Seq[LocalCryptoValue], dontUseTheseReserveAssets: Set[Asset]): Future[List[LiquidityLock]] = {
+  def lockAllRequiredLiquidity(tradePattern: String, coins: Seq[LocalCryptoValue], dontUseTheseReserveAssets: Set[Asset]): Future[Option[List[LiquidityLock]]] = {
     implicit val timeout: Timeout = config.global.internalCommunicationTimeout
     Future.sequence(
       coins
@@ -160,18 +161,19 @@ class TradeRoom(val config: Config,
               x._2.map(c => CryptoValue(c.asset, c.amount)),
               dontUseTheseReserveAssets))
             .mapTo[Option[LiquidityLock]]
-        }) map {
+        }
+    ).map {
       case x if x.forall(_.isDefined) =>
-        x.flatten.toList
+        Some(x.flatten.toList)
       case x => // release all other locks in case of partial non-success
         x.filter(_.isDefined).flatten.foreach { e =>
           exchanges(e.exchange) ! LiquidityLockClearance(e.liquidityRequestId)
         }
-        List()
+        None
     } recover {
       case e: Exception =>
         log.error("Error while locking liquidity", e)
-        List()
+        None
     }
   }
 
@@ -183,7 +185,7 @@ class TradeRoom(val config: Config,
       .map(_.map(_.toOrderRef))
   }
 
-  def placeLiquidityTransformationOrder(request: OrderRequest): Unit = {
+  def tryToPlaceLiquidityTransformationOrder(request: OrderRequest): Unit = {
     if (shutdownInitiated) return
     if (doNotTouchAssets(request.exchange).intersect(request.tradePair.involvedAssets).nonEmpty) throw new IllegalArgumentException
 
@@ -193,13 +195,35 @@ class TradeRoom(val config: Config,
       return
     }
 
+    val tradePattern = s"${request.exchange}-liquidityTx"
+    val liquidityRequest =
+      LiquidityRequest(
+        UUID.randomUUID(),
+        Instant.now,
+        request.exchange,
+        tradePattern,
+        Seq(request.calcOutgoingLiquidity.cryptoValue),
+        Set())
+
     implicit val timeout: Timeout = config.global.httpTimeout.plus(config.global.internalCommunicationTimeout.duration)
-    val ack = Await.result(
-      (exchanges(request.exchange) ? NewLimitOrder(request)).mapTo[NewOrderAck],
-      timeout.duration.plus(1.second))
-    if (log.isTraceEnabled) log.trace(s"successfully placed liquidity tx order $ack")
-    val ref = ack.toOrderRef
-    activeLiquidityTx.update(ref, LiquidityTx(request, ref, Instant.now))
+    (exchanges(request.exchange) ? liquidityRequest).mapTo[Option[LiquidityLock]].onComplete {
+
+      case Success(Some(lock)) =>
+        (exchanges(request.exchange) ? NewLimitOrder(request)).mapTo[NewOrderAck].onComplete {
+          case Success(newOrderAck) =>
+            val ref: OrderRef = newOrderAck.toOrderRef
+            activeLiquidityTx.update(ref, LiquidityTx(request, ref, lock, Instant.now))
+            log.debug(s"successfully placed liquidity tx order $newOrderAck")
+          case Failure(e) =>
+            log.error(s"failed to place new liquidity tx $request", e)
+        }
+
+      case Success(None) =>
+        log.debug(s"could not acquire lock for liquidit tx")
+
+      case Failure(e) =>
+        log.error(s"acquiring lock for liquidity tx $request failed", e)
+    }
   }
 
   def registerOrderBundle(b: OrderRequestBundle, lockedLiquidity: Seq[LiquidityLock], orders: Seq[OrderRef]) {
@@ -219,22 +243,19 @@ class TradeRoom(val config: Config,
       val totalWin: Double = isSafe._2.get
       val requiredLiquidity: Seq[LocalCryptoValue] = bundle.orderRequests.map(_.calcOutgoingLiquidity)
 
-      lockRequiredLiquidity(bundle.tradePattern, requiredLiquidity, bundle.involvedReserveAssets) onComplete {
+      lockAllRequiredLiquidity(bundle.tradePattern, requiredLiquidity, bundle.involvedReserveAssets) onComplete {
 
-        case Success(lockedLiquidity: List[LiquidityLock]) if lockedLiquidity.nonEmpty =>
-
+        case Success(Some(lockedLiquidity)) =>
           placeOrders(bundle.orderRequests) onComplete {
-
             case Success(orderRefs: List[OrderRef]) =>
               registerOrderBundle(bundle, lockedLiquidity, orderRefs)
               log.info(s"${Emoji.Excited}  Placed checked $bundle (estimated total win: ${formatDecimal(totalWin, 2)})")
 
-            case Failure(e) =>
-              log.error("placing orders failed", e)
+            case Failure(e) => log.error("placing orders failed", e)
           }
 
-        case Success(x) if x.isEmpty =>
-          log.info(s"${Emoji.Robot}  Liquidity for trades not yet available: $requiredLiquidity")
+        case Success(None) => log.info(s"${Emoji.Robot}  Liquidity for trades not yet available: $requiredLiquidity")
+        case Failure(e) => log.error("lockAllRequiredLiquidity failed", e)
       }
     }
   }
@@ -324,10 +345,8 @@ class TradeRoom(val config: Config,
     }
   }
 
-  def clearLockedLiquidity(lockedLiquidity: Seq[LiquidityLock]): Unit = {
-    lockedLiquidity.foreach { e =>
-      exchanges(e.exchange) ! LiquidityLockClearance(e.liquidityRequestId)
-    }
+  def clearLockedLiquidity(lock: LiquidityLock): Unit = {
+    exchanges(lock.exchange) ! LiquidityLockClearance(lock.liquidityRequestId)
   }
 
   // cleanup completed order bundle, which is still in the "active" list
@@ -347,7 +366,9 @@ class TradeRoom(val config: Config,
       e => activeOrders(e.exchange).remove(e)
     }
 
-    clearLockedLiquidity(bundle.lockedLiquidity)
+    bundle.lockedLiquidity.foreach {
+      clearLockedLiquidity
+    }
 
     if (orders.exists(_.orderStatus != OrderStatus.FILLED)) {
       log.warn(s"${Emoji.Questionable}  ${finishedOrderBundle.shortDesc} did not complete. Orders: \n${orders.mkString("\n")}")
@@ -370,9 +391,10 @@ class TradeRoom(val config: Config,
     }
     activeLiquidityTx.remove(tx.orderRef)
     activeOrders(tx.orderRef.exchange).remove(tx.orderRef)
+    clearLockedLiquidity(tx.lockedLiquidity)
   }
 
-  def cleanupFinishedOrderBundle(orderBundle: OrderBundle): Unit = {
+  def cleanupPossiblyFinishedOrderBundle(orderBundle: OrderBundle): Unit = {
     val orderBundleId: UUID = orderBundle.orderRequestBundle.id
     val orders: Seq[Order] = orderBundle.ordersRefs.flatMap(ref => activeOrder(ref))
     orders match {
@@ -409,7 +431,7 @@ class TradeRoom(val config: Config,
     val maxTries = 3
     activeOrderBundles.values.find(e => e.ordersRefs.contains(t.ref)) match {
       case Some(orderBundle) =>
-        cleanupFinishedOrderBundle(orderBundle)
+        cleanupPossiblyFinishedOrderBundle(orderBundle)
         return
       case None => // proceed to next statement
     }
@@ -539,7 +561,7 @@ class TradeRoom(val config: Config,
     // messages from Exchanges
     case TradeRoomJoined(exchange)                  => onExchangeJoined(exchange)
     case bundle: OrderRequestBundle                 => tryToPlaceOrderBundle(bundle)
-    case LiquidityTransformationOrder(orderRequest) => placeLiquidityTransformationOrder(orderRequest)
+    case LiquidityTransformationOrder(orderRequest) => tryToPlaceLiquidityTransformationOrder(orderRequest)
     case t: OrderUpdateTrigger                      => onOrderUpdate(t)
     case c: CancelOrderResult                       => onCancelOrderResult(c)
     case LogStats()                                 => logStats()

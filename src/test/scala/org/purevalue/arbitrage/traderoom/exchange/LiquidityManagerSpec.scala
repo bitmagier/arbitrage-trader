@@ -91,12 +91,14 @@ class LiquidityManagerSpec
 
     "rebalance reserve assets" in {
       val tradeRoom = TestProbe()
+      // @formatter:off
       val wallet: Wallet = Wallet("e1", Map(
-        Bitcoin -> Balance(Bitcoin, 1.0, 0.0),
-        AssetUSDT -> adapter.Balance(AssetUSDT, 0.05, 0.0),
-        Euro -> adapter.Balance(Euro, 999.0, 0.0),
-        USDollar -> adapter.Balance(USDollar, 999, 0.0)
+        Bitcoin   -> Balance(Bitcoin, 1.0, 0.0),
+        AssetUSDT -> Balance(AssetUSDT, 0.05, 0.0),
+        Euro      -> Balance(Euro, 999.0, 0.0),
+        USDollar  -> Balance(USDollar, 999, 0.0)
       ), exchangeConfig)
+      // @formatter:on
 
       val m: ActorRef = system.actorOf(LiquidityManager.props(liquidityManagerConfig, exchangeConfig, tradePairs, tpData, wallet, tradeRoom.ref, _ => None, () => referenceTicker))
 

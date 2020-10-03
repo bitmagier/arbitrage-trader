@@ -185,6 +185,8 @@ case class CryptoValue(asset: Asset, amount: Double) {
 case class LocalCryptoValue(exchange: String, asset: Asset, amount: Double) {
   if (asset.isFiat) throw new IllegalArgumentException(s"Fiat $asset isn't a crypto asset")
 
+  def cryptoValue: CryptoValue = CryptoValue(asset, amount)
+
   def negate: LocalCryptoValue = LocalCryptoValue(exchange, asset, -amount)
 
   def convertTo(targetAsset: Asset, findConversionRate: (String, TradePair) => Option[Double]): LocalCryptoValue = {
