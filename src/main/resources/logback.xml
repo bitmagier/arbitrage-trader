@@ -11,6 +11,7 @@
 
     <logger name="org.purevalue.arbitrage" level="INFO"/>
     <logger name="org.purevalue.arbitrage.traderoom.exchange.LiquidityManager" level="DEBUG"/>
+    <logger name="org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer" level="DEBUG"/>
 
     <root level="INFO">
         <appender-ref ref="STDOUT"/>

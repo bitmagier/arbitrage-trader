@@ -14,7 +14,7 @@ import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.PioneerOrderRunner.{PioneerOrder, PioneerOrderFailed, PioneerOrderSucceeded, Watch}
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.util.{InitSequence, InitStep, Util, WaitingFor}
-import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig, Main, TradeRoomConfig}
+import org.purevalue.arbitrage.{Config, ExchangeConfig, Main}
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
@@ -30,16 +30,14 @@ object PioneerOrderRunner {
 
   case class PioneerOrder(request: OrderRequest, ref: OrderRef)
 
-  def props(globalConfig: GlobalConfig,
-            tradeRoomConfig: TradeRoomConfig,
+  def props(config: Config,
             exchangeConfig: ExchangeConfig,
             exchange: ActorRef,
             accountData: ExchangeAccountData,
             publicData: ExchangePublicData): Props =
-    Props(new PioneerOrderRunner(globalConfig, tradeRoomConfig, exchangeConfig, exchange, accountData, publicData))
+    Props(new PioneerOrderRunner(config, exchangeConfig, exchange, accountData, publicData))
 }
-class PioneerOrderRunner(globalConfig: GlobalConfig,
-                         tradeRoomConfig: TradeRoomConfig,
+class PioneerOrderRunner(config: Config,
                          exchangeConfig: ExchangeConfig,
                          exchange: ActorRef,
                          accountData: ExchangeAccountData,
@@ -49,7 +47,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
   private val watchSchedule: Cancellable = actorSystem.scheduler.scheduleWithFixedDelay(0.seconds, 200.millis, self, Watch())
-  private val deadline: Instant = Instant.now.plusMillis(globalConfig.internalCommunicationTimeoutDuringInit.duration.toMillis * 3)
+  private val deadline: Instant = Instant.now.plusMillis(config.global.internalCommunicationTimeoutDuringInit.duration.toMillis * 3)
 
   private val ExchangeName = exchangeConfig.name
   private val PrimaryReserveAsset = exchangeConfig.reserveAssets.head
@@ -117,7 +115,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
         OrderBill.calcBalanceSheet(order, request.feeRate),
         exchangeConfig.usdEquivalentCoin,
         (_, tradePair) => publicData.ticker.get(tradePair).map(_.priceEstimate))
-      val maxAcceptableLoss = 0.03 + (request.feeRate * tradeRoomConfig.pioneerOrderValueUSD)
+      val maxAcceptableLoss = 0.03 + (request.feeRate * config.tradeRoom.pioneerOrderValueUSD)
       if (sumUSD < -maxAcceptableLoss) failed(s"unexpected loss of ${formatDecimal(sumUSD, 4)} USD") // more than 3 cent + fee loss is absolutely unacceptable
     }
   }
@@ -208,7 +206,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
     val realisticLimit = new OrderLimitChooser(
       publicData.orderBook.get(tradePair),
       publicData.ticker(tradePair)
-    ).determineRealisticOrderLimit(tradeSide, amountBaseAsset * 5.0, tradeRoomConfig.liquidityManager.txLimitAwayFromEdgeLimit).get
+    ).determineRealisticOrderLimit(tradeSide, amountBaseAsset * 5.0, config.liquidityManager.txLimitAwayFromEdgeLimit).get
 
     val limit = if (unrealisticGoodlimit) {
       tradeSide match {
@@ -224,7 +222,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
 
     log.debug(s"[$ExchangeName] pioneer order: ${orderRequest.shortDesc}")
 
-    implicit val timeout: Timeout = globalConfig.internalCommunicationTimeoutDuringInit
+    implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
     val orderRef = Await.result(
       (exchange ? NewLimitOrder(orderRequest)).mapTo[NewOrderAck],
       timeout.duration.plus(1.second))
@@ -235,7 +233,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
 
   def cancelPioneerOrder(o: PioneerOrder): Unit = {
     log.debug(s"[$ExchangeName] performing intended cancel of ${o.request.shortDesc}")
-    implicit val timeout: Timeout = globalConfig.internalCommunicationTimeoutDuringInit
+    implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
 
     val cancelOrderResult = Await.result(
       (exchange ? CancelOrder(o.ref)).mapTo[CancelOrderResult],
@@ -249,7 +247,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
   def submitFirstPioneerOrder(): Unit = {
     val balanceBeforeOrder: Iterable[CryptoValue] = accountData.wallet.liquidCryptoValues(exchangeConfig.usdEquivalentCoin, publicData.ticker)
     val tradePair = TradePair(SecondaryReserveAsset, PrimaryReserveAsset)
-    val amount = CryptoValue(exchangeConfig.usdEquivalentCoin, tradeRoomConfig.pioneerOrderValueUSD)
+    val amount = CryptoValue(exchangeConfig.usdEquivalentCoin, config.tradeRoom.pioneerOrderValueUSD)
       .convertTo(tradePair.baseAsset, publicData.ticker).amount
 
     pioneerOrder1.set(Some(
@@ -265,7 +263,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
   def submitSecondPioneerOrder(): Unit = {
     val balanceBeforeOrder = accountData.wallet.liquidCryptoValues(exchangeConfig.usdEquivalentCoin, publicData.ticker)
     val tradePair = TradePair(SecondaryReserveAsset, PrimaryReserveAsset)
-    val amount = CryptoValue(exchangeConfig.usdEquivalentCoin, tradeRoomConfig.pioneerOrderValueUSD)
+    val amount = CryptoValue(exchangeConfig.usdEquivalentCoin, config.tradeRoom.pioneerOrderValueUSD)
       .convertTo(tradePair.baseAsset, publicData.ticker).amount
 
     pioneerOrder2.set(Some(
@@ -279,7 +277,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
   }
 
   def submitBuyToCancelPioneerOrder(): Unit = {
-    val amountToBuy = CryptoValue(exchangeConfig.usdEquivalentCoin, tradeRoomConfig.pioneerOrderValueUSD)
+    val amountToBuy = CryptoValue(exchangeConfig.usdEquivalentCoin, config.tradeRoom.pioneerOrderValueUSD)
       .convertTo(SecondaryReserveAsset, publicData.ticker).amount
 
     pioneerOrder3.set(Some(
@@ -296,7 +294,7 @@ class PioneerOrderRunner(globalConfig: GlobalConfig,
   override def preStart(): Unit = {
     log.info(s"running pioneer order for $ExchangeName")
 
-    val maxWaitTime = globalConfig.internalCommunicationTimeoutDuringInit.duration
+    val maxWaitTime = config.global.internalCommunicationTimeoutDuringInit.duration
     val balanceUpdateMaxWaitTime: FiniteDuration = 5.seconds
     val InitSequence = new InitSequence(log, s"$ExchangeName  PioneerOrderRunner",
       List(

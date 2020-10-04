@@ -6,7 +6,7 @@ import java.util.concurrent.TimeUnit
 
 import akka.Done
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, PoisonPill, Props, Status}
-import akka.pattern.ask
+import akka.pattern.{ask, pipe}
 import akka.util.Timeout
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager.{CancelOrder, CancelOrderResult, NewLimitOrder, NewOrderAck}
@@ -22,7 +22,7 @@ import org.slf4j.LoggerFactory
 
 import scala.collection.concurrent.TrieMap
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
-import scala.concurrent.{Await, ExecutionContextExecutor, Future}
+import scala.concurrent.{ExecutionContextExecutor, Future}
 import scala.util.{Failure, Success}
 
 object TradeRoom {
@@ -78,6 +78,7 @@ object TradeRoom {
    */
   case class JoinTradeRoom(tradeRoom: ActorRef,
                            findOpenLiquidityTx: (LiquidityTx => Boolean) => Option[LiquidityTx],
+                           findFinishedLiquidityTx: (FinishedLiquidityTx => Boolean) => Option[FinishedLiquidityTx],
                            referenceTicker: () => collection.Map[TradePair, Ticker])
   case class TradeRoomJoined(exchange: String)
 
@@ -123,8 +124,8 @@ class TradeRoom(val config: Config,
   private var finishedOrderBundles: List[FinishedOrderBundle] = List()
   private var finishedLiquidityTxs: List[FinishedLiquidityTx] = List()
 
-  private val feeRates: Map[String, Double] = config.tradeRoom.exchanges.values.map(e => (e.name, e.feeRate)).toMap // TODO query from exchange
-  private val doNotTouchAssets: Map[String, Seq[Asset]] = config.tradeRoom.exchanges.values.map(e => (e.name, e.doNotTouchTheseAssets)).toMap
+  private val feeRates: Map[String, Double] = config.exchanges.values.map(e => (e.name, e.feeRate)).toMap // TODO query from exchange
+  private val doNotTouchAssets: Map[String, Seq[Asset]] = config.exchanges.values.map(e => (e.name, e.doNotTouchTheseAssets)).toMap
   private val tradeContext: TradeContext =
     TradeContext(
       tradePairs,
@@ -135,7 +136,7 @@ class TradeRoom(val config: Config,
       feeRates,
       doNotTouchAssets)
 
-  private val orderBundleSafetyGuard = new OrderBundleSafetyGuard(config.tradeRoom.orderBundleSafetyGuard, config.tradeRoom.exchanges, tradeContext, dataAge, activeOrderBundles)
+  private val orderBundleSafetyGuard = new OrderBundleSafetyGuard(config.tradeRoom.orderBundleSafetyGuard, config.exchanges, tradeContext, dataAge, activeOrderBundles)
 
   val houseKeepingSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(5.seconds, 3.seconds, self, HouseKeeping())
   val logScheduleRate: FiniteDuration = FiniteDuration(config.tradeRoom.statsReportInterval.toNanos, TimeUnit.NANOSECONDS)
@@ -185,14 +186,14 @@ class TradeRoom(val config: Config,
       .map(_.map(_.toOrderRef))
   }
 
-  def tryToPlaceLiquidityTransformationOrder(request: OrderRequest): Unit = {
-    if (shutdownInitiated) return
-    if (doNotTouchAssets(request.exchange).intersect(request.tradePair.involvedAssets).nonEmpty) throw new IllegalArgumentException
+  def tryToPlaceLiquidityTransformationOrder(request: OrderRequest): Future[Option[OrderRef]] = {
+    if (shutdownInitiated) return Future.successful(None)
+    if (doNotTouchAssets(request.exchange).intersect(request.tradePair.involvedAssets).nonEmpty) return Future.failed(new IllegalArgumentException)
 
     // this should not occur - but here is a last guard
     if (activeLiquidityTx.keys.exists(ref => ref.exchange == request.exchange && ref.tradePair == request.tradePair)) {
       log.warn(s"Ignoring liquidity tx because a similar one (same trade pair on same exchange) is still in place: $request")
-      return
+      return Future.successful(None)
     }
 
     val tradePattern = s"${request.exchange}-liquidityTx"
@@ -206,23 +207,24 @@ class TradeRoom(val config: Config,
         Set())
 
     implicit val timeout: Timeout = config.global.httpTimeout.plus(config.global.internalCommunicationTimeout.duration)
-    (exchanges(request.exchange) ? liquidityRequest).mapTo[Option[LiquidityLock]].onComplete {
+    (exchanges(request.exchange) ? liquidityRequest).mapTo[Option[LiquidityLock]].flatMap {
 
-      case Success(Some(lock)) =>
-        (exchanges(request.exchange) ? NewLimitOrder(request)).mapTo[NewOrderAck].onComplete {
-          case Success(newOrderAck) =>
-            val ref: OrderRef = newOrderAck.toOrderRef
-            activeLiquidityTx.update(ref, LiquidityTx(request, ref, lock, Instant.now))
-            log.debug(s"successfully placed liquidity tx order $newOrderAck")
-          case Failure(e) =>
-            log.error(s"failed to place new liquidity tx $request", e)
-        }
+      case Some(lock) => (exchanges(request.exchange) ? NewLimitOrder(request)).mapTo[NewOrderAck].map {
+        newOrderAck =>
+          val ref: OrderRef = newOrderAck.toOrderRef
+          activeLiquidityTx.update(ref, LiquidityTx(request, ref, lock, Instant.now))
+          log.debug(s"successfully placed liquidity tx order $newOrderAck")
+          Some(ref)
+      } recover {
+        case e: Exception =>
+          log.error(s"failed to place new liquidity tx $request", e)
+          exchanges(request.exchange) ? LiquidityLockClearance(lock.liquidityRequestId)
+          None
+      }
 
-      case Success(None) =>
-        log.debug(s"could not acquire lock for liquidit tx")
-
-      case Failure(e) =>
-        log.error(s"acquiring lock for liquidity tx $request failed", e)
+      case None =>
+        log.debug(s"could not acquire lock for liquidity tx")
+        Future.successful(None)
     }
   }
 
@@ -266,7 +268,7 @@ class TradeRoom(val config: Config,
 
     def logWalletOverview(): Unit = {
       for (w <- wallets.values) {
-        val walletOverview: String = w.toOverviewString(config.tradeRoom.exchanges(w.exchange).usdEquivalentCoin, tickers(w.exchange))
+        val walletOverview: String = w.toOverviewString(config.exchanges(w.exchange).usdEquivalentCoin, tickers(w.exchange))
         log.info(s"${Emoji.Robot}  $walletOverview")
       }
     }
@@ -276,7 +278,7 @@ class TradeRoom(val config: Config,
     }
 
     def logOrderGainStats(): Unit = {
-      val reportingUsdEquivalentCoin: Asset = config.tradeRoom.exchanges(config.tradeRoom.referenceTickerExchange).usdEquivalentCoin
+      val reportingUsdEquivalentCoin: Asset = config.exchanges(config.tradeRoom.referenceTickerExchange).usdEquivalentCoin
       val lastHourArbitrageSumUSD: Double =
         OrderBill.aggregateValues(
           finishedOrderBundles
@@ -355,8 +357,8 @@ class TradeRoom(val config: Config,
     val orders: Seq[Order] = bundle.ordersRefs.flatMap(activeOrder)
     val finishTime = orders.map(_.lastUpdateTime).max
 
-    val usdEquivalentCoin: Asset = config.tradeRoom.exchanges(config.tradeRoom.referenceTickerExchange).usdEquivalentCoin
-    val bill: OrderBill = OrderBill.calc(orders, referenceTicker, usdEquivalentCoin, config.tradeRoom.exchanges.map(e => (e._1, e._2.feeRate)))
+    val usdEquivalentCoin: Asset = config.exchanges(config.tradeRoom.referenceTickerExchange).usdEquivalentCoin
+    val bill: OrderBill = OrderBill.calc(orders, referenceTicker, usdEquivalentCoin, config.exchanges.map(e => (e._1, e._2.feeRate)))
     val finishedOrderBundle = FinishedOrderBundle(bundle, orders, finishTime, bill)
     this.synchronized {
       finishedOrderBundles = finishedOrderBundle :: finishedOrderBundles
@@ -383,7 +385,7 @@ class TradeRoom(val config: Config,
 
   def cleanupLiquidityTxOrder(tx: LiquidityTx): Unit = {
     val order: Order = activeOrder(tx.orderRef).get // must exist
-    val usdEquivalentCoin: Asset = config.tradeRoom.exchanges(order.exchange).usdEquivalentCoin
+    val usdEquivalentCoin: Asset = config.exchanges(order.exchange).usdEquivalentCoin
     val bill: OrderBill = OrderBill.calc(Seq(order), referenceTicker, usdEquivalentCoin, feeRates)
     val finishedLiquidityTx = FinishedLiquidityTx(tx, order, order.lastUpdateTime, bill)
     this.synchronized {
@@ -527,7 +529,7 @@ class TradeRoom(val config: Config,
   var exchangesJoined: Set[String] = Set()
 
   def startTraders(): Unit = {
-    traders = traders + ("FooTrader" -> context.actorOf(FooTrader.props(config.trader("foo-trader"), self, tradeContext), "FooTrader"))
+    traders = traders + ("FooTrader" -> context.actorOf(FooTrader.props(Config.trader("foo-trader"), self, tradeContext), "FooTrader"))
   }
 
   def onExchangeJoined(exchange: String): Unit = {
@@ -543,7 +545,11 @@ class TradeRoom(val config: Config,
     else log.info(s"${Emoji.DoYouEvenLiftBro}  Starting in production mode")
 
     for (exchange <- exchanges.values) {
-      exchange ! JoinTradeRoom(self, (f: LiquidityTx => Boolean) => activeLiquidityTx.values.find(f), () => referenceTicker)
+      exchange ! JoinTradeRoom(
+        self,
+        (f: LiquidityTx => Boolean) => activeLiquidityTx.values.find(f),
+        (f: FinishedLiquidityTx => Boolean) => finishedLiquidityTxs.find(f),
+        () => referenceTicker)
     }
   }
 
@@ -561,7 +567,7 @@ class TradeRoom(val config: Config,
     // messages from Exchanges
     case TradeRoomJoined(exchange)                  => onExchangeJoined(exchange)
     case bundle: OrderRequestBundle                 => tryToPlaceOrderBundle(bundle)
-    case LiquidityTransformationOrder(orderRequest) => tryToPlaceLiquidityTransformationOrder(orderRequest)
+    case LiquidityTransformationOrder(orderRequest) => tryToPlaceLiquidityTransformationOrder(orderRequest).pipeTo(sender())
     case t: OrderUpdateTrigger                      => onOrderUpdate(t)
     case c: CancelOrderResult                       => onCancelOrderResult(c)
     case LogStats()                                 => logStats()

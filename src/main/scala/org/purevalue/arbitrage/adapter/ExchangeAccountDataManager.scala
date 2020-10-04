@@ -11,7 +11,7 @@ import org.purevalue.arbitrage.traderoom.TradeRoom.OrderRef
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.{ExchangeAccountDataChannelInit, OrderUpdateTrigger, WalletUpdateTrigger}
 import org.purevalue.arbitrage.util.Util.formatDecimal
-import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig, TradeRoomConfig}
+import org.purevalue.arbitrage.{Config, ExchangeConfig}
 import org.slf4j.LoggerFactory
 
 import scala.collection._
@@ -91,7 +91,6 @@ case class ExchangeAccountData(wallet: Wallet,
                                activeOrders: concurrent.Map[OrderRef, Order])
 
 
-
 object ExchangeAccountDataManager {
   case class IncomingData(data: Seq[ExchangeAccountStreamData])
   case class Initialized()
@@ -103,18 +102,16 @@ object ExchangeAccountDataManager {
   }
   case class SimulatedData(dataset: ExchangeAccountStreamData)
 
-  def props(globalConfig: GlobalConfig,
+  def props(config: Config,
             exchangeConfig: ExchangeConfig,
-            tradeRoomConfig: TradeRoomConfig,
             exchange: ActorRef,
             exchangePublicDataInquirer: ActorRef,
             exchangeAccountDataChannelInit: ExchangeAccountDataChannelInit,
             accountData: ExchangeAccountData): Props =
-    Props(new ExchangeAccountDataManager(globalConfig, exchangeConfig, tradeRoomConfig, exchange, exchangePublicDataInquirer, exchangeAccountDataChannelInit, accountData))
+    Props(new ExchangeAccountDataManager(config: Config, exchangeConfig, exchange, exchangePublicDataInquirer, exchangeAccountDataChannelInit, accountData))
 }
-class ExchangeAccountDataManager(globalConfig: GlobalConfig,
+class ExchangeAccountDataManager(config: Config,
                                  exchangeConfig: ExchangeConfig,
-                                 tradeRoomConfig: TradeRoomConfig,
                                  exchange: ActorRef,
                                  exchangePublicDataInquirer: ActorRef,
                                  exchangeAccountDataChannelInit: ExchangeAccountDataChannelInit,
@@ -179,7 +176,7 @@ class ExchangeAccountDataManager(globalConfig: GlobalConfig,
   }
 
   def applySimulatedData(dataset: ExchangeAccountStreamData): Unit = {
-    if (!tradeRoomConfig.tradeSimulation) throw new RuntimeException
+    if (!config.tradeRoom.tradeSimulation) throw new RuntimeException
     log.trace(s"Applying simulation data ...")
     applyData(dataset)
   }
@@ -197,7 +194,7 @@ class ExchangeAccountDataManager(globalConfig: GlobalConfig,
   }
 
   override def preStart(): Unit = {
-    accountDataChannel = context.actorOf(exchangeAccountDataChannelInit(globalConfig, exchangeConfig, self, exchangePublicDataInquirer),
+    accountDataChannel = context.actorOf(exchangeAccountDataChannelInit(config.global, exchangeConfig, self, exchangePublicDataInquirer),
       s"${exchangeConfig.name}.AccountDataChannel")
   }
 

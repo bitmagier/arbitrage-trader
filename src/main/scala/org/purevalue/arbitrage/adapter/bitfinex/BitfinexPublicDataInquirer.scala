@@ -1,6 +1,6 @@
 package org.purevalue.arbitrage.adapter.bitfinex
 
-import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
+import akka.actor.{Actor, ActorSystem, Props, Status}
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.{GetBitfinexAssets, GetBitfinexTradePairs}
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.{GetTradePairs, TradePairs}

@@ -8,7 +8,7 @@ import org.purevalue.arbitrage.adapter.ExchangePublicDataManager._
 import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.ExchangePublicDataChannelInit
 import org.purevalue.arbitrage.util.Util.formatDecimal
-import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig, Main, TradeRoomConfig}
+import org.purevalue.arbitrage.{Config, ExchangeConfig, Main}
 import org.slf4j.LoggerFactory
 
 import scala.collection._
@@ -88,23 +88,21 @@ object ExchangePublicDataManager {
   case class Initialized()
   case class IncomingData(data: Seq[ExchangePublicStreamData])
 
-  def props(globalConfig: GlobalConfig,
+  def props(config: Config,
             exchangeConfig: ExchangeConfig,
-            tradeRoomConfig: TradeRoomConfig,
             tradePairs: Set[TradePair],
             exchangePublicDataInquirer: ActorRef,
             exchange: ActorRef,
             publicDataChannelProps: ExchangePublicDataChannelInit,
             publicData: ExchangePublicData): Props =
-    Props(new ExchangePublicDataManager(globalConfig, exchangeConfig, tradeRoomConfig, tradePairs, exchangePublicDataInquirer, exchange, publicDataChannelProps, publicData))
+    Props(new ExchangePublicDataManager(config, exchangeConfig, tradePairs, exchangePublicDataInquirer, exchange, publicDataChannelProps, publicData))
 }
 
 /**
  * Manages all sorts of public data streams at one exchange
  */
-case class ExchangePublicDataManager(globalConfig: GlobalConfig,
+case class ExchangePublicDataManager(config: Config,
                                      exchangeConfig: ExchangeConfig,
-                                     tradeRoomConfig: TradeRoomConfig,
                                      tradePairs: Set[TradePair],
                                      exchangePublicDataInquirer: ActorRef,
                                      exchange: ActorRef,
@@ -115,7 +113,7 @@ case class ExchangePublicDataManager(globalConfig: GlobalConfig,
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
   private var publicDataChannel: ActorRef = _
-  private val initStartDeadline: Instant = Instant.now.plus(tradeRoomConfig.dataManagerInitTimeout)
+  private val initStartDeadline: Instant = Instant.now.plus(config.tradeRoom.dataManagerInitTimeout)
   private val initCheckSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(1.seconds, 1.seconds, self, InitTimeoutCheck())
 
   private var tickerCompletelyInitialized: Boolean = false
@@ -190,7 +188,7 @@ case class ExchangePublicDataManager(globalConfig: GlobalConfig,
   }
 
   override def preStart(): Unit = {
-    publicDataChannel = context.actorOf(exchangePublicDataChannelProps(globalConfig, exchangeConfig, self, exchangePublicDataInquirer),
+    publicDataChannel = context.actorOf(exchangePublicDataChannelProps(config.global, exchangeConfig, self, exchangePublicDataInquirer),
       s"${exchangeConfig.name}-PublicDataChannel")
   }
 

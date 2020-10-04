@@ -1,53 +1,62 @@
 package org.purevalue.arbitrage.traderoom.exchange
 
+import java.time.Instant
 import java.util.{NoSuchElementException, UUID}
 
 import akka.actor.{Actor, ActorRef, Props}
+import akka.pattern.ask
+import akka.util.Timeout
 import org.purevalue.arbitrage.adapter.{Balance, ExchangePublicDataReadonly, Ticker}
-import org.purevalue.arbitrage.traderoom.TradeRoom.{LiquidityTransformationOrder, LiquidityTx}
-import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer.WorkingContext
-import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLock, OrderBookTooFlatException, UniqueDemand}
+import org.purevalue.arbitrage.traderoom.TradeRoom.{FinishedLiquidityTx, LiquidityTransformationOrder, LiquidityTx, OrderRef}
 import org.purevalue.arbitrage.traderoom._
+import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer.{Finished, RunWithWorkingContext}
+import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLock, OrderBookTooFlatException, UniqueDemand}
 import org.purevalue.arbitrage.util.Emoji
-import org.purevalue.arbitrage.{ExchangeConfig, LiquidityManagerConfig}
+import org.purevalue.arbitrage.{Config, ExchangeConfig, LiquidityManagerConfig}
 import org.slf4j.LoggerFactory
 
 import scala.collection.Map
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.{Await, Future}
 
 object LiquidityBalancer {
-  case class WorkingContext(balanceSnapshot: Map[Asset, Balance],
-                            liquidityDemand: Map[String, UniqueDemand],
-                            liquidityLocks: Map[UUID, LiquidityLock])
+  case class RunWithWorkingContext(balanceSnapshot: Map[Asset, Balance],
+                                   liquidityDemand: Map[String, UniqueDemand],
+                                   liquidityLocks: Map[UUID, LiquidityLock])
+  case class Finished()
 
-  def props(config: LiquidityManagerConfig,
+  def props(config: Config,
             exchangeConfig: ExchangeConfig,
             tradePairs: Set[TradePair],
             publicData: ExchangePublicDataReadonly,
             findOpenLiquidityTx: (LiquidityTx => Boolean) => Option[LiquidityTx],
+            findFinishedLiquidityTx: (FinishedLiquidityTx => Boolean) => Option[FinishedLiquidityTx],
             referenceTicker: () => collection.Map[TradePair, Ticker],
             tradeRoom: ActorRef
-           ): Props = Props(new LiquidityBalancer(config, exchangeConfig, tradePairs, publicData, findOpenLiquidityTx, referenceTicker, tradeRoom))
+           ): Props = Props(new LiquidityBalancer(config, exchangeConfig, tradePairs, publicData, findOpenLiquidityTx, findFinishedLiquidityTx, referenceTicker, tradeRoom))
 }
-class LiquidityBalancer(val config: LiquidityManagerConfig,
+class LiquidityBalancer(val config: Config,
                         val exchangeConfig: ExchangeConfig,
                         val tradePairs: Set[TradePair],
                         val publicData: ExchangePublicDataReadonly,
                         val findOpenLiquidityTx: (LiquidityTx => Boolean) => Option[LiquidityTx],
+                        val findFinishedLiquidityTx: (FinishedLiquidityTx => Boolean) => Option[FinishedLiquidityTx],
                         val referenceTicker: () => collection.Map[TradePair, Ticker],
                         val tradeRoom: ActorRef
                        ) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[LiquidityManager])
+  val c: LiquidityManagerConfig = config.liquidityManager
 
-  def determineUnlockedBalance(wc: WorkingContext): Map[Asset, Double] =
+  def determineUnlockedBalance(wc: RunWithWorkingContext): Map[Asset, Double] =
     LiquidityManager.determineUnlockedBalance(wc.balanceSnapshot, wc.liquidityLocks, exchangeConfig)
 
 
   def determineRealisticLimit(tradePair: TradePair, tradeSide: TradeSide, amountBaseAsset: Double): Double = {
-    LiquidityManager.determineRealisticLimit(publicData.orderBook, publicData.ticker, tradePair, tradeSide, amountBaseAsset, config.txLimitAwayFromEdgeLimit)
+    LiquidityManager.determineRealisticLimit(publicData.orderBook, publicData.ticker, tradePair, tradeSide, amountBaseAsset, c.txLimitAwayFromEdgeLimit)
   }
 
   def localExchangeRateRating(tradePair: TradePair, tradeSide: TradeSide, amountBaseAsset: Double): Double = {
-    LiquidityManager.localExchangeRateRating(publicData.orderBook, publicData.ticker, referenceTicker(), tradePair, tradeSide, amountBaseAsset, config.txLimitAwayFromEdgeLimit)
+    LiquidityManager.localExchangeRateRating(publicData.orderBook, publicData.ticker, referenceTicker(), tradePair, tradeSide, amountBaseAsset, c.txLimitAwayFromEdgeLimit)
   }
 
   /**
@@ -63,75 +72,66 @@ class LiquidityBalancer(val config: LiquidityManagerConfig,
    * Try to find the optimal order to place, for satisfying the demanded value from a reserve asset.
    * If that one was found and placed, the expected incoming value is returned, otherwise None is returned
    */
-  def tryToPlaceALiquidityProvidingOrder(demand: UniqueDemand, wc: WorkingContext): Either[CryptoValue, String] = {
+  def tryToFindAGoodLiquidityProvidingOrder(demand: UniqueDemand, wc: RunWithWorkingContext): Option[LiquidityTransformationOrder] = {
     val bestReserveAssets: Option[Tuple2[Asset, Double]] =
       exchangeConfig.reserveAssets
         .filterNot(demand.dontUseTheseReserveAssets.contains)
         .filter(e => tradePairs.contains(TradePair(demand.asset, e)))
         .filter(e => estimatedManufactingCosts(demand, e) < wc.balanceSnapshot.get(e).map(_.amountAvailable).getOrElse(0.0)) // enough balance available?
         .map(e => (e, localExchangeRateRating(TradePair(demand.asset, e), TradeSide.Buy, demand.amount))) // join local exchange rate rating
-        .filter(_._2 >= -config.maxAcceptableExchangeRateLossVersusReferenceTicker) // local rate acceptable?
+        .filter(_._2 >= -c.maxAcceptableExchangeRateLossVersusReferenceTicker) // local rate acceptable?
         .sortBy(e => e._2)
         .lastOption
 
     if (bestReserveAssets.isEmpty) {
-      Right(s"No good reserve asset found to satisfy $demand")
+      log.debug(s"No good reserve asset found to satisfy $demand")
+      None
     } else {
       if (log.isTraceEnabled) log.trace(s"Found best usable reserve asset: ${bestReserveAssets.get._1}, rating=${bestReserveAssets.get._2} for providing $demand")
-      val orderAmount: Double = demand.amount * (1.0 + config.providingLiquidityExtra)
+      val orderAmount: Double = demand.amount * (1.0 + c.providingLiquidityExtra)
       val tradePair = TradePair(demand.asset, bestReserveAssets.get._1)
       val limit = determineRealisticLimit(tradePair, TradeSide.Buy, orderAmount)
       val orderRequest = OrderRequest(UUID.randomUUID(), None, exchangeConfig.name, tradePair, TradeSide.Buy, exchangeConfig.feeRate, orderAmount, limit)
 
-      log.info(s"${Emoji.Robot}  placing liquidity providing order: ${orderRequest.shortDesc}")
-      tradeRoom ! LiquidityTransformationOrder(orderRequest)
-
-      Left(CryptoValue(tradePair.baseAsset, orderAmount))
+      log.info(s"${Emoji.LookingDown}  [${exchangeConfig.name}] Unable to provide liquidity demand: $demand")
+      Some(LiquidityTransformationOrder(orderRequest))
     }
   }
 
 
   // aim: free available liquidity shall be available to fulfill the sum of demand
-  def provideDemandedLiquidity(wc: WorkingContext): List[CryptoValue] = {
+  def provideDemandedLiquidity(wc: RunWithWorkingContext): Seq[UniqueDemand] = {
     val unlocked: Map[Asset, Double] = determineUnlockedBalance(wc)
-    val unsatisfiedDemand: Iterable[UniqueDemand] =
-      wc.liquidityDemand.values
-        .map(e =>
-          UniqueDemand(
-            e.tradePattern,
-            e.asset,
-            Math.max(0.0, e.amount - unlocked.getOrElse(e.asset, 0.0)),
-            e.dontUseTheseReserveAssets,
-            e.lastRequested)) // missing coins
-        .filter(_.amount != 0.0)
-
-    var incomingLiquidity: List[CryptoValue] = List()
-    for (d: UniqueDemand <- unsatisfiedDemand) {
-      tryToPlaceALiquidityProvidingOrder(d, wc) match {
-        case Right(unsuccessfulExplaination) => log.info(s"${Emoji.LookingDown}  [${exchangeConfig.name}] Unable to provide liquidity demand: $d. $unsuccessfulExplaination")
-        case Left(incoming) => incomingLiquidity = incoming :: incomingLiquidity
-      }
-    }
-    incomingLiquidity
+    // unsatisfied demand:
+    wc.liquidityDemand.values
+      .map(e =>
+        UniqueDemand(
+          e.tradePattern,
+          e.asset,
+          Math.max(0.0, e.amount - unlocked.getOrElse(e.asset, 0.0)),
+          e.dontUseTheseReserveAssets,
+          e.lastRequested)) // missing coins
+      .filter(_.amount != 0.0)
+      .toSeq
   }
 
   def liquidityConversionPossibleBetween(a: Asset, b: Asset): Boolean = {
     tradePairs.contains(TradePair(a, b)) || tradePairs.contains(TradePair(b, a))
   }
 
-  def rebalanceReserveAssets(pendingIncomingReserveLiquidity: List[CryptoValue],
-                             wc: WorkingContext): Unit = {
+  def rebalanceReserveAssets(pendingIncomingReserveLiquidity: Seq[CryptoValue],
+                             wc: RunWithWorkingContext): Seq[LiquidityTransformationOrder] = {
     if (log.isTraceEnabled) log.trace(s"re-balancing reserve asset wallet:${wc.balanceSnapshot} with pending incoming $pendingIncomingReserveLiquidity")
-    val currentReserveAssetsBalance: List[CryptoValue] = wc.balanceSnapshot
+    val currentReserveAssetsBalance: Seq[CryptoValue] = wc.balanceSnapshot
       .filter(e => exchangeConfig.reserveAssets.contains(e._1))
       .map(e => CryptoValue(e._1, e._2.amountAvailable))
-      .toList :::
+      .toSeq ++
       exchangeConfig.reserveAssets // add zero balance for reserve assets not contained in wallet
         .filterNot(wc.balanceSnapshot.keySet.contains)
         .map(e => CryptoValue(e, 0.0)) // so consider not delivered, empty balances too
 
     val virtualReserveAssetsAggregated: Iterable[CryptoValue] =
-      (pendingIncomingReserveLiquidity ::: currentReserveAssetsBalance)
+      (pendingIncomingReserveLiquidity ++ currentReserveAssetsBalance)
         .groupBy(_.asset)
         .map(e => CryptoValue(e._1, e._2.map(_.amount).sum))
 
@@ -146,17 +146,17 @@ class LiquidityBalancer(val config: LiquidityManagerConfig,
     var liquiditySinkBuckets: Map[Asset, Int] = virtualReserveAssetsAggregated
       .filter(_.canConvertTo(exchangeConfig.usdEquivalentCoin, publicData.ticker))
       .map(e => (e.asset, e.convertTo(exchangeConfig.usdEquivalentCoin, referenceTicker()).amount)) // amount in USD
-      .filter(_._2 < config.minimumKeepReserveLiquidityPerAssetInUSD) // below min keep amount?
-      .map(e => (e._1, ((config.minimumKeepReserveLiquidityPerAssetInUSD - e._2) / config.rebalanceTxGranularityInUSD).ceil.toInt)) // buckets needed
+      .filter(_._2 < c.minimumKeepReserveLiquidityPerAssetInUSD) // below min keep amount?
+      .map(e => (e._1, ((c.minimumKeepReserveLiquidityPerAssetInUSD - e._2) / c.rebalanceTxGranularityInUSD).ceil.toInt)) // buckets needed
       .toMap
     // all reserve assets, that have extra liquidity to distribute : Map(Asset -> liquidity buckets available for distribution)
     var liquiditySourcesBuckets: Map[Asset, Int] = currentReserveAssetsBalance // we can take coin only from currently really existing balance
       .filter(_.canConvertTo(exchangeConfig.usdEquivalentCoin, publicData.ticker))
       .map(e => (e.asset, e.convertTo(exchangeConfig.usdEquivalentCoin, referenceTicker()).amount)) // amount in USD
       // having more than the minimum limit + 150% tx-granularity (to avoid useless there-and-back transfers because of exchange rate fluctuations)
-      .filter(_._2 >= config.minimumKeepReserveLiquidityPerAssetInUSD + config.rebalanceTxGranularityInUSD * 1.5)
+      .filter(_._2 >= c.minimumKeepReserveLiquidityPerAssetInUSD + c.rebalanceTxGranularityInUSD * 1.5)
       // keep minimum reserve liquidity + 50% bucket value (we don't sell our last half-full extra bucket ^^^)
-      .map(e => (e._1, ((e._2 - config.minimumKeepReserveLiquidityPerAssetInUSD - config.rebalanceTxGranularityInUSD * 0.5) / config.rebalanceTxGranularityInUSD).floor.toInt)) // buckets to provide
+      .map(e => (e._1, ((e._2 - c.minimumKeepReserveLiquidityPerAssetInUSD - c.rebalanceTxGranularityInUSD * 0.5) / c.rebalanceTxGranularityInUSD).floor.toInt)) // buckets to provide
       .toMap
 
     def removeBuckets(liquidityBuckets: Map[Asset, Int], asset: Asset, numBuckets: Int): Map[Asset, Int] = {
@@ -167,7 +167,7 @@ class LiquidityBalancer(val config: LiquidityManagerConfig,
       }.filterNot(_._2 == 0)
     }
 
-    var liquidityTransactions: List[OrderRequest] = Nil
+    var liquidityTxOrders: List[OrderRequest] = Nil
 
     // try to satisfy all liquiditySinks using available sources
     // if multiple sources are available, we take from least priority reserve assets first
@@ -213,7 +213,7 @@ class LiquidityBalancer(val config: LiquidityManagerConfig,
             case tp if publicData.ticker.contains(tp) =>
               val tradePair = tp
               val tradeSide = TradeSide.Buy
-              val baseAssetBucketValue: Double = CryptoValue(exchangeConfig.usdEquivalentCoin, config.rebalanceTxGranularityInUSD)
+              val baseAssetBucketValue: Double = CryptoValue(exchangeConfig.usdEquivalentCoin, c.rebalanceTxGranularityInUSD)
                 .convertTo(tradePair.baseAsset, publicData.ticker).amount
 
               val orderAmountBaseAsset = bucketsToTransfer * baseAssetBucketValue
@@ -223,7 +223,7 @@ class LiquidityBalancer(val config: LiquidityManagerConfig,
             case tp if publicData.ticker.contains(tp.reverse) =>
               val tradePair = tp.reverse
               val tradeSide = TradeSide.Sell
-              val quoteAssetBucketValue: Double = CryptoValue(exchangeConfig.usdEquivalentCoin, config.rebalanceTxGranularityInUSD)
+              val quoteAssetBucketValue: Double = CryptoValue(exchangeConfig.usdEquivalentCoin, c.rebalanceTxGranularityInUSD)
                 .convertTo(tradePair.quoteAsset, publicData.ticker).amount
 
               val amountBaseAssetEstimate = bucketsToTransfer * quoteAssetBucketValue / publicData.ticker(tradePair).priceEstimate
@@ -234,16 +234,15 @@ class LiquidityBalancer(val config: LiquidityManagerConfig,
             case _ => throw new RuntimeException(s"${exchangeConfig.name}: No local tradepair found to convert $sourceAsset to $sinkAsset")
           }
 
-        liquidityTransactions = tx :: liquidityTransactions
+        liquidityTxOrders = tx :: liquidityTxOrders
 
         liquiditySinkBuckets = removeBuckets(liquiditySinkBuckets, sinkAsset, bucketsToTransfer)
         liquiditySourcesBuckets = removeBuckets(liquiditySourcesBuckets, sourceAsset.get, bucketsToTransfer)
       }
     }
 
-    if (log.isTraceEnabled) log.trace(s"Re-balance (unsquashed) tx orders:\n${liquidityTransactions.mkString("\n")}\n Remaining sinks: $liquiditySinkBuckets")
     // merge possible split orders towards primary reserve asset
-    liquidityTransactions = liquidityTransactions
+    liquidityTxOrders = liquidityTxOrders
       .groupBy(e => (e.tradePair, e.tradeSide))
       .map { e =>
         val f = e._2.head
@@ -251,10 +250,7 @@ class LiquidityBalancer(val config: LiquidityManagerConfig,
         OrderRequest(f.id, f.orderBundleId, f.exchange, f.tradePair, f.tradeSide, f.feeRate, amount, f.limit)
       }.toList
 
-    liquidityTransactions.foreach { o =>
-        log.debug(s"${Emoji.ThreeBitcoin}  [${exchangeConfig.name}] re-balance reserve assets with: $o")
-        tradeRoom ! LiquidityTransformationOrder(o)
-      }
+    liquidityTxOrders.map(LiquidityTransformationOrder)
   }
 
   def convertBackLiquidityTxActive(source: Asset): Boolean = {
@@ -268,7 +264,7 @@ class LiquidityBalancer(val config: LiquidityManagerConfig,
       .isDefined
   }
 
-  def reserveAssetsWithLowLiquidity(wc: WorkingContext): Set[Asset] = {
+  def reserveAssetsWithLowLiquidity(wc: RunWithWorkingContext): Set[Asset] = {
     try {
       val fromWallet: Set[Asset] =
         wc.balanceSnapshot
@@ -277,7 +273,7 @@ class LiquidityBalancer(val config: LiquidityManagerConfig,
           .filterNot(_._1.isFiat)
           .filter(_._1.canConvertTo(exchangeConfig.usdEquivalentCoin, publicData.ticker))
           .map(e => (e, CryptoValue(e._1, e._2.amountAvailable).convertTo(exchangeConfig.usdEquivalentCoin, publicData.ticker))) // + USD value - we expect we can convert a reserve asset to USD-equivalent-coin always
-          .filter(e => e._2.amount < config.minimumKeepReserveLiquidityPerAssetInUSD) // value below minimum asset liquidity value
+          .filter(e => e._2.amount < c.minimumKeepReserveLiquidityPerAssetInUSD) // value below minimum asset liquidity value
           .map(_._1._1)
           .toSet
 
@@ -295,19 +291,19 @@ class LiquidityBalancer(val config: LiquidityManagerConfig,
   //    - [non-loss-asset-filter] Filtering acceptable exchange-rates based on ticker on that exchange compared to a [ReferenceTicker]-value
   //    - [fill-up] Try to reach minimum configured balance of each reserve-assets in their order of preference
   //    - [play safe] Remaining value goes to first (highest prio) reserve-asset (having a acceptable exchange-rate)
-  def convertBackToReserveAsset(coins: CryptoValue, wc: WorkingContext): Option[CryptoValue] = {
+  def convertBackToReserveAsset(cryptoValue: CryptoValue, wc: RunWithWorkingContext): Option[LiquidityTransformationOrder] = {
     val possibleReserveAssets: List[Tuple2[Asset, Double]] =
       exchangeConfig.reserveAssets
-        .filter(e => publicData.ticker.contains(TradePair(coins.asset, e))) // filter available TradePairs only (with a local ticker)
-        .map(e => (e, localExchangeRateRating(TradePair(coins.asset, e), TradeSide.Sell, coins.amount))) // add local exchange rate rating
+        .filter(e => publicData.ticker.contains(TradePair(cryptoValue.asset, e))) // filter available TradePairs only (with a local ticker)
+        .map(e => (e, localExchangeRateRating(TradePair(cryptoValue.asset, e), TradeSide.Sell, cryptoValue.amount))) // add local exchange rate rating
 
     val availableReserveAssets: List[Tuple2[Asset, Double]] =
       possibleReserveAssets
-        .filter(_._2 >= -config.maxAcceptableExchangeRateLossVersusReferenceTicker) // [non-loss-asset-filter]
+        .filter(_._2 >= -c.maxAcceptableExchangeRateLossVersusReferenceTicker) // [non-loss-asset-filter]
 
     if (availableReserveAssets.isEmpty) {
-      if (possibleReserveAssets.isEmpty) log.debug(s"No reserve asset available to convert back $coins")
-      else log.debug(s"Currently no reserve asset available with a good exchange-rate to convert back $coins. " +
+      if (possibleReserveAssets.isEmpty) log.debug(s"No reserve asset available to convert back $cryptoValue")
+      else log.debug(s"Currently no reserve asset available with a good exchange-rate to convert back $cryptoValue. " +
         s"Available assets/ticker-rating: $availableReserveAssets")
       return None
     }
@@ -321,16 +317,16 @@ class LiquidityBalancer(val config: LiquidityManagerConfig,
     val reserveAssetsNeedFillUp: Set[Asset] = reserveAssetsWithLowLiquidity(wc)
     var destinationReserveAsset: Option[Asset] = bestAvailableReserveAssets.find(reserveAssetsNeedFillUp.contains) // [fill-up]
     if (destinationReserveAsset.isDefined) {
-      log.info(s"${Emoji.ThreeBitcoin}  [${exchangeConfig.name}] transferring $coins back to reserve asset ${destinationReserveAsset.get} [fill-up]")
+      log.info(s"${Emoji.ThreeBitcoin}  [${exchangeConfig.name}] transferring $cryptoValue back to reserve asset ${destinationReserveAsset.get} [fill-up]")
     }
 
     if (destinationReserveAsset.isEmpty) {
       destinationReserveAsset = Some(availableReserveAssets.head._1) // [play safe]
-      log.info(s"${Emoji.ThreeBitcoin}  [${exchangeConfig.name}] transferring $coins back to reserve asset ${destinationReserveAsset.get} [primary sink]")
+      log.info(s"${Emoji.ThreeBitcoin}  [${exchangeConfig.name}] transferring $cryptoValue back to reserve asset ${destinationReserveAsset.get} [primary sink]")
     }
 
-    val tradePair = TradePair(coins.asset, destinationReserveAsset.get)
-    val limit: Double = determineRealisticLimit(tradePair, TradeSide.Sell, coins.amount)
+    val tradePair = TradePair(cryptoValue.asset, destinationReserveAsset.get)
+    val limit: Double = determineRealisticLimit(tradePair, TradeSide.Sell, cryptoValue.amount)
     val orderRequest = OrderRequest(
       UUID.randomUUID(),
       None,
@@ -338,17 +334,13 @@ class LiquidityBalancer(val config: LiquidityManagerConfig,
       tradePair,
       TradeSide.Sell,
       exchangeConfig.feeRate,
-      coins.amount,
+      cryptoValue.amount,
       limit
     )
-
-    tradeRoom ! LiquidityTransformationOrder(orderRequest)
-
-    Some(CryptoValue(destinationReserveAsset.get, limit * coins.amount))
+    Some(LiquidityTransformationOrder(orderRequest))
   }
 
-
-  def convertBackNotNeededNoneReserveAssetLiquidity(wc: WorkingContext): List[CryptoValue] = {
+  def convertBackNotNeededNoneReserveAssetLiquidity(wc: RunWithWorkingContext): Seq[LiquidityTransformationOrder] = {
     val freeUnusedNoneReserveAssetLiquidity: Map[Asset, Double] =
       determineUnlockedBalance(wc)
         .filterNot(e => exchangeConfig.reserveAssets.contains(e._1)) // only select non-reserve-assets
@@ -365,24 +357,58 @@ class LiquidityBalancer(val config: LiquidityManagerConfig,
         .filter(_._2 > 0.0) // remove empty values
         .filter(_._1.canConvertTo(exchangeConfig.usdEquivalentCoin, publicData.ticker))
         .map(e => (e._1, e._2, CryptoValue(e._1, e._2).convertTo(exchangeConfig.usdEquivalentCoin, publicData.ticker))) // join USDT value
-        .filter(e => e._3.amount >= config.dustLevelInUSD) // ignore values below the dust level
+        .filter(e => e._3.amount >= c.dustLevelInUSD) // ignore values below the dust level
         .map(e => (e._1, e._2))
         .toMap
 
-    var incomingLiquidity: List[CryptoValue] = List()
-    for (f <- freeUnusedNoneReserveAssetLiquidity) {
-      incomingLiquidity = convertBackToReserveAsset(CryptoValue(f._1, f._2), wc).toList ::: incomingLiquidity
-    }
-    incomingLiquidity
+    freeUnusedNoneReserveAssetLiquidity.flatMap { f =>
+      convertBackToReserveAsset(CryptoValue(f._1, f._2), wc)
+    }.toSeq
   }
 
 
-  def balanceLiquidity(wc: WorkingContext): Unit = {
+  def unfinishedOrders(orderRefs: Seq[OrderRef]): Seq[OrderRef] = {
+    orderRefs.filterNot(e => findFinishedLiquidityTx(_.finishedOrder.ref == e).isDefined)
+  }
+
+  def balanceLiquidity(wc: RunWithWorkingContext): Unit = {
+    val orderFinishDeadline = Instant.now.plus(config.tradeRoom.maxOrderLifetime.multipliedBy(2))
     try {
-      val demanded: List[CryptoValue] = provideDemandedLiquidity(wc)
-      val incomingReserveLiquidity = convertBackNotNeededNoneReserveAssetLiquidity(wc)
-      val totalIncomingReserveLiquidity = incomingReserveLiquidity ::: demanded.filter(e => exchangeConfig.reserveAssets.contains(e.asset))
-      rebalanceReserveAssets(totalIncomingReserveLiquidity, wc)
+      val unsatisfiedDemand: Seq[UniqueDemand] = provideDemandedLiquidity(wc)
+      val unsatisfiedDemandOrders: Seq[LiquidityTransformationOrder] = unsatisfiedDemand.flatMap { d =>
+        tryToFindAGoodLiquidityProvidingOrder(d, wc)
+      }
+
+      val incomingReserveLiquidityOrders: Seq[LiquidityTransformationOrder] = convertBackNotNeededNoneReserveAssetLiquidity(wc)
+
+      val totalIncomingReserveLiquidity = (incomingReserveLiquidityOrders ++ unsatisfiedDemandOrders)
+        .map(_.orderRequest.calcIncomingLiquidity)
+        .map(_.cryptoValue)
+        .filter(e => exchangeConfig.reserveAssets.contains(e.asset))
+
+      val rebalanceReserveAssetsOrders = rebalanceReserveAssets(totalIncomingReserveLiquidity, wc)
+
+      implicit val timeout: Timeout = config.global.internalCommunicationTimeout
+      var futureOrderRefs: List[Future[Option[OrderRef]]] = Nil
+      try {
+        for (liquidityTxOrder <- unsatisfiedDemandOrders ++ incomingReserveLiquidityOrders ++ rebalanceReserveAssetsOrders) {
+          futureOrderRefs = (tradeRoom ? liquidityTxOrder).mapTo[Option[OrderRef]] :: futureOrderRefs
+        }
+      } catch {
+        case e: Exception => log.error("Error while placing liquidity tx orders", e)
+      }
+
+      val orderRefs: Seq[OrderRef] = Await.result(Future.sequence(futureOrderRefs), timeout.duration).flatten
+      while (unfinishedOrders(orderRefs).nonEmpty && Instant.now.isBefore(orderFinishDeadline)) {
+        Thread.sleep(200)
+      }
+      val stillUnfinished = unfinishedOrders(orderRefs)
+      if (stillUnfinished.nonEmpty) {
+        throw new RuntimeException(s"Not all liquidity tx orders did finish. Still unfinished: [$stillUnfinished]") // should not happen, because TradeRoom/Exchange cleanup unfinsihed orders by themself!
+      } else {
+        log.debug(s"all ${orderRefs.size} liquidity transaction(s) finished")
+        sender() ! Finished()
+      }
     } catch {
       case e: OrderBookTooFlatException =>
         log.warn(s"[to be improved] [${exchangeConfig.name}] Cannot perform liquidity housekeeping because the order book of tradepair ${e.tradePair} was too flat")
@@ -390,6 +416,6 @@ class LiquidityBalancer(val config: LiquidityManagerConfig,
   }
 
   override def receive: Receive = {
-    case wc: WorkingContext => balanceLiquidity(wc)
+    case wc: RunWithWorkingContext => balanceLiquidity(wc)
   }
 }

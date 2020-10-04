@@ -1,6 +1,6 @@
 package org.purevalue.arbitrage.adapter.binance
 
-import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
+import akka.actor.{Actor, ActorSystem, Props, Status}
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer._
 import org.purevalue.arbitrage.adapter.{Ask, Bid}

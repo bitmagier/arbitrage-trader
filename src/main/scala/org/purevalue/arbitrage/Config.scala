@@ -86,10 +86,9 @@ case class TradeRoomConfig(tradeSimulation: Boolean,
                            dataManagerInitTimeout: Duration,
                            statsReportInterval: Duration,
                            orderBundleSafetyGuard: OrderBundleSafetyGuardConfig,
-                           liquidityManager: LiquidityManagerConfig,
-                           exchanges: Map[String, ExchangeConfig]) {
+                           activeExchanges: List[String]) {
   if (pioneerOrderValueUSD > 100.0) throw new IllegalArgumentException("pioneer order value is unnecessary big")
-  if (!exchanges.contains(referenceTickerExchange)) throw new IllegalArgumentException("reference-ticker-exchange not in list of active exchanges")
+  if (!activeExchanges.contains(referenceTickerExchange)) throw new IllegalArgumentException("reference-ticker-exchange not in list of active exchanges")
 }
 object TradeRoomConfig {
   def apply(c: com.typesafe.config.Config): TradeRoomConfig = {
@@ -102,8 +101,7 @@ object TradeRoomConfig {
       c.getDuration("data-manager-init-timeout"),
       c.getDuration("stats-report-interval"),
       OrderBundleSafetyGuardConfig(c.getConfig("order-bundle-safety-guard")),
-      LiquidityManagerConfig(c.getConfig("liquidity-manager")),
-      c.getStringList("active-exchanges").asScala.map(e => e -> ExchangeConfig(e, c.getConfig(s"exchange.$e"))).toMap
+      c.getStringList("active-exchanges").asScala.toList
     )
   }
 }
@@ -131,28 +129,31 @@ object LiquidityManagerConfig {
 
 case class GlobalConfig(httpTimeout: FiniteDuration,
                         internalCommunicationTimeout: Timeout,
-                        internalCommunicationTimeoutDuringInit: Timeout,
-                        gracefulShutdownTimeout: Duration)
+                        internalCommunicationTimeoutDuringInit: Timeout)
 object GlobalConfig {
   def apply(c: com.typesafe.config.Config): GlobalConfig = GlobalConfig(
     FiniteDuration(c.getDuration("http-timeout").toMillis, TimeUnit.MILLISECONDS),
     Timeout.create(c.getDuration("internal-communication-timeout")),
-    Timeout.create(c.getDuration("internal-communication-timeout-during-init")),
-    c.getDuration("graceful-shutdown-timeout")
+    Timeout.create(c.getDuration("internal-communication-timeout-during-init"))
   )
 }
 
-case class Config(c: com.typesafe.config.Config,
-                  global: GlobalConfig,
-                  tradeRoom: TradeRoomConfig) {
-  def trader(name: String): com.typesafe.config.Config = c.getConfig(s"trader.$name")
+case class Config(global: GlobalConfig,
+                  tradeRoom: TradeRoomConfig,
+                  exchanges: Map[String, ExchangeConfig],
+                  liquidityManager: LiquidityManagerConfig) {
 }
 object Config {
+  private val c = ConfigFactory.load()
+
   def load(): Config = {
-    val c = ConfigFactory.load()
     val globalConfig = GlobalConfig(c.getConfig("global"))
     val tradeRoom = TradeRoomConfig(c.getConfig("trade-room"))
-    Config(c, globalConfig, tradeRoom)
+    val exchanges: Map[String, ExchangeConfig] = tradeRoom.activeExchanges
+      .map(e => e -> ExchangeConfig(e, c.getConfig(s"exchange.$e"))).toMap
+    val liquidityManager = LiquidityManagerConfig(c.getConfig("liquidity-manager"))
+    Config(globalConfig, tradeRoom, exchanges, liquidityManager)
   }
-}
 
+  def trader(name: String): com.typesafe.config.Config = c.getConfig(s"trader.$name")
+}

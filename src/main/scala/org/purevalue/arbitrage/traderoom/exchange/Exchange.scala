@@ -39,19 +39,17 @@ object Exchange {
   type ExchangeAccountDataChannelInit = Function4[GlobalConfig, ExchangeConfig, ActorRef, ActorRef, Props]
 
   def props(exchangeName: String,
+            config: Config,
             exchangeConfig: ExchangeConfig,
-            globalConfig: GlobalConfig,
-            tradeRoomConfig: TradeRoomConfig,
             initStuff: ExchangeInitStuff,
             publicData: ExchangePublicData,
             accountData: ExchangeAccountData): Props =
-    Props(new Exchange(exchangeName, exchangeConfig, globalConfig, tradeRoomConfig, initStuff, publicData, accountData))
+    Props(new Exchange(exchangeName, config, exchangeConfig, initStuff, publicData, accountData))
 }
 
 case class Exchange(exchangeName: String,
+                    config: Config,
                     exchangeConfig: ExchangeConfig,
-                    globalConfig: GlobalConfig,
-                    tradeRoomConfig: TradeRoomConfig,
                     initStuff: ExchangeInitStuff,
                     publicData: ExchangePublicData,
                     accountData: ExchangeAccountData
@@ -65,7 +63,7 @@ case class Exchange(exchangeName: String,
   var tradeRoom: Option[ActorRef] = None
 
   var shutdownInitiated: Boolean = false
-  val tradeSimulationMode: Boolean = tradeRoomConfig.tradeSimulation
+  val tradeSimulationMode: Boolean = config.tradeRoom.tradeSimulation
 
   var publicDataInquirer: ActorRef = _
   var liquidityManager: ActorRef = _
@@ -79,7 +77,7 @@ case class Exchange(exchangeName: String,
 
   def startPublicDataManager(): Unit = {
     publicDataManager = context.actorOf(
-      ExchangePublicDataManager.props(globalConfig, exchangeConfig, tradeRoomConfig, tradePairs, publicDataInquirer, self, initStuff.exchangePublicDataChannelProps, publicData),
+      ExchangePublicDataManager.props(config, exchangeConfig, tradePairs, publicDataInquirer, self, initStuff.exchangePublicDataChannelProps, publicData),
       s"ExchangePublicDataManager-$exchangeName")
   }
 
@@ -90,7 +88,15 @@ case class Exchange(exchangeName: String,
   def initLiquidityManager(j: JoinTradeRoom): Unit = {
     liquidityManager = context.actorOf(
       LiquidityManager.props(
-        tradeRoomConfig.liquidityManager, exchangeConfig, tradePairs, publicData.readonly, accountData.wallet, j.tradeRoom, j.findOpenLiquidityTx, j.referenceTicker),
+        config,
+        exchangeConfig,
+        tradePairs,
+        publicData.readonly,
+        accountData.wallet,
+        j.tradeRoom,
+        j.findOpenLiquidityTx,
+        j.findFinishedLiquidityTx,
+        j.referenceTicker),
       s"LiquidityManager-$exchangeName"
     )
   }
@@ -99,23 +105,23 @@ case class Exchange(exchangeName: String,
 
     def balanceSufficient: Boolean =
       accountData.wallet.balance.contains(exchangeConfig.usdEquivalentCoin) &&
-        accountData.wallet.balance(exchangeConfig.usdEquivalentCoin).amountAvailable >= tradeRoomConfig.pioneerOrderValueUSD &&
-        accountData.wallet.liquidCryptoValueSum(exchangeConfig.usdEquivalentCoin, publicData.ticker).amount >= tradeRoomConfig.liquidityManager.minimumKeepReserveLiquidityPerAssetInUSD
+        accountData.wallet.balance(exchangeConfig.usdEquivalentCoin).amountAvailable >= config.tradeRoom.pioneerOrderValueUSD &&
+        accountData.wallet.liquidCryptoValueSum(exchangeConfig.usdEquivalentCoin, publicData.ticker).amount >= config.liquidityManager.minimumKeepReserveLiquidityPerAssetInUSD
 
-    val minRequiredBalance: Double = tradeRoomConfig.liquidityManager.minimumKeepReserveLiquidityPerAssetInUSD
+    val minRequiredBalance: Double = config.liquidityManager.minimumKeepReserveLiquidityPerAssetInUSD
 
     if (!balanceSufficient) {
       throw new RuntimeException(s"Insufficient balance for trading on $exchangeName. " +
-        s"Expectation is to have at least ${tradeRoomConfig.pioneerOrderValueUSD} ${exchangeConfig.usdEquivalentCoin.officialSymbol} for the pioneer order " +
+        s"Expectation is to have at least ${config.tradeRoom.pioneerOrderValueUSD} ${exchangeConfig.usdEquivalentCoin.officialSymbol} for the pioneer order " +
         s"and a cumulated amount of at least $minRequiredBalance USD available for trading. " +
         s"Wallet:\n${accountData.wallet.balance.values.filter(_.amountAvailable > 0.0).mkString("\n")}")
     }
   }
 
   def startPublicDataInquirer(): Unit = {
-    publicDataInquirer = context.actorOf(initStuff.exchangePublicDataInquirerProps(globalConfig, exchangeConfig), s"PublicDataInquirer-$exchangeName")
+    publicDataInquirer = context.actorOf(initStuff.exchangePublicDataInquirerProps(config.global, exchangeConfig), s"PublicDataInquirer-$exchangeName")
 
-    implicit val timeout: Timeout = globalConfig.internalCommunicationTimeoutDuringInit
+    implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
     tradePairs = Await.result(
       (publicDataInquirer ? GetTradePairs()).mapTo[TradePairs].map(_.value),
       timeout.duration.plus(500.millis))
@@ -130,9 +136,8 @@ case class Exchange(exchangeName: String,
     } else {
       accountDataManager = context.actorOf(
         ExchangeAccountDataManager.props(
-          globalConfig,
+          config,
           exchangeConfig,
-          tradeRoomConfig,
           self,
           publicDataInquirer,
           initStuff.exchangeAccountDataChannelProps,
@@ -146,8 +151,7 @@ case class Exchange(exchangeName: String,
 
   def initiatePioneerOrders(): Unit = {
     pioneerOrderRunner = context.actorOf(PioneerOrderRunner.props(
-      globalConfig,
-      tradeRoomConfig,
+      config,
       exchangeConfig,
       self,
       accountData,
@@ -175,8 +179,8 @@ case class Exchange(exchangeName: String,
 
   def startStreaming(): Unit = {
     val sendStreamingStartedResponseTo = sender()
-    val maxWaitTime = globalConfig.internalCommunicationTimeoutDuringInit.duration
-    val pioneerOrderMaxWaitTime: FiniteDuration = maxWaitTime.plus(FiniteDuration(tradeRoomConfig.maxOrderLifetime.toMillis, TimeUnit.MILLISECONDS))
+    val maxWaitTime = config.global.internalCommunicationTimeoutDuringInit.duration
+    val pioneerOrderMaxWaitTime: FiniteDuration = maxWaitTime.plus(FiniteDuration(config.tradeRoom.maxOrderLifetime.toMillis, TimeUnit.MILLISECONDS))
     val initSequence = new InitSequence(
       log,
       exchangeName,
@@ -264,7 +268,7 @@ case class Exchange(exchangeName: String,
    */
   def stalePublicDataWatch(): Unit = {
     val lastSeen: Instant = (publicData.age.heartbeatTS.toSeq ++ publicData.age.tickerTS.toSeq ++ publicData.age.orderBookTS.toSeq).max
-    if (Duration.between(lastSeen, Instant.now).compareTo(tradeRoomConfig.restarExchangeWhenDataStreamIsOlderThan) > 0) {
+    if (Duration.between(lastSeen, Instant.now).compareTo(config.tradeRoom.restarExchangeWhenDataStreamIsOlderThan) > 0) {
       log.warn(s"${Emoji.Robot}  Killing Exchange actor ($exchangeName) because of outdated ticker data")
       self ! Kill
     }

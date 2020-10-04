@@ -112,7 +112,7 @@ class TradeRoomInitCoordinator(val config: Config,
       eTradePairs
         .filterNot(_._2.involvedAssets.exists(_.isFiat)) // we talk about non-FIAT tradepairs only here
         .map(_._2.baseAsset) // set of candidate assets
-        .filterNot(e => config.tradeRoom.exchanges.values.exists(_.reserveAssets.contains(e))) // don't select reserve assets
+        .filterNot(e => config.exchanges.values.exists(_.reserveAssets.contains(e))) // don't select reserve assets
         .filterNot(a =>
           eTradePairs
             .filter(_._2.baseAsset == a) // all connected tradepairs X -> ...
@@ -129,9 +129,9 @@ class TradeRoomInitCoordinator(val config: Config,
     for (asset <- cryptoAssetsToRemove) {
       val tradePairsToDrop: Set[Tuple2[String, TradePair]] =
         eTradePairs
-          .filter(e => e._2.baseAsset == asset && e._2.quoteAsset != config.tradeRoom.exchanges(e._1).usdEquivalentCoin) // keep :USD-equivalent TradePairs because we want them for currency calculations (and in the ReferenceTicker)
+          .filter(e => e._2.baseAsset == asset && e._2.quoteAsset != config.exchanges(e._1).usdEquivalentCoin) // keep :USD-equivalent TradePairs because we want them for currency calculations (and in the ReferenceTicker)
           .filterNot(e =>
-            !eTradePairs.exists(x => x._1 == e._1 && x._2 == TradePair(e._2.baseAsset, config.tradeRoom.exchanges(e._1).usdEquivalentCoin)) && // when no :USD-eqiv tradepair exists
+            !eTradePairs.exists(x => x._1 == e._1 && x._2 == TradePair(e._2.baseAsset, config.exchanges(e._1).usdEquivalentCoin)) && // when no :USD-eqiv tradepair exists
               e._2 == TradePair(e._2.baseAsset, Bitcoin)) // keep :BTC tradepair (for currency conversion via x -> BTC -> USD-equiv)
 
       if (tradePairsToDrop.nonEmpty) {
@@ -147,16 +147,15 @@ class TradeRoomInitCoordinator(val config: Config,
     tickers = tickers + (exchangeName -> TrieMap())
     orderBooks = orderBooks + (exchangeName -> TrieMap())
     dataAge = dataAge + (exchangeName -> PublicDataTimestamps(None, None, None))
-    wallets = wallets + (exchangeName -> Wallet(exchangeName, Map(), config.tradeRoom.exchanges(exchangeName)))
+    wallets = wallets + (exchangeName -> Wallet(exchangeName, Map(), config.exchanges(exchangeName)))
     activeOrders = activeOrders + (exchangeName -> TrieMap())
 
     exchanges = exchanges +
       (exchangeName -> context.actorOf(
         Exchange.props(
           exchangeName,
-          config.tradeRoom.exchanges(exchangeName),
-          config.global,
-          config.tradeRoom,
+          config,
+          config.exchanges(exchangeName),
           exchangeInit,
           ExchangePublicData(
             tickers(exchangeName),
@@ -171,7 +170,7 @@ class TradeRoomInitCoordinator(val config: Config,
   }
 
   def startExchanges(): Unit = {
-    for (name: String <- config.tradeRoom.exchanges.keys) {
+    for (name: String <- config.exchanges.keys) {
       startExchange(name, AllExchanges(name))
     }
   }

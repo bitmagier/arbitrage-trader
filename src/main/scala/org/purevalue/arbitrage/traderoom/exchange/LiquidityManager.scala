@@ -1,16 +1,16 @@
 package org.purevalue.arbitrage.traderoom.exchange
 
 import java.time.Instant
-import java.util.{NoSuchElementException, UUID}
+import java.util.UUID
 
 import akka.actor.Status.Failure
 import akka.actor.{Actor, ActorRef, Cancellable, PoisonPill, Props}
 import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.adapter._
-import org.purevalue.arbitrage.traderoom.TradeRoom.LiquidityTx
+import org.purevalue.arbitrage.traderoom.TradeRoom.{FinishedLiquidityTx, LiquidityTx}
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager._
-import org.purevalue.arbitrage.{ExchangeConfig, LiquidityManagerConfig}
+import org.purevalue.arbitrage.{Config, ExchangeConfig}
 import org.slf4j.LoggerFactory
 
 import scala.collection.Map
@@ -134,24 +134,26 @@ object LiquidityManager {
   }
 
 
-  def props(config: LiquidityManagerConfig,
+  def props(config: Config,
             exchangeConfig: ExchangeConfig,
             tradePairs: Set[TradePair],
             tpData: ExchangePublicDataReadonly,
             wallet: Wallet,
             tradeRoom: ActorRef,
             findOpenLiquidityTx: (LiquidityTx => Boolean) => Option[LiquidityTx],
+            findFinishedLiquidityTx: (FinishedLiquidityTx => Boolean) => Option[FinishedLiquidityTx],
             referenceTicker: () => collection.Map[TradePair, Ticker]
            ): Props =
-    Props(new LiquidityManager(config, exchangeConfig, tradePairs, tpData, wallet, tradeRoom, findOpenLiquidityTx, referenceTicker))
+    Props(new LiquidityManager(config, exchangeConfig, tradePairs, tpData, wallet, tradeRoom, findOpenLiquidityTx, findFinishedLiquidityTx, referenceTicker))
 }
-class LiquidityManager(val config: LiquidityManagerConfig,
+class LiquidityManager(val config: Config,
                        val exchangeConfig: ExchangeConfig,
                        val tradePairs: Set[TradePair],
                        val publicData: ExchangePublicDataReadonly,
                        val wallet: Wallet,
                        val tradeRoom: ActorRef,
                        val findOpenLiquidityTx: (LiquidityTx => Boolean) => Option[LiquidityTx],
+                       val findFinishedLiquidityTx: (FinishedLiquidityTx => Boolean) => Option[FinishedLiquidityTx],
                        val referenceTicker: () => collection.Map[TradePair, Ticker]
                       ) extends Actor {
 
@@ -191,7 +193,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
   }
 
   def clearObsoleteDemands(): Unit = {
-    val limit = Instant.now.minus(config.liquidityDemandActiveTime)
+    val limit = Instant.now.minus(config.liquidityManager.liquidityDemandActiveTime)
     liquidityDemand = liquidityDemand.filter(_._2.lastRequested.isAfter(limit))
   }
 
@@ -207,7 +209,7 @@ class LiquidityManager(val config: LiquidityManagerConfig,
   }
 
   def clearObsoleteLocks(): Unit = {
-    val limit: Instant = Instant.now.minus(config.liquidityLockMaxLifetime)
+    val limit: Instant = Instant.now.minus(config.liquidityManager.liquidityLockMaxLifetime)
     liquidityLocks = liquidityLocks.filter(_._2.createTime.isAfter(limit))
   }
 
@@ -249,22 +251,19 @@ class LiquidityManager(val config: LiquidityManagerConfig,
   def houseKeeping(): Unit = {
     if (shutdownInitiated) return
     if (houseKeepingRunning) return
-
     houseKeepingRunning = true
 
     clearObsoleteLocks()
     clearObsoleteDemands()
 
-    liquidityBalancer ! LiquidityBalancer.WorkingContext(
+    liquidityBalancer ! LiquidityBalancer.RunWithWorkingContext(
         wallet.balance.map(e => e._1 -> e._2).toMap,
         liquidityDemand,
         liquidityLocks)
-
-    houseKeepingRunning = false
   }
 
   override def preStart(): Unit = {
-    liquidityBalancer = context.actorOf(LiquidityBalancer.props(config, exchangeConfig, tradePairs, publicData, findOpenLiquidityTx, referenceTicker, tradeRoom),
+    liquidityBalancer = context.actorOf(LiquidityBalancer.props(config, exchangeConfig, tradePairs, publicData, findOpenLiquidityTx, findFinishedLiquidityTx, referenceTicker, tradeRoom),
       s"${exchangeConfig.name}-liquidity-manager-housekeeping")
   }
 
@@ -275,11 +274,12 @@ class LiquidityManager(val config: LiquidityManagerConfig,
 
   override def receive: Receive = {
     // @formatter:off
-    case r: LiquidityRequest        => liquidityRequest(r)
-    case LiquidityLockClearance(id) => clearLock(id)
-    case HouseKeeping()             => houseKeeping()
-    case TradeRoom.Stop(_)          => stop()
-    case Failure(e)                 => log.error("received failure", e); self ! PoisonPill
+    case r: LiquidityRequest          => liquidityRequest(r)
+    case LiquidityLockClearance(id)   => clearLock(id)
+    case HouseKeeping()               => houseKeeping()
+    case LiquidityBalancer.Finished() => houseKeepingRunning = false
+    case TradeRoom.Stop(_)            => stop()
+    case Failure(e)                   => log.error("received failure", e); self ! PoisonPill
     // @formatter:off
   }
 }

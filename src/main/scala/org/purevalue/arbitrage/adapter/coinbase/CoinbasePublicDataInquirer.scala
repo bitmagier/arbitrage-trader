@@ -1,6 +1,6 @@
 package org.purevalue.arbitrage.adapter.coinbase
 
-import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
+import akka.actor.{Actor, ActorSystem, Props, Status}
 import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataInquirer.{CoinbaseBaseRestEndpoint, GetCoinbaseTradePairs}
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.{GetTradePairs, TradePairs}
 import org.purevalue.arbitrage.traderoom.{Asset, TradePair}
