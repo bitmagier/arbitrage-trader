@@ -12,6 +12,7 @@ import org.purevalue.arbitrage.traderoom.TradeRoom.OrderRef
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.{ExchangeConfig, adapter}
 
+import scala.collection.concurrent.TrieMap
 import scala.concurrent.{ExecutionContextExecutor, Future}
 
 object TradeSimulator {
@@ -25,15 +26,16 @@ class TradeSimulator(exchangeConfig: ExchangeConfig,
                      accountDataManager: ActorRef) extends Actor {
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
-  @volatile var activeOrders: List[OrderRef] = Nil
+  val activeOrders: collection.concurrent.Map[String, Order] = TrieMap() // external-order-id -> Order
 
   def cancelOrder(tradePair: TradePair, externalOrderId: String): Future[CancelOrderResult] = {
     Future.successful {
-      val ref = OrderRef(exchangeConfig.name, tradePair, externalOrderId)
-      if (activeOrders.contains(ref)) {
-        synchronized {
-          activeOrders = activeOrders.filterNot(_ == ref)
-        }
+      if (activeOrders.contains(externalOrderId)) {
+        val o = activeOrders(externalOrderId)
+        accountDataManager ! IncomingData(
+          Seq(OrderUpdate(externalOrderId, exchangeConfig.name, tradePair, o.side, None, None, None, None, None, Some(OrderStatus.CANCELED), None, None, None, Instant.now))
+        )
+        activeOrders.remove(externalOrderId)
         CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId, success = true, None)
       } else {
         CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId, success = false, Some("failed because we assume the order is already filled"))
@@ -64,9 +66,7 @@ class TradeSimulator(exchangeConfig: ExchangeConfig,
     val limitOrder = newLimitOrder(externalOrderId, creationTime, o)
     accountDataManager ! SimulatedData(limitOrder)
 
-    synchronized {
-      activeOrders = limitOrder.ref :: activeOrders
-    }
+    activeOrders.update(limitOrder.externalOrderId, limitOrder.toOrder)
 
     if (orderLimitCloseToTicker(o, 0.03)) {
       Thread.sleep(100)
@@ -80,9 +80,7 @@ class TradeSimulator(exchangeConfig: ExchangeConfig,
 
       Thread.sleep(100)
       accountDataManager ! SimulatedData(limitOrderFilled(externalOrderId, creationTime, o))
-      synchronized {
-        activeOrders = activeOrders.filterNot(_ == limitOrder.ref)
-      }
+      activeOrders.remove(limitOrder.externalOrderId)
       accountDataManager ! SimulatedData(walletBalanceUpdate(outPart))
       accountDataManager ! SimulatedData(walletBalanceUpdate(inPart))
     }
