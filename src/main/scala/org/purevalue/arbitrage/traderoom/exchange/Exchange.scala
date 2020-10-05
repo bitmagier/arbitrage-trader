@@ -144,7 +144,7 @@ case class Exchange(exchangeName: String,
           accountData),
         s"ExchangeAccountDataManager-$exchangeName")
       if (tradeSimulationMode) {
-        tradeSimulator = Some(context.actorOf(TradeSimulator.props(exchangeConfig, accountDataManager), s"TradeSimulator-$exchangeName"))
+        tradeSimulator = Some(context.actorOf(TradeSimulator.props(exchangeConfig, publicData.readonly, accountDataManager), s"TradeSimulator-$exchangeName"))
       }
     }
   }
