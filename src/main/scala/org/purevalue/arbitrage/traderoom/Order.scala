@@ -188,6 +188,8 @@ case class OrderUpdate(externalOrderId: String,
     cumulativeFilledQuantity.isDefined && cumulativeFilledQuantity.get < 0.0)
     throw new IncomingDataError("quantity negative")
 
+  def ref: OrderRef = OrderRef(exchange, tradePair, externalOrderId)
+
   def toOrder: Order = Order(
     externalOrderId,
     exchange,

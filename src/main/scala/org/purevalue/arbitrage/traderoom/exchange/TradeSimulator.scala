@@ -8,6 +8,7 @@ import akka.pattern.pipe
 import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager._
 import org.purevalue.arbitrage.adapter.{ExchangePublicData, ExchangePublicDataReadonly, WalletBalanceUpdate}
+import org.purevalue.arbitrage.traderoom.TradeRoom.OrderRef
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.{ExchangeConfig, adapter}
 
@@ -24,9 +25,16 @@ class TradeSimulator(exchangeConfig: ExchangeConfig,
                      accountDataManager: ActorRef) extends Actor {
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
+  @volatile var activeOrders: List[OrderRef] = Nil
+
   def cancelOrder(tradePair: TradePair, externalOrderId: String): Future[CancelOrderResult] = {
+
     Future.successful(
-      CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId, success = false, Some("(easy way) always fail, because we assume the order is already filled"))
+      if (activeOrders.contains(OrderRef(exchangeConfig.name, tradePair, externalOrderId))) {
+        CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId, success = true, None)
+      } else {
+        CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId, success = false, Some("failed because we assume the order is already filled"))
+      }
     )
   }
 
@@ -50,7 +58,10 @@ class TradeSimulator(exchangeConfig: ExchangeConfig,
   def simulateOrderLifetime(externalOrderId: String, o: OrderRequest): Unit = {
     Thread.sleep(100)
     val creationTime = Instant.now
-    accountDataManager ! SimulatedData(newLimitOrder(externalOrderId, creationTime, o))
+    val limitOrder = newLimitOrder(externalOrderId, creationTime, o)
+    accountDataManager ! SimulatedData(limitOrder)
+
+    activeOrders = limitOrder.ref :: activeOrders
 
     if (orderLimitCloseToTicker(o, 0.03)) {
       Thread.sleep(100)
@@ -64,6 +75,7 @@ class TradeSimulator(exchangeConfig: ExchangeConfig,
 
       Thread.sleep(100)
       accountDataManager ! SimulatedData(limitOrderFilled(externalOrderId, creationTime, o))
+      activeOrders = activeOrders.filterNot(_ == limitOrder.ref)
       accountDataManager ! SimulatedData(walletBalanceUpdate(outPart))
       accountDataManager ! SimulatedData(walletBalanceUpdate(inPart))
     }
