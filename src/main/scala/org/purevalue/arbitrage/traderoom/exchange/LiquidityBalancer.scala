@@ -45,7 +45,7 @@ class LiquidityBalancer(val config: Config,
                         val referenceTicker: () => collection.Map[TradePair, Ticker],
                         val tradeRoom: ActorRef
                        ) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[LiquidityManager])
+  private val log = LoggerFactory.getLogger(classOf[LiquidityBalancer])
   val c: LiquidityManagerConfig = config.liquidityManager
 
   def determineUnlockedBalance(wc: RunWithWorkingContext): Map[Asset, Double] =
@@ -253,6 +253,7 @@ class LiquidityBalancer(val config: Config,
     }
 
     def placeLiquidityOrders(orders: Seq[LiquidityTransformationOrder]): Seq[OrderRef] = {
+      if (orders.isEmpty) return Nil
       implicit val timeout: Timeout = config.global.internalCommunicationTimeout
       var futureOrderRefs: List[Future[Option[OrderRef]]] = Nil
       try {
@@ -406,6 +407,7 @@ class LiquidityBalancer(val config: Config,
     }
 
     def waitUntilLiquidityOrdersFinished(orderRefs: Seq[TradeRoom.OrderRef]): Unit = {
+      if (orderRefs.isEmpty) return
       val orderFinishDeadline = Instant.now.plus(config.tradeRoom.maxOrderLifetime.multipliedBy(2))
       var stillUnfinished: Seq[OrderRef] = null
       breakable {
