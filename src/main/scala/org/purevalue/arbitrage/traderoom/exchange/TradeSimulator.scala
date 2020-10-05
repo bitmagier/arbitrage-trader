@@ -28,14 +28,17 @@ class TradeSimulator(exchangeConfig: ExchangeConfig,
   @volatile var activeOrders: List[OrderRef] = Nil
 
   def cancelOrder(tradePair: TradePair, externalOrderId: String): Future[CancelOrderResult] = {
-
-    Future.successful(
-      if (activeOrders.contains(OrderRef(exchangeConfig.name, tradePair, externalOrderId))) {
+    Future.successful {
+      val ref = OrderRef(exchangeConfig.name, tradePair, externalOrderId)
+      if (activeOrders.contains(ref)) {
+        synchronized {
+          activeOrders = activeOrders.filterNot(_ == ref)
+        }
         CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId, success = true, None)
       } else {
         CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId, success = false, Some("failed because we assume the order is already filled"))
       }
-    )
+    }
   }
 
   def newLimitOrder(externalOrderId: String, creationTime: Instant, o: OrderRequest): OrderUpdate =
@@ -61,7 +64,9 @@ class TradeSimulator(exchangeConfig: ExchangeConfig,
     val limitOrder = newLimitOrder(externalOrderId, creationTime, o)
     accountDataManager ! SimulatedData(limitOrder)
 
-    activeOrders = limitOrder.ref :: activeOrders
+    synchronized {
+      activeOrders = limitOrder.ref :: activeOrders
+    }
 
     if (orderLimitCloseToTicker(o, 0.03)) {
       Thread.sleep(100)
@@ -75,7 +80,9 @@ class TradeSimulator(exchangeConfig: ExchangeConfig,
 
       Thread.sleep(100)
       accountDataManager ! SimulatedData(limitOrderFilled(externalOrderId, creationTime, o))
-      activeOrders = activeOrders.filterNot(_ == limitOrder.ref)
+      synchronized {
+        activeOrders = activeOrders.filterNot(_ == limitOrder.ref)
+      }
       accountDataManager ! SimulatedData(walletBalanceUpdate(outPart))
       accountDataManager ! SimulatedData(walletBalanceUpdate(inPart))
     }
