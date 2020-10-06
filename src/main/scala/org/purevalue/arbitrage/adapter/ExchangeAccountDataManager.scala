@@ -38,10 +38,11 @@ case class Wallet(exchange: String, @volatile var balance: Map[Asset, Balance], 
   def toOverviewString(aggregateAsset: Asset, ticker: collection.Map[TradePair, Ticker]): String = {
     val liquidity = this.liquidCryptoValueSum(aggregateAsset, ticker)
     val inconvertible = this.inconvertibleCryptoValues(aggregateAsset, ticker)
-    s"Wallet [$exchange]: Liquid crypto total: $liquidity" +
-      (if (inconvertible.nonEmpty) s""", Inconvertible to ${aggregateAsset.officialSymbol}: ${inconvertible.mkString(", ")}""" else "") +
-      (if (this.fiatMoney.nonEmpty) s""", Fiat: ${this.fiatMoney.mkString(", ")}""" else "") +
-      (if (this.notTouchValues.nonEmpty) s""", Not-touching: ${this.notTouchValues.mkString(", ")}""" else "")
+    s"Wallet [$exchange]: Liquid crypto aggregated total: $liquidity. " +
+      s"""Detailed: [${liquidCryptoValues(aggregateAsset, ticker).mkString(", ")}]""" +
+      (if (inconvertible.nonEmpty) s"""; Inconvertible to ${aggregateAsset.officialSymbol}: [${inconvertible.mkString(", ")}]""" else "") +
+      (if (this.fiatMoney.nonEmpty) s"""; Fiat Money: [${this.fiatMoney.mkString(", ")}]""" else "") +
+      (if (this.notTouchValues.nonEmpty) s""", Not-touching: [${this.notTouchValues.mkString(", ")}]""" else "")
   }
 
   override def toString: String = s"""Wallet($exchange, ${balance.mkString(",")})"""
