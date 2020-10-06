@@ -119,7 +119,7 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
           )
           reserveAssetRatings = reserveAssetRatings + (r -> rating)
         } catch {
-          case e: OrderBookTooFlatException => // so cannot use that reserve asset
+          case e: OrderBookTooFlatException => log.trace(s"order book too flat: ${e.tradePair} ${e.side}") // so cannot use that reserve asset
         }
       }
 
@@ -166,13 +166,11 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
       })
 
     val balanceSheet: Iterable[LocalCryptoValue] = transactions.flatMap(OrderBill.calcBalanceSheet)
-
-    val btcValue = OrderBill.aggregateValues(
-      balanceSheet,
-      Bitcoin,
-      tc.tickers)
-
-    Some(CryptoValue(Bitcoin, btcValue).convertTo(AssetUSDT, tc.referenceTicker).amount)
+    val sumUSD = balanceSheet
+      .groupBy(_.exchange)
+      .map(e => OrderBill.aggregateValues(e._2, exchangesConfig(e._1).usdEquivalentCoin, tc.tickers)) // local sum USD-equivalent per exchange
+      .sum
+    Some(sumUSD)
   }
 
 

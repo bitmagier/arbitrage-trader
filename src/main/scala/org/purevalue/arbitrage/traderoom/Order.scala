@@ -114,7 +114,8 @@ case class Order(externalId: String,
 
     if (u.updateTime.isBefore(lastUpdateTime)) {
       log.debug(s"Ignoring $u, because updateTime is not after order's lastUpdateTime: $this")
-    } else if (u.updateTime.equals(lastUpdateTime) && orderStatus.isFinal) log.info(s"Ignoring $u, because it has same timestamp and we already have a final order-status here")
+    } else if (u.updateTime.equals(lastUpdateTime) && orderStatus.isFinal)
+      log.debug(s"Ignoring $u, because it has same timestamp and we already have a final order-status here")
     else {
       if (u.orderStatus.isDefined) orderStatus = u.orderStatus.get
       if (u.priceAverage.isDefined) priceAverage = u.priceAverage

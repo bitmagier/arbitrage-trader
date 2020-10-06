@@ -298,14 +298,14 @@ class LiquidityBalancer(val config: Config,
       // all reserve assets, that need more value : Map(Asset -> liquidity buckets missing)
       var liquiditySinkBuckets: Map[Asset, Int] = virtualReserveAssetsAggregated
         .filter(_.canConvertTo(exchangeConfig.usdEquivalentCoin, publicData.ticker))
-        .map(e => (e.asset, e.convertTo(exchangeConfig.usdEquivalentCoin, referenceTicker()).amount)) // amount in USD
+        .map(e => (e.asset, e.convertTo(exchangeConfig.usdEquivalentCoin, publicData.ticker).amount)) // amount in USD
         .filter(_._2 < c.minimumKeepReserveLiquidityPerAssetInUSD) // below min keep amount?
         .map(e => (e._1, ((c.minimumKeepReserveLiquidityPerAssetInUSD - e._2) / c.txValueGranularityInUSD).ceil.toInt)) // buckets needed
         .toMap
       // all reserve assets, that have extra liquidity to distribute : Map(Asset -> liquidity buckets available for distribution)
       var liquiditySourcesBuckets: Map[Asset, Int] = currentReserveAssetsBalance // we can take coin only from currently really existing balance
         .filter(_.canConvertTo(exchangeConfig.usdEquivalentCoin, publicData.ticker))
-        .map(e => (e.asset, e.convertTo(exchangeConfig.usdEquivalentCoin, referenceTicker()).amount)) // amount in USD
+        .map(e => (e.asset, e.convertTo(exchangeConfig.usdEquivalentCoin, publicData.ticker).amount)) // amount in USD
         // having more than the minimum limit + 150% tx-granularity (to avoid useless there-and-back transfers because of exchange rate fluctuations)
         .filter(_._2 >= c.minimumKeepReserveLiquidityPerAssetInUSD + c.txValueGranularityInUSD * 1.5)
         // keep minimum reserve liquidity + 50% bucket value (we don't sell our last half-full extra bucket ^^^)
@@ -360,8 +360,7 @@ class LiquidityBalancer(val config: Config,
               liquiditySourcesBuckets(sourceAsset.get)
             }
 
-          val tx: OrderRequest =
-            TradePair(sinkAsset, sourceAsset.get) match {
+          val tx: OrderRequest = TradePair(sinkAsset, sourceAsset.get) match {
 
               case tp if publicData.ticker.contains(tp) =>
                 val tradePair = tp
