@@ -67,12 +67,13 @@ class PioneerOrderRunner(config: Config,
   private val afterPioneerOrder1BalanceExpected: AtomicReference[Option[Iterable[CryptoValue]]] = new AtomicReference(None)
   private val afterPioneerOrder2BalanceExpected: AtomicReference[Option[Iterable[CryptoValue]]] = new AtomicReference(None)
 
+  private val MaxPriceDiff = 0.001
+  private val MaxAmountDiff = 0.003
+
 
   def diffMoreThan(a: Double, b: Double, maxDiffRate: Double): Boolean = ((a - b).abs / a.abs) > maxDiffRate
 
   def validateFilledPioneerOrder(request: OrderRequest, order: Order): Unit = {
-    val MaxPriceDiff = 0.001
-    val MaxAmountDiff = 0.003
     def failed(reasonShort: String) = throw new RuntimeException(s"Pioneer order validation failed. reason: '$reasonShort'! \n$request, \n$order")
 
     if (order.exchange != request.exchange) failed("exchange name mismatch")
@@ -131,8 +132,8 @@ class PioneerOrderRunner(config: Config,
     if (order.tradePair != request.tradePair) failed("trade pair mismatch")
     if (order.orderType != OrderType.LIMIT) failed("order type mismatch")
     if (order.price.isEmpty) failed("orderPrice not set")
-    if (diffMoreThan(order.price.get, request.limit, 0.001)) failed("order price mismatch")
-    if (diffMoreThan(order.quantity, request.amountBaseAsset, 0.001)) failed("quantity mismatch")
+    if (diffMoreThan(order.price.get, request.limit, MaxPriceDiff)) failed("order price mismatch")
+    if (diffMoreThan(order.quantity, request.amountBaseAsset, MaxAmountDiff)) failed("quantity mismatch")
 
     if (order.orderStatus.isFinal) {
       if (order.orderStatus != OrderStatus.CANCELED) failed("order status mismatch")
