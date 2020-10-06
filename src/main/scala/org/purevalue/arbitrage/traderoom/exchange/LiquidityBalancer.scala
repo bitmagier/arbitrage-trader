@@ -101,10 +101,10 @@ class LiquidityBalancer(val config: Config,
             .lastOption
 
         if (bestReserveAssets.isEmpty) {
-          log.debug(s"No good reserve asset found to satisfy $demand")
+          log.debug(s"[${exchangeConfig.name}] no good reserve asset found to satisfy $demand")
           None
         } else {
-          if (log.isTraceEnabled) log.trace(s"Found best usable reserve asset: ${bestReserveAssets.get._1}, rating=${bestReserveAssets.get._2} for providing $demand")
+          if (log.isTraceEnabled) log.trace(s"[${exchangeConfig.name}] found best usable reserve asset: ${bestReserveAssets.get._1}, rating=${bestReserveAssets.get._2} for providing $demand")
           val orderAmount: Double = ceilToTxGranularity(demand.asset, demand.amount)
           val tradePair = TradePair(demand.asset, bestReserveAssets.get._1)
           val limit = determineRealisticLimit(tradePair, TradeSide.Buy, orderAmount)
@@ -188,8 +188,8 @@ class LiquidityBalancer(val config: Config,
             .filter(_._2 >= -c.maxAcceptableExchangeRateLossVersusReferenceTicker) // [non-loss-asset-filter]
 
         if (availableReserveAssets.isEmpty) {
-          if (possibleReserveAssets.isEmpty) log.debug(s"No reserve asset available to convert back $cryptoValue")
-          else log.debug(s"Currently no reserve asset available with a good exchange-rate to convert back $cryptoValue. " +
+          if (possibleReserveAssets.isEmpty) log.debug(s"[${exchangeConfig.name}] no reserve asset available to convert back $cryptoValue")
+          else log.debug(s"[${exchangeConfig.name}] currently no reserve asset available with a good exchange-rate to convert back $cryptoValue. " +
             s"Available assets/ticker-rating: $availableReserveAssets")
           return None
         }
@@ -261,7 +261,7 @@ class LiquidityBalancer(val config: Config,
           futureOrderRefs = (tradeRoom ? liquidityTxOrder).mapTo[Option[OrderRef]] :: futureOrderRefs
         }
       } catch {
-        case e: Exception => log.error("Error while placing liquidity tx orders", e)
+        case e: Exception => log.error(s"[${exchangeConfig.name}] Error while placing liquidity tx orders", e)
       }
 
       Await.result(Future.sequence(futureOrderRefs), timeout.duration).flatten
@@ -274,7 +274,7 @@ class LiquidityBalancer(val config: Config,
         tradePairs.contains(TradePair(a, b)) || tradePairs.contains(TradePair(b, a))
       }
 
-      if (log.isTraceEnabled) log.trace(s"re-balancing reserve asset wallet:${wc.balanceSnapshot} with pending incoming $pendingIncomingReserveLiquidity")
+      if (log.isTraceEnabled) log.trace(s"[${exchangeConfig.name}] re-balancing reserve asset wallet:${wc.balanceSnapshot} with pending incoming $pendingIncomingReserveLiquidity")
       val currentReserveAssetsBalance: Seq[CryptoValue] = wc.balanceSnapshot
         .filter(e => exchangeConfig.reserveAssets.contains(e._1))
         .map(e => CryptoValue(e._1, e._2.amountAvailable))
@@ -327,7 +327,7 @@ class LiquidityBalancer(val config: Config,
 
       var weAreDoneHere: Boolean = false
       while (liquiditySourcesBuckets.nonEmpty && !weAreDoneHere) {
-        if (log.isTraceEnabled) log.trace(s"Re-balance reserve assets: sources: $liquiditySourcesBuckets / sinks: $liquiditySinkBuckets")
+        if (log.isTraceEnabled) log.trace(s"[${exchangeConfig.name}] re-balance reserve assets: sources: $liquiditySourcesBuckets / sinks: $liquiditySinkBuckets")
         import util.control.Breaks._
         breakable {
           val DefaultSink = exchangeConfig.reserveAssets.head
@@ -417,7 +417,7 @@ class LiquidityBalancer(val config: Config,
         } while (Instant.now.isBefore(orderFinishDeadline))
       }
       if (stillUnfinished.isEmpty) {
-        log.debug(s"all ${orderRefs.size} liquidity transaction(s) finished")
+        log.debug(s"[${exchangeConfig.name}] all ${orderRefs.size} liquidity transaction(s) finished")
         sender() ! Finished()
       } else {
         throw new RuntimeException(s"Not all liquidity tx orders did finish. Still unfinished: [$stillUnfinished]") // should not happen, because TradeRoom/Exchange cleanup unfinsihed orders by themself!
@@ -441,7 +441,7 @@ class LiquidityBalancer(val config: Config,
 
     } catch {
       case e: OrderBookTooFlatException =>
-        log.warn(s"[to be improved] [${exchangeConfig.name}] Cannot perform liquidity housekeeping because the order book of tradepair ${e.tradePair} was too flat")
+        log.warn(s"[${exchangeConfig.name}] [to be improved] [${exchangeConfig.name}] Cannot perform liquidity housekeeping because the order book of tradepair ${e.tradePair} was too flat")
     }
   }
 

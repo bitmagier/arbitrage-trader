@@ -130,6 +130,7 @@ class TradeRoomInitCoordinator(val config: Config,
       val tradePairsToDrop: Set[Tuple2[String, TradePair]] =
         eTradePairs
           .filter(e => e._2.baseAsset == asset && e._2.quoteAsset != config.exchanges(e._1).usdEquivalentCoin) // keep :USD-equivalent TradePairs because we want them for currency calculations (and in the ReferenceTicker)
+          .filter(e => e._2.baseAsset == asset && !config.exchanges(e._1).reserveAssets.contains(e._2.quoteAsset)) // also keep reserve asset connected pairs
           .filterNot(e =>
             !eTradePairs.exists(x => x._1 == e._1 && x._2 == TradePair(e._2.baseAsset, config.exchanges(e._1).usdEquivalentCoin)) && // when no :USD-eqiv tradepair exists
               e._2 == TradePair(e._2.baseAsset, Bitcoin)) // keep :BTC tradepair (for currency conversion via x -> BTC -> USD-equiv)

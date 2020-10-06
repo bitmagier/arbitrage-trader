@@ -10,6 +10,7 @@
     </appender>
 
     <logger name="org.purevalue.arbitrage" level="INFO"/>
+    <logger name="org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator" level="DEBUG"/>
     <logger name="org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer" level="TRACE"/>
 
     <root level="INFO">

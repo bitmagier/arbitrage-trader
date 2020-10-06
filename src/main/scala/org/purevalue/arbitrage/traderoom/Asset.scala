@@ -22,8 +22,8 @@ class Asset(val officialSymbol: String,
 
   private def canConvertDirectlyTo(targetAsset: Asset, conversionRateExists: TradePair => Boolean): Boolean = {
     this == targetAsset ||
-      conversionRateExists.apply(TradePair(this, targetAsset)) ||
-      conversionRateExists.apply(TradePair(targetAsset, this))
+      conversionRateExists(TradePair(this, targetAsset)) ||
+      conversionRateExists(TradePair(targetAsset, this))
   }
 
   def canConvertTo(targetAsset: Asset, conversionRateExists: TradePair => Boolean): Boolean = {
