@@ -71,21 +71,23 @@ class PioneerOrderRunner(config: Config,
   def diffMoreThan(a: Double, b: Double, maxDiffRate: Double): Boolean = ((a - b).abs / a.abs) > maxDiffRate
 
   def validateFilledPioneerOrder(request: OrderRequest, order: Order): Unit = {
+    val MaxPriceDiff = 0.001
+    val MaxAmountDiff = 0.003
     def failed(reasonShort: String) = throw new RuntimeException(s"Pioneer order validation failed. reason: '$reasonShort'! \n$request, \n$order")
 
     if (order.exchange != request.exchange) failed("exchange name mismatch")
     if (order.side != request.tradeSide) failed("trade side mismatch")
     if (order.tradePair != request.tradePair) failed("trade pair mismatch")
     if (order.orderType != OrderType.LIMIT) failed("order type mismatch")
-    if (diffMoreThan(order.quantity, request.amountBaseAsset, 0.003)) failed("quantity mismatch")
+    if (diffMoreThan(order.quantity, request.amountBaseAsset, MaxAmountDiff)) failed("quantity mismatch")
 
     if (order.orderStatus.isFinal) {
       if (order.price.isEmpty) failed("order price not set")
-      if (diffMoreThan(order.price.get, request.limit, 0.001)) failed("order limit/price mismatch")
+      if (diffMoreThan(order.price.get, request.limit, MaxPriceDiff)) failed("order limit/price mismatch")
       if (order.orderStatus != OrderStatus.FILLED) failed("order status mismatch")
 
       if (order.cumulativeFilledQuantity.isEmpty) failed("cumulativeFilledQuantity not set")
-      if (diffMoreThan(order.cumulativeFilledQuantity.get, request.amountBaseAsset, 0.003)) failed("cumulative filled quantity mismatch") // in most cases the fee is substracted from the amount we get
+      if (diffMoreThan(order.cumulativeFilledQuantity.get, request.amountBaseAsset, MaxAmountDiff)) failed("cumulative filled quantity mismatch") // in most cases the fee is substracted from the amount we get
       if (request.tradeSide == TradeSide.Buy && (order.priceAverage.isDefined && order.priceAverage.get > order.price.get)) failed("price average above price/limit")
       if (request.tradeSide == TradeSide.Sell && (order.priceAverage.isDefined && order.priceAverage.get < order.price.get)) failed("price average below price/limit")
 
@@ -96,7 +98,7 @@ class PioneerOrderRunner(config: Config,
         case TradeSide.Sell => request.tradePair.quoteAsset
       }
       if (incomingReal.asset != expectedIncomingAsset) failed("incoming asset mismatch")
-      if (incomingReal.amount < incomingRequested.amount && diffMoreThan(incomingReal.amount, incomingRequested.amount, 0.001))
+      if (incomingReal.amount < incomingRequested.amount && diffMoreThan(incomingReal.amount, incomingRequested.amount, MaxAmountDiff))
         failed("incoming amount mismatch")
 
       val expectedOutgoingAsset: Asset = request.tradeSide match {
@@ -106,7 +108,7 @@ class PioneerOrderRunner(config: Config,
       val outgoingRequested = request.calcOutgoingLiquidity
       val outgoingReal = order.calcOutgoingLiquidity(request.feeRate)
       if (outgoingReal.asset != expectedOutgoingAsset) failed("outgoing asset mismatch")
-      if (outgoingReal.amount > outgoingRequested.amount && diffMoreThan(outgoingReal.amount, outgoingRequested.amount, 0.001))
+      if (outgoingReal.amount > outgoingRequested.amount && diffMoreThan(outgoingReal.amount, outgoingRequested.amount, MaxAmountDiff))
         failed("outgoing amount mismatch")
 
       // We can check the balance only against local ticker, because reference-ticker is not available at this point.
