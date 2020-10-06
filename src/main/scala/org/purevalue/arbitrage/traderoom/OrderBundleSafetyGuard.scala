@@ -38,7 +38,7 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
     val diff = ((order.limit - bestOfferPrice) / bestOfferPrice).abs
     val valid = diff < config.maxOrderLimitTickerVariance
     if (!valid) {
-      log.warn(s"${Emoji.Disagree}  Got OrderBundle where an order limit is too far away ($diff) from ticker value " +
+      log.warn(s"${Emoji.Disagree}  Got OrderBundle with $order where the order-limit is too far away (rate=${formatDecimal(diff, 2)}) from ticker value " +
         s"(max variance=${formatDecimal(config.maxOrderLimitTickerVariance)})")
       log.debug(s"$order, $ticker")
     }

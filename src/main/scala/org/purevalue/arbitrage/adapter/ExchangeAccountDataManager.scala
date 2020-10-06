@@ -40,7 +40,7 @@ case class Wallet(exchange: String, @volatile var balance: Map[Asset, Balance], 
     val inconvertible = this.inconvertibleCryptoValues(aggregateAsset, ticker)
     s"Wallet [$exchange]: Liquid crypto total: $liquidity" +
       (if (inconvertible.nonEmpty) s""", Inconvertible to ${aggregateAsset.officialSymbol}: ${inconvertible.mkString(", ")}""" else "") +
-      (if (this.fiatMoney.nonEmpty) s""", Fiat Money: ${this.fiatMoney.mkString(", ")}""" else "") +
+      (if (this.fiatMoney.nonEmpty) s""", Fiat: ${this.fiatMoney.mkString(", ")}""" else "") +
       (if (this.notTouchValues.nonEmpty) s""", Not-touching: ${this.notTouchValues.mkString(", ")}""" else "")
   }
 

@@ -241,7 +241,7 @@ case class OrderRequest(id: UUID,
       s"limit ${formatDecimal(limit, tradePair.quoteAsset.defaultFractionDigits)})"
   }
 
-  def shortDesc: String = s"OrderRequest($exchange: $tradeDesc)"
+  def shortDesc: String = s"OrderRequest$tradeDesc"
 
 
   override def toString: String = s"OrderRequest($id, orderBundleId:$orderBundleId, $exchange, $tradePair, $tradeSide, $feeRate, " +
