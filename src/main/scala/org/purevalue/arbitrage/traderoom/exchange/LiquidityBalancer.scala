@@ -131,7 +131,9 @@ class LiquidityBalancer(val config: Config,
       }
 
       val demandedLiquidity: Seq[UniqueDemand] = determineDemandedLiquidity(wc)
-      log.debug(s"[${exchangeConfig.name}] identified liquidity demand: $demandedLiquidity")
+      if (demandedLiquidity.nonEmpty) {
+        log.debug(s"[${exchangeConfig.name}] identified liquidity demand: $demandedLiquidity")
+      }
       demandedLiquidity.flatMap { d =>
         tryToFindAGoodLiquidityProvidingOrder(d, wc)
       }
@@ -274,7 +276,7 @@ class LiquidityBalancer(val config: Config,
         tradePairs.contains(TradePair(a, b)) || tradePairs.contains(TradePair(b, a))
       }
 
-      log.debug(s"[${exchangeConfig.name}] re-balancing reserve asset wallet:${wc.balanceSnapshot} with pending incoming $pendingIncomingReserveLiquidity")
+      if (log.isTraceEnabled) log.trace(s"[${exchangeConfig.name}] re-balancing reserve asset wallet:${wc.balanceSnapshot} with pending incoming $pendingIncomingReserveLiquidity")
       val currentReserveAssetsBalance: Seq[CryptoValue] = wc.balanceSnapshot
         .filter(e => exchangeConfig.reserveAssets.contains(e._1))
         .map(e => CryptoValue(e._1, e._2.amountAvailable))
