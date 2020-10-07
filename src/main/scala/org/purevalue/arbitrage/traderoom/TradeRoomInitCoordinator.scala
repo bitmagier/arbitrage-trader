@@ -153,10 +153,8 @@ class TradeRoomInitCoordinator(val config: Config,
 
     def condition2(exchange: String, tp: TradePair): Boolean = {
       val arbitrageAssets = arbitragePairs.flatMap(_.involvedAssets)
-      (arbitrageAssets.contains(tp.baseAsset) || arbitrageAssets.contains(tp.quoteAsset)) &&
-        (tp.involvedAssets.contains(config.exchanges(exchange).usdEquivalentCoin) ||
-          config.exchanges(exchange).reserveAssets.contains(tp.baseAsset) ||
-          config.exchanges(exchange).reserveAssets.contains(tp.quoteAsset))
+      (arbitrageAssets.contains(tp.baseAsset) && (tp.quoteAsset == config.exchanges(exchange).usdEquivalentCoin || config.exchanges(exchange).reserveAssets.contains(tp.quoteAsset))) ||
+        (arbitrageAssets.contains(tp.quoteAsset) && tp.baseAsset == config.exchanges(exchange).usdEquivalentCoin || config.exchanges(exchange).reserveAssets.contains(tp.baseAsset))
     }
 
     tradableTradePairs = tickerTradePairs
