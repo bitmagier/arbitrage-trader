@@ -36,13 +36,14 @@ class TradeRoomInitCoordinator(val config: Config,
   private val log = LoggerFactory.getLogger(classOf[TradeRoomInitCoordinator])
 
   // @formatter:off
-  var tradePairs:   Map[String, Set[TradePair]] = Map()
-  var exchanges:    Map[String, ActorRef] = Map()
-  var tickers:      Map[String, ConcurrentMap[TradePair, Ticker]] = Map()
-  var orderBooks:   Map[String, ConcurrentMap[TradePair, OrderBook]] = Map()
-  var dataAge:      Map[String, PublicDataTimestamps] = Map()
-  var wallets:      Map[String, Wallet] = Map()
-  var activeOrders: Map[String, ConcurrentMap[OrderRef, Order]] = Map()
+  var tickerTradePairs:   Map[String, Set[TradePair]] = Map()
+  var tradableTradePairs: Map[String, Set[TradePair]] = Map()
+  var exchanges:          Map[String, ActorRef] = Map()
+  var tickers:            Map[String, ConcurrentMap[TradePair, Ticker]] = Map()
+  var orderBooks:         Map[String, ConcurrentMap[TradePair, OrderBook]] = Map()
+  var dataAge:            Map[String, PublicDataTimestamps] = Map()
+  var wallets:            Map[String, Wallet] = Map()
+  var activeOrders:       Map[String, ConcurrentMap[OrderRef, Order]] = Map()
   // @formatter:on
 
   val AllExchanges: Map[String, ExchangeInitStuff] = Map(
@@ -63,20 +64,20 @@ class TradeRoomInitCoordinator(val config: Config,
     )
   )
 
-  def queryTradePairs(exchange: String): Set[TradePair] = {
+  def queryTickerTradePairs(exchange: String): Set[TradePair] = {
     implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
-    Await.result((exchanges(exchange) ? GetTradePairs()).mapTo[Set[TradePair]], timeout.duration.plus(500.millis))
+    Await.result((exchanges(exchange) ? GetTickerTradePairs()).mapTo[Set[TradePair]], timeout.duration.plus(500.millis))
   }
 
-  def queryFinalTradePairs(): Unit = {
+  def queryFinalTickerTradePairs(): Unit = {
     for (exchange <- exchanges.keys) {
-      tradePairs = tradePairs + (exchange -> queryTradePairs(exchange))
+      tickerTradePairs = tickerTradePairs + (exchange -> queryTickerTradePairs(exchange))
     }
   }
 
   def dropTradePairSync(exchangeName: String, tp: TradePair): Unit = {
     implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
-    Await.result(exchanges(exchangeName) ? RemoveTradePair(tp), timeout.duration.plus(500.millis))
+    Await.ready(exchanges(exchangeName) ? RemoveTickerTradePair(tp), timeout.duration.plus(500.millis))
   }
 
 
@@ -102,10 +103,10 @@ class TradeRoomInitCoordinator(val config: Config,
    * For liquidity conversion and some calculations we need USD equivalent  pairs in ReferenceTicker, so we don't drop x:USDT or x:USDC pairs
    * Also - if no x:USDT/USDC pair is available, we don't drop the x:BTC pair (like for IOTA on Bitfinex we only have IOTA:BTC & IOTA:ETH)
    */
-  def dropUnusableTradePairsSync(): Unit = {
+  def dropUnusableTickerTradePairsSync(): Unit = {
     var eTradePairs: Set[Tuple2[String, TradePair]] = Set()
     for (exchange: String <- exchanges.keys) {
-      val tp: Set[TradePair] = queryTradePairs(exchange)
+      val tp: Set[TradePair] = queryTickerTradePairs(exchange)
       eTradePairs = eTradePairs ++ tp.map(e => (exchange, e))
     }
     val cryptoAssetsToRemove: Set[Asset] =
@@ -127,7 +128,7 @@ class TradeRoomInitCoordinator(val config: Config,
     }
 
     for (asset <- cryptoAssetsToRemove) {
-      val tradePairsToDrop: Set[Tuple2[String, TradePair]] =
+      val tickerTradePairsToDrop: Set[Tuple2[String, TradePair]] =
         eTradePairs
           .filter(e => e._2.baseAsset == asset && e._2.quoteAsset != config.exchanges(e._1).usdEquivalentCoin) // keep :USD-equivalent TradePairs because we want them for currency calculations (and in the ReferenceTicker)
           .filter(e => e._2.baseAsset == asset && !config.exchanges(e._1).reserveAssets.contains(e._2.quoteAsset)) // also keep reserve asset connected pairs
@@ -135,14 +136,36 @@ class TradeRoomInitCoordinator(val config: Config,
             !eTradePairs.exists(x => x._1 == e._1 && x._2 == TradePair(e._2.baseAsset, config.exchanges(e._1).usdEquivalentCoin)) && // when no :USD-eqiv tradepair exists
               e._2 == TradePair(e._2.baseAsset, Bitcoin)) // keep :BTC tradepair (for currency conversion via x -> BTC -> USD-equiv)
 
-      if (tradePairsToDrop.nonEmpty) {
-        log.debug(s"${Emoji.Robot}  Dropping some trade pairs involving $asset, because we don't have a use for it:  $tradePairsToDrop")
-        tradePairsToDrop.foreach(e => dropTradePairSync(e._1, e._2))
+      if (tickerTradePairsToDrop.nonEmpty) {
+        log.debug(s"${Emoji.Robot}  Dropping some trade pairs involving $asset, because we don't have a use for it:  $tickerTradePairsToDrop")
+        tickerTradePairsToDrop.foreach(e => dropTradePairSync(e._1, e._2))
       }
     }
     log.info(s"${Emoji.Robot}  Finished cleanup of unusable trade pairs")
   }
 
+  // we want to trade only trade pairs
+  // - [1] that are available on at least two exchanges
+  // - [2] plus tradpairs, where one side is a part of [1] and the other side is a local reserve asset or USD equivalent coin
+  def determineTradableTradepairs(): Unit = {
+    val allTradePairs = tickerTradePairs.values.flatten.toSet
+    val arbitragePairs = allTradePairs.filter(e => tickerTradePairs.count(_._2.contains(e)) > 1)
+    def condition2(exchange:String, tp:TradePair): Boolean = {
+      val arbitrageAssets = arbitragePairs.flatMap(_.involvedAssets)
+      arbitrageAssets.contains(tp.baseAsset) || arbitrageAssets.contains(tp.quoteAsset) ||
+        tp.involvedAssets.contains(config.exchanges(exchange).usdEquivalentCoin) ||
+        config.exchanges(exchange).reserveAssets.contains(tp.baseAsset) ||
+        config.exchanges(exchange).reserveAssets.contains(tp.quoteAsset)
+    }
+    tradableTradePairs = tickerTradePairs.map(e => e._1 -> e._2.filter(x => arbitragePairs.contains(x) || condition2(e._1, x)))
+  }
+
+  def pushTradableTradePairs(): Unit = {
+    implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
+    exchanges.foreach {
+      case (exchange,actor) => Await.ready(actor ? SetTradableTradePairs(tradableTradePairs(exchange)), timeout.duration.plus(500.millis))
+    }
+  }
 
   def startExchange(exchangeName: String, exchangeInit: ExchangeInitStuff): Unit = {
     tickers = tickers + (exchangeName -> TrieMap())
@@ -187,7 +210,7 @@ class TradeRoomInitCoordinator(val config: Config,
 
   def onInitialized(): Unit = {
     log.debug("TradeRoom initialized")
-    val tradeRoom = context.actorOf(TradeRoom.props(config, exchanges, tradePairs, tickers, orderBooks, dataAge, wallets, activeOrders), "TradeRoom")
+    val tradeRoom = context.actorOf(TradeRoom.props(config, exchanges, tickerTradePairs, tradableTradePairs, tickers, orderBooks, dataAge, wallets, activeOrders), "TradeRoom")
     parent ! InitializedTradeRoom(tradeRoom)
     context.watch(tradeRoom)
   }
@@ -201,8 +224,10 @@ class TradeRoomInitCoordinator(val config: Config,
 
   override def preStart(): Unit = {
     startExchanges() // parallel
-    dropUnusableTradePairsSync() // all exchanges, sync
-    queryFinalTradePairs()
+    dropUnusableTickerTradePairsSync() // all exchanges, sync
+    queryFinalTickerTradePairs()
+    determineTradableTradepairs()
+    pushTradableTradePairs()
     sendStartStreaming()
   }
 

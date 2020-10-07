@@ -91,11 +91,16 @@ object CoinbasePublicDataChannel {
 
   def props(globalConfig: GlobalConfig,
             exchangeConfig: ExchangeConfig,
+            tickerTradePairs: Set[TradePair],
+            tradableTradePairs: Set[TradePair],
             publicDataManager: ActorRef,
-            coinbasePublicDataInquirer: ActorRef): Props = Props(new CoinbasePublicDataChannel(globalConfig, exchangeConfig, publicDataManager, coinbasePublicDataInquirer))
+            coinbasePublicDataInquirer: ActorRef): Props = Props(
+    new CoinbasePublicDataChannel(globalConfig, exchangeConfig, tickerTradePairs, tradableTradePairs, publicDataManager, coinbasePublicDataInquirer))
 }
 private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
                                                   exchangeConfig: ExchangeConfig,
+                                                  tickerTradePairs: Set[TradePair],
+                                                  tradableTradePairs: Set[TradePair],
                                                   publicDataManager: ActorRef,
                                                   coinbasePublicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[CoinbasePublicDataChannel])
@@ -148,10 +153,16 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
       Future.successful(Nil)
   }
 
-  def subscribeMessage: SubscribeRequestJson = SubscribeRequestJson(
-    product_ids = coinbaseTradePairByProductId.keys.toSeq,
-    channels = Seq(TickerChannelName, OrderBookChannelname)
-  )
+  def subscribeMessages: List[SubscribeRequestJson] = {
+    List(
+      SubscribeRequestJson(
+        product_ids = coinbaseTradePairByProductId.filter(e => tickerTradePairs.contains(e._2.toTradePair)).keys.toSeq,
+        channels = Seq(TickerChannelName)),
+      SubscribeRequestJson(
+        product_ids = coinbaseTradePairByProductId.filter(e => tradableTradePairs.contains(e._2.toTradePair)).keys.toSeq,
+        channels = Seq(OrderBookChannelname))
+      )
+  }
 
   // flow to us
   def wsFlow: Flow[Message, Message, Promise[Option[Message]]] = {
@@ -163,7 +174,7 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
           .pipeTo(publicDataManager)
       ),
       Source(
-        List(TextMessage(subscribeMessage.toJson.compactPrint))
+        subscribeMessages.map(e => TextMessage(e.toJson.compactPrint))
       ).concatMat(Source.maybe[Message])(Keep.right))(Keep.right)
   }
 

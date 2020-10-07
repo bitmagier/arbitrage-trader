@@ -84,13 +84,14 @@ object TradeRoom {
 
   def props(config: Config,
             exchanges: Map[String, ActorRef],
-            tradePairs: Map[String, Set[TradePair]],
+            tickerTradePairs: Map[String, Set[TradePair]],
+            tradableTradePairs: Map[String, Set[TradePair]],
             tickers: Map[String, collection.Map[TradePair, Ticker]],
             orderBooks: Map[String, collection.Map[TradePair, OrderBook]],
             dataAge: Map[String, PublicDataTimestamps],
             wallets: Map[String, Wallet],
             activeOrders: Map[String, ConcurrentMap[OrderRef, Order]]): Props =
-    Props(new TradeRoom(config, exchanges, tradePairs, tickers, orderBooks, dataAge, wallets, activeOrders))
+    Props(new TradeRoom(config, exchanges, tickerTradePairs, tradableTradePairs, tickers, orderBooks, dataAge, wallets, activeOrders))
 }
 
 /**
@@ -101,7 +102,8 @@ object TradeRoom {
  */
 class TradeRoom(val config: Config,
                 val exchanges: Map[String, ActorRef],
-                val tradePairs: Map[String, Set[TradePair]],
+                val tickerTradePairs: Map[String, Set[TradePair]],
+                val tradableTradePairs: Map[String, Set[TradePair]],
                 val tickers: Map[String, collection.Map[TradePair, Ticker]], // a map per exchange
                 val orderBooks: Map[String, collection.Map[TradePair, OrderBook]],
                 val dataAge: Map[String, PublicDataTimestamps],
@@ -128,7 +130,7 @@ class TradeRoom(val config: Config,
   private val doNotTouchAssets: Map[String, Seq[Asset]] = config.exchanges.values.map(e => (e.name, e.doNotTouchTheseAssets)).toMap
   private val tradeContext: TradeContext =
     TradeContext(
-      tradePairs,
+      tradableTradePairs,
       tickers,
       config.tradeRoom.referenceTickerExchange,
       orderBooks,

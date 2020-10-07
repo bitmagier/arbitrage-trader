@@ -11,7 +11,6 @@ import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.{Config, ExchangeConfig, Main}
 import org.slf4j.LoggerFactory
 
-import scala.collection._
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{ExecutionContextExecutor, Future}
 
@@ -75,8 +74,8 @@ case class PublicDataTimestamps(@volatile var heartbeatTS: Option[Instant],
                                 @volatile var tickerTS: Option[Instant],
                                 @volatile var orderBookTS: Option[Instant])
 
-case class ExchangePublicData(ticker: concurrent.Map[TradePair, Ticker],
-                              orderBook: concurrent.Map[TradePair, OrderBook],
+case class ExchangePublicData(ticker: collection.concurrent.Map[TradePair, Ticker],
+                              orderBook: collection.concurrent.Map[TradePair, OrderBook],
                               age: PublicDataTimestamps) {
   def readonly: ExchangePublicDataReadonly = ExchangePublicDataReadonly(ticker, orderBook)
 }
@@ -90,12 +89,13 @@ object ExchangePublicDataManager {
 
   def props(config: Config,
             exchangeConfig: ExchangeConfig,
-            tradePairs: Set[TradePair],
+            tickerTradePairs: Set[TradePair],
+            tradableTradePairs: Set[TradePair],
             exchangePublicDataInquirer: ActorRef,
             exchange: ActorRef,
             publicDataChannelProps: ExchangePublicDataChannelInit,
             publicData: ExchangePublicData): Props =
-    Props(new ExchangePublicDataManager(config, exchangeConfig, tradePairs, exchangePublicDataInquirer, exchange, publicDataChannelProps, publicData))
+    Props(new ExchangePublicDataManager(config, exchangeConfig, tickerTradePairs, tradableTradePairs, exchangePublicDataInquirer, exchange, publicDataChannelProps, publicData))
 }
 
 /**
@@ -103,7 +103,8 @@ object ExchangePublicDataManager {
  */
 case class ExchangePublicDataManager(config: Config,
                                      exchangeConfig: ExchangeConfig,
-                                     tradePairs: Set[TradePair],
+                                     tickerTradePairs: Set[TradePair],
+                                     tradableTradePairs: Set[TradePair],
                                      exchangePublicDataInquirer: ActorRef,
                                      exchange: ActorRef,
                                      exchangePublicDataChannelProps: ExchangePublicDataChannelInit,
@@ -120,7 +121,7 @@ case class ExchangePublicDataManager(config: Config,
 
   def onTickerUpdate(): Unit = {
     if (!tickerCompletelyInitialized) {
-      tickerCompletelyInitialized = tradePairs.subsetOf(publicData.ticker.keySet)
+      tickerCompletelyInitialized = tickerTradePairs.subsetOf(publicData.ticker.keySet)
       if (tickerCompletelyInitialized) {
         exchange ! Initialized()
       }
@@ -188,7 +189,7 @@ case class ExchangePublicDataManager(config: Config,
   }
 
   override def preStart(): Unit = {
-    publicDataChannel = context.actorOf(exchangePublicDataChannelProps(config.global, exchangeConfig, self, exchangePublicDataInquirer),
+    publicDataChannel = context.actorOf(exchangePublicDataChannelProps(config.global, exchangeConfig, tickerTradePairs, tradableTradePairs, self, exchangePublicDataInquirer),
       s"${exchangeConfig.name}-PublicDataChannel")
   }
 

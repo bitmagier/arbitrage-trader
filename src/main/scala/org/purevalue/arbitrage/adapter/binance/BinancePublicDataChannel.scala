@@ -19,6 +19,7 @@ import org.purevalue.arbitrage.{adapter, _}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
+import scala.collection.Set
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor, Future, Promise}
 import scala.util.{Failure, Success}
@@ -62,9 +63,11 @@ object BinancePublicDataChannel {
 
   def props(globalConfig: GlobalConfig,
             exchangeConfig: ExchangeConfig,
+            tickerTradePairs: Set[TradePair],
+            tradableTradePairs: Set[TradePair],
             publicDataManager: ActorRef,
             binancePublicDataInquirer: ActorRef): Props =
-    Props(new BinancePublicDataChannel(globalConfig, exchangeConfig, publicDataManager, binancePublicDataInquirer))
+    Props(new BinancePublicDataChannel(globalConfig, exchangeConfig, tickerTradePairs, tradableTradePairs, publicDataManager, binancePublicDataInquirer))
 }
 /**
  * Binance TradePair-based data channel
@@ -72,6 +75,8 @@ object BinancePublicDataChannel {
  */
 private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
                                                 exchangeConfig: ExchangeConfig,
+                                                tickerTradePairs: Set[TradePair],
+                                                tradableTradePairs: Set[TradePair],
                                                 publicDataManager: ActorRef,
                                                 binancePublicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BinancePublicDataChannel])
@@ -147,9 +152,14 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
       Future.successful(Nil)
   }
 
-  val SubscribeMessages: List[StreamSubscribeRequestJson] = List(
-    StreamSubscribeRequestJson(params = Seq(BookTickerStreamName), id = IdBookTickerStream),
-  )
+  def subscribeMessages: List[StreamSubscribeRequestJson] = {
+     // <symbol>@bookTicker
+    val tickerSymbols: Set[String] = tickerTradePairs.map(e => binanceTradePairBySymbol.values.find(e == _.toTradePair).get).map(_.symbol)
+    // TODO order books val orderBookSymbols: Set[String] = tradableTradePairs.map(e => binanceTradePairBySymbol.values.find(e == _.toTradePair).get).map(_.symbol)
+    List(
+      StreamSubscribeRequestJson(params = tickerSymbols.map(e => s"$e@bookTicker").toSeq, id = IdBookTickerStream),
+    )
+  }
 
   // flow to us
   // emits a list of Messages and then keep the connection open
@@ -162,7 +172,7 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
           .pipeTo(publicDataManager)
       ),
       Source(
-        SubscribeMessages.map(msg => TextMessage(msg.toJson.compactPrint))
+        subscribeMessages.map(msg => TextMessage(msg.toJson.compactPrint))
       ).concatMat(Source.maybe[Message])(Keep.right))(Keep.right)
   }
 
