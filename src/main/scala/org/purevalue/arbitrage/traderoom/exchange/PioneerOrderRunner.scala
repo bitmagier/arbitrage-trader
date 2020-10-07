@@ -17,7 +17,7 @@ import org.purevalue.arbitrage.util.{InitSequence, InitStep, Util, WaitingFor}
 import org.purevalue.arbitrage.{Config, ExchangeConfig, Main}
 import org.slf4j.LoggerFactory
 
-import scala.concurrent.duration.{DurationInt, FiniteDuration}
+import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor, Future}
 import scala.util.{Failure, Success}
 
@@ -298,15 +298,14 @@ class PioneerOrderRunner(config: Config,
     log.info(s"running pioneer order for $ExchangeName")
 
     val maxWaitTime = config.global.internalCommunicationTimeoutDuringInit.duration
-    val balanceUpdateMaxWaitTime: FiniteDuration = 5.seconds
     val InitSequence = new InitSequence(log, s"$ExchangeName  PioneerOrderRunner",
       List(
         InitStep(s"Submit pioneer order 1 (buy ${SecondaryReserveAsset.officialSymbol} from ${PrimaryReserveAsset.officialSymbol})", () => submitFirstPioneerOrder()),
         InitStep("Waiting until Pioneer order 1 is validated", () => order1Validated.await(maxWaitTime)),
-        InitStep("Waiting until wallet balance reflects update from order 1", () => order1BalanceUpdateArrived.await(balanceUpdateMaxWaitTime)),
+        InitStep("Waiting until wallet balance reflects update from order 1", () => order1BalanceUpdateArrived.await(maxWaitTime)),
         InitStep(s"Submit pioneer order 2 (sell ${SecondaryReserveAsset.officialSymbol} to ${PrimaryReserveAsset.officialSymbol})", () => submitSecondPioneerOrder()),
         InitStep("Waiting until Pioneer order 2 is validated", () => order2Validated.await(maxWaitTime)),
-        InitStep("Waiting until wallet balance reflects update from order 2", () => order2BalanceUpdateArrived.await(balanceUpdateMaxWaitTime)),
+        InitStep("Waiting until wallet balance reflects update from order 2", () => order2BalanceUpdateArrived.await(maxWaitTime)),
         InitStep("Submit pioneer order 3 and directly cancel that order", () => submitBuyToCancelPioneerOrder()),
         InitStep("Waiting until Pioneer order 3 is validated", () => order3Validated.await(maxWaitTime))
       ))
