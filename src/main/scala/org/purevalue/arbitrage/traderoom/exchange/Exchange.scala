@@ -221,13 +221,13 @@ case class Exchange(exchangeName: String,
 
     } catch {
       case e: Exception => log.error(s"$exchangeName: preStart failed", e)
-      // TODO coordinated shudown
+      // TODO coordinated shutdown
     }
   }
 
   def setTradableTradePairs(tradePairs: Set[TradePair]): Unit = {
     tradeableTradePairs = tradePairs
-    log.info(s"[$exchangeName]  tradable pairs: $tradePairs")
+    log.info(s"[$exchangeName]  tradable pairs: ${tradePairs.toSeq.sortBy(_.toString)}")
     sender() ! Done
   }
 

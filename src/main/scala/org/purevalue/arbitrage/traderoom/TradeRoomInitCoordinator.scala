@@ -123,7 +123,7 @@ class TradeRoomInitCoordinator(val config: Config,
 
     val fiatTradePairs: Set[Tuple2[String, TradePair]] = eTradePairs.filter(_._2.involvedAssets.exists(_.isFiat))
     log.debug(s"${Emoji.Robot}  Dropping all FIAT trade pairs: $fiatTradePairs")
-    for ((exchange,tp) <- fiatTradePairs) {
+    for ((exchange, tp) <- fiatTradePairs) {
       dropTradePairSync(exchange, tp)
     }
 
@@ -150,20 +150,24 @@ class TradeRoomInitCoordinator(val config: Config,
   def determineTradableTradepairs(): Unit = {
     val allTradePairs = tickerTradePairs.values.flatten.toSet
     val arbitragePairs = allTradePairs.filter(e => tickerTradePairs.count(_._2.contains(e)) > 1)
-    def condition2(exchange:String, tp:TradePair): Boolean = {
+
+    def condition2(exchange: String, tp: TradePair): Boolean = {
       val arbitrageAssets = arbitragePairs.flatMap(_.involvedAssets)
-      arbitrageAssets.contains(tp.baseAsset) || arbitrageAssets.contains(tp.quoteAsset) ||
-        tp.involvedAssets.contains(config.exchanges(exchange).usdEquivalentCoin) ||
-        config.exchanges(exchange).reserveAssets.contains(tp.baseAsset) ||
-        config.exchanges(exchange).reserveAssets.contains(tp.quoteAsset)
+      (arbitrageAssets.contains(tp.baseAsset) || arbitrageAssets.contains(tp.quoteAsset)) &&
+        (tp.involvedAssets.contains(config.exchanges(exchange).usdEquivalentCoin) ||
+          config.exchanges(exchange).reserveAssets.contains(tp.baseAsset) ||
+          config.exchanges(exchange).reserveAssets.contains(tp.quoteAsset))
     }
-    tradableTradePairs = tickerTradePairs.map(e => e._1 -> e._2.filter(x => arbitragePairs.contains(x) || condition2(e._1, x)))
+
+    tradableTradePairs = tickerTradePairs
+      .map(e => e._1 ->
+        e._2.filter(x => arbitragePairs.contains(x) || condition2(e._1, x)))
   }
 
   def pushTradableTradePairs(): Unit = {
     implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
     exchanges.foreach {
-      case (exchange,actor) => Await.ready(actor ? SetTradableTradePairs(tradableTradePairs(exchange)), timeout.duration.plus(500.millis))
+      case (exchange, actor) => Await.ready(actor ? SetTradableTradePairs(tradableTradePairs(exchange)), timeout.duration.plus(500.millis))
     }
   }
 

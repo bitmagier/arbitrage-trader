@@ -163,7 +163,7 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
 
   // flow to us
   // emits a list of Messages and then keep the connection open
-  val wsFlow: Flow[Message, Message, Promise[Option[Message]]] = {
+  def wsFlow: Flow[Message, Message, Promise[Option[Message]]] = {
     Flow.fromSinkAndSourceCoupledMat(
       Sink.foreach[Message](message =>
         decodeMessage(message)
