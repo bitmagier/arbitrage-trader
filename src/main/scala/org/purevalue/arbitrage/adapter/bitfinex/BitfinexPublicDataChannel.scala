@@ -316,7 +316,7 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
       }
 
     case msg: Message =>
-      log.warn(s"Unexpected kind of Message received: $msg")
+      log.warn(s"Unexpected kind of message received: $msg")
       Future.successful(Nil)
   }
 
@@ -340,6 +340,7 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
     futureResponse.flatMap {
       upgrade =>
         if (upgrade.response.status == StatusCodes.SwitchingProtocols) {
+          log.info(s"connected")
           Future.successful(Done)
         } else {
           throw new RuntimeException(s"Connection failed: ${upgrade.response.status}")
@@ -351,6 +352,7 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
   private def subscribeOrderBookMessage(tradePair: BitfinexTradePair): SubscribeRequestJson = SubscribeRequestJson(channel = "book", symbol = tradePair.apiSymbol)
 
   def connect(): Unit = {
+    log.info(s"connecting WebSockets ...")
     var connectionId: Int = 0
     bitfinexTradePairByApiSymbol.values.grouped(MaximumNumberOfChannelsPerConnection).foreach { partition =>
       log.debug(s"""starting WebSocket stream partition for Tickers ${partition.mkString(",")}""")
@@ -374,7 +376,7 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
       wsList = ws :: wsList
       connectedList = createConnected(ws._1) :: connectedList
     }
-    log.info(s"${wsList.size} WebSockets connected")
+    log.info(s"${wsList.size} WebSockets started")
   }
 
   def initBitfinexTradePairBySymbol(): Unit = {
@@ -384,6 +386,14 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
       timeout.duration.plus(500.millis))
       .map(e => (e.apiSymbol, e))
       .toMap
+  }
+
+  override def postStop(): Unit = {
+    wsList
+      .filterNot(_._2.isCompleted)
+      .foreach { c =>
+        c._2.success(None) // close open connections
+    }
   }
 
   override def preStart() {

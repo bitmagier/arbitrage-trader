@@ -173,6 +173,7 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
   def createConnected: Future[Done.type] =
     ws._1.flatMap { upgrade =>
       if (upgrade.response.status == StatusCodes.SwitchingProtocols) {
+        log.info("connected")
         Future.successful(Done)
       } else {
         throw new RuntimeException(s"Connection failed: ${upgrade.response.status}")
@@ -180,7 +181,7 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
     }
 
   def connect(): Unit = {
-    log.trace("open WebSocket stream...")
+    log.info(s"connect WebSocket $CoinbaseWebSocketEndpoint...")
 
     ws = Http().singleWebSocketRequest(WebSocketRequest(CoinbaseWebSocketEndpoint), wsFlow)
     ws._2.future.onComplete { e =>
@@ -188,7 +189,6 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
       self ! Kill
     }
     connected = createConnected
-    log.info("WebSocket connected")
   }
 
 
@@ -199,6 +199,10 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
       timeout.duration.plus(500.millis))
       .map(e => (e.id, e))
       .toMap
+  }
+
+  override def postStop(): Unit = {
+    if (!ws._2.isCompleted) ws._2.success(None)
   }
 
   override def preStart() {

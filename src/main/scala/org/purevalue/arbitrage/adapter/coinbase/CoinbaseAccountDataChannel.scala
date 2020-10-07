@@ -360,6 +360,7 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
   def createConnected: Future[Done.type] =
     ws._1.flatMap { upgrade =>
       if (upgrade.response.status == StatusCodes.SwitchingProtocols) {
+        log.info("connected")
         Future.successful(Done)
       } else {
         throw new RuntimeException(s"Connection failed: ${upgrade.response.status}")
@@ -368,14 +369,13 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
 
 
   def connect(): Unit = {
-    log.trace(s"starting WebSocket stream using $CoinbaseWebSocketEndpoint")
+    log.info(s"starting WebSocket $CoinbaseWebSocketEndpoint ...")
     ws = Http().singleWebSocketRequest(WebSocketRequest(CoinbaseWebSocketEndpoint), wsFlow())
     ws._2.future.onComplete { e =>
       log.info(s"connection closed: ${e.get}")
       self ! Kill
     }
     connected = createConnected
-    log.info("WebSocket connected")
   }
 
   def onStreamsRunning(): Unit = {
@@ -468,6 +468,10 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
       accounts <- queryAccounts(serverTime)
     } yield accounts)
       .pipeTo(exchangeAccountDataManager)
+  }
+
+  override def postStop(): Unit = {
+    if (!ws._2.isCompleted) ws._2.success(None)
   }
 
   override def preStart(): Unit = {

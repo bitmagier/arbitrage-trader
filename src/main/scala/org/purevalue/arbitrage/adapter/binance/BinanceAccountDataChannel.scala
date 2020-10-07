@@ -578,11 +578,6 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
     exchangeAccountDataManager ! ExchangeAccountDataManager.Initialized()
   }
 
-  override def postStop(): Unit = {
-    // TODO DELETE /api/v3/userDataStream?listenKey=
-    // https://github.com/binance-exchange/binance-official-api-docs/blob/master/user-data-stream.md
-  }
-
   val SubscribeMessages: List[AccountStreamSubscribeRequestJson] = List(
     AccountStreamSubscribeRequestJson(params = Seq(OutboundAccountPositionStreamName), id = IdOutboundAccountPositionStream),
     AccountStreamSubscribeRequestJson(params = Seq(BalanceUpdateStreamName), id = IdBalanceUpdateStream),
@@ -606,7 +601,7 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
   def createConnected: Future[Done.type] =
     ws._1.flatMap { upgrade =>
       if (upgrade.response.status == StatusCodes.SwitchingProtocols) {
-        if (log.isTraceEnabled) log.trace("WebSocket connected")
+        log.info("connected")
         Future.successful(Done)
       } else {
         throw new RuntimeException(s"Connection failed: ${upgrade.response.status}")
@@ -614,13 +609,20 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
     }
 
   def connect(): Unit = {
-    log.trace(s"starting WebSocket stream using $WebSocketEndpoint")
+    log.info(s"connecting WebSocket $WebSocketEndpoint ...")
     ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow)
     ws._2.future.onComplete { e =>
       log.info(s"connection closed: ${e.get}")
       self ! Kill
     }
     connected = createConnected
+  }
+
+
+  override def postStop(): Unit = {
+    // TODO DELETE /api/v3/userDataStream?listenKey=
+    // https://github.com/binance-exchange/binance-official-api-docs/blob/master/user-data-stream.md
+    if (!ws._2.isCompleted) ws._2.success(None)
   }
 
   override def preStart(): Unit = {

@@ -179,6 +179,7 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
   def createConnected: Future[Done.type] =
     ws._1.flatMap { upgrade =>
       if (upgrade.response.status == StatusCodes.SwitchingProtocols) {
+        log.info("connected")
         Future.successful(Done)
       } else {
         throw new RuntimeException(s"Connection failed: ${upgrade.response.status}")
@@ -186,7 +187,7 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
     }
 
   def connect(): Unit = {
-    log.trace("open WebSocket stream...")
+    log.info(s"connecting WebSocket $WebSocketEndpoint ...")
 
     ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow)
     ws._2.future.onComplete { e =>
@@ -194,7 +195,6 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
       self ! Kill // trigger restart
     }
     connected = createConnected
-    log.info("WebSocket connected")
   }
 
   // to disconnect:
@@ -221,6 +221,10 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
 
   def onStreamsRunning(): Unit = {
     deliverBookTickerState()
+  }
+
+  override def postStop(): Unit = {
+    if (!ws._2.isCompleted) ws._2.success(None)
   }
 
   override def preStart() {

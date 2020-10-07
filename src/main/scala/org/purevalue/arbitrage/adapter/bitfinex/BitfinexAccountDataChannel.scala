@@ -452,6 +452,7 @@ private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
   def createConnected: Future[Done.type] =
     ws._1.flatMap { upgrade =>
       if (upgrade.response.status == StatusCodes.SwitchingProtocols) {
+        log.info("connected")
         Future.successful(Done)
       } else {
         throw new RuntimeException(s"Connection failed: ${upgrade.response.status}")
@@ -477,14 +478,13 @@ private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
   }
 
   def connect(): Unit = {
-    if (log.isTraceEnabled) log.trace("starting WebSocket stream")
+    log.info(s"connecting WebSocket $WebSocketEndpoint ...")
     ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow)
     ws._2.future.onComplete { e =>
       log.info(s"connection closed: ${e.get}")
       self ! Kill // trigger restart
     }
     connected = createConnected
-    log.info("WebSocket connected")
   }
 
   def newLimitOrder(o: OrderRequest): Future[NewOrderAck] = {
@@ -558,6 +558,10 @@ private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
 
   def onStreamsRunning(): Unit = {
     exchangeAccountDataManager ! Initialized()
+  }
+
+  override def postStop(): Unit = {
+    if (!ws._2.isCompleted) ws._2.success(None)
   }
 
   override def preStart(): Unit = {
