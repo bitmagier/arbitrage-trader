@@ -50,7 +50,7 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
     val age = Duration.between(lastSeen, Instant.now)
     val r = age.compareTo(config.maxTickerAge) < 0
     if (!r) {
-      log.warn(s"${Emoji.NoSupport}  Sorry, can't let that order through, because we have an aged ticker/orderBook (${age.toSeconds} s) for ${o.exchange} here.")
+      log.warn(s"${Emoji.NoSupport}  Sorry, can't let that order through, because we have an aged orderBook or ticker (${age.toSeconds} s) for ${o.exchange} here.")
       log.debug(s"${Emoji.NoSupport}  $o")
     }
     r

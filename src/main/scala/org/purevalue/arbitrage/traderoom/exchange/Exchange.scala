@@ -268,9 +268,8 @@ case class Exchange(exchangeName: String,
    */
   def stalePublicDataWatch(): Unit = {
     val lastSeen: Instant = (publicData.age.heartbeatTS.toSeq ++ publicData.age.tickerTS.toSeq ++ publicData.age.orderBookTS.toSeq).max
-    if (Duration.between(lastSeen, Instant.now).compareTo(config.tradeRoom.restarExchangeWhenDataStreamIsOlderThan) > 0) {
-      log.warn(s"${Emoji.Robot}  Killing Exchange actor ($exchangeName) because of outdated ticker data")
-      self ! Kill
+    if (Duration.between(lastSeen, Instant.now).compareTo(config.tradeRoom.restarWhenDataStreamIsOlderThan) > 0) {
+      throw new RuntimeException(s"${Emoji.Robot}  Killing Exchange actor ($exchangeName) because of outdated data")
     }
   }
 
