@@ -189,7 +189,7 @@ class ExchangeAccountDataManager(config: Config,
   }
 
   override val supervisorStrategy: OneForOneStrategy = {
-    OneForOneStrategy(maxNrOfRetries = 6, withinTimeRange = 30.minutes, loggingEnabled = true) {
+    OneForOneStrategy(maxNrOfRetries = 10, withinTimeRange = 30.minutes, loggingEnabled = true) {
       case _: Throwable => Restart
     }
   }
