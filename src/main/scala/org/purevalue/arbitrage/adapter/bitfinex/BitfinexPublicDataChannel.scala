@@ -247,7 +247,7 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
         case _ => "unknown error code"
       }
       log.error(s"received error ($errorName) message: $j")
-    case "info" => log.trace(s"received info message: $j")
+    case "info" => log.debug(s"received info message: $j")
     case _ => log.warn(s"received unidentified message: $j")
   }
 
@@ -353,7 +353,7 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
   def connect(): Unit = {
     var connectionId: Int = 0
     bitfinexTradePairByApiSymbol.values.grouped(MaximumNumberOfChannelsPerConnection).foreach { partition =>
-      if (log.isTraceEnabled) log.trace(s"""starting a WebSocket stream partition for Tickers ${partition.mkString(",")}""")
+      log.debug(s"""starting WebSocket stream partition for Tickers ${partition.mkString(",")}""")
       val subscribeMessages: List[SubscribeRequestJson] = partition.map(e => subscribeTickerMessage(e)).toList
       connectionId += 1
       val ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow(connectionId, subscribeMessages))
@@ -363,7 +363,7 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
     }
 
     bitfinexTradePairByApiSymbol.values.grouped(MaximumNumberOfChannelsPerConnection).foreach { partition =>
-      if (log.isTraceEnabled) log.trace(s"""starting a WebSocket stream partition for OrderBooks ${partition.mkString(",")}""")
+      log.debug(s"""starting WebSocket stream partition for OrderBooks ${partition.mkString(",")}""")
       val subscribeMessages: List[SubscribeRequestJson] = partition.map(e => subscribeOrderBookMessage(e)).toList
       connectionId += 1
       val ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow(connectionId, subscribeMessages))
@@ -388,7 +388,7 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
 
   override def preStart() {
     try {
-      if (log.isTraceEnabled()) log.trace(s"BitfinexPublicDataChannel initializing...")
+      log.debug(s"BitfinexPublicDataChannel initializing...")
       initBitfinexTradePairBySymbol()
       self ! Connect()
     } catch {
