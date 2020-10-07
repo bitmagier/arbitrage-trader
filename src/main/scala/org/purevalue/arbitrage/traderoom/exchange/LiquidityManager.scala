@@ -228,6 +228,7 @@ class LiquidityManager(val config: Config,
       addLock(lock)
       Some(lock)
     } else {
+      log.debug(s"refused liquidity-lock request on ${r.exchange} for ${r.coins.mkString(" ,")} (don't use: ${r.dontUseTheseReserveAssets})")
       None
     }
   }

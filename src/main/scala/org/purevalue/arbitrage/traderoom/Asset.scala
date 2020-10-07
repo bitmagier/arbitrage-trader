@@ -200,4 +200,6 @@ case class LocalCryptoValue(exchange: String, asset: Asset, amount: Double) {
       .convertTo(targetAsset, tickers(exchange))
     LocalCryptoValue(exchange, v.asset, v.amount)
   }
+
+  override def toString: String = s"LocalCryptoValue($exchange: ${formatDecimal(amount, asset.defaultFractionDigits)} ${asset.officialSymbol})"
 }

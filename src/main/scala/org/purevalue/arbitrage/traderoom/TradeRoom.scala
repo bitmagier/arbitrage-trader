@@ -256,7 +256,7 @@ class TradeRoom(val config: Config,
             case Failure(e) => log.error("placing orders failed", e)
           }
 
-        case Success(None) => log.info(s"${Emoji.Robot}  Liquidity for trades not yet available: $requiredLiquidity")
+        case Success(None) => log.info(s"""${Emoji.Robot}  Liquidity for trades not yet available: ${requiredLiquidity.mkString(", ")}""")
         case Failure(e) => log.error("lockAllRequiredLiquidity failed", e)
       }
     }

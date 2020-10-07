@@ -101,16 +101,14 @@ class LiquidityBalancer(val config: Config,
             .lastOption
 
         if (bestReserveAssets.isEmpty) {
-          log.debug(s"[${exchangeConfig.name}] no good reserve asset found to satisfy $demand")
+          log.debug(s"${Emoji.LookingDown}  [${exchangeConfig.name}] no good reserve asset found to satisfy $demand")
           None
         } else {
-          if (log.isTraceEnabled) log.trace(s"[${exchangeConfig.name}] found best usable reserve asset: ${bestReserveAssets.get._1}, rating=${bestReserveAssets.get._2} for providing $demand")
+          log.debug(s"[${exchangeConfig.name}] found best usable reserve asset: ${bestReserveAssets.get._1}, rating=${bestReserveAssets.get._2} for providing $demand")
           val orderAmount: Double = ceilToTxGranularity(demand.asset, demand.amount)
           val tradePair = TradePair(demand.asset, bestReserveAssets.get._1)
           val limit = determineRealisticLimit(tradePair, TradeSide.Buy, orderAmount)
           val orderRequest = OrderRequest(UUID.randomUUID(), None, exchangeConfig.name, tradePair, TradeSide.Buy, exchangeConfig.feeRate, orderAmount, limit)
-
-          log.info(s"${Emoji.LookingDown}  [${exchangeConfig.name}] Unable to provide liquidity demand: $demand")
           Some(LiquidityTransformationOrder(orderRequest))
         }
       }
@@ -132,7 +130,9 @@ class LiquidityBalancer(val config: Config,
           .toSeq
       }
 
-      determineDemandedLiquidity(wc).flatMap { d =>
+      val demandedLiquidity: Seq[UniqueDemand] = determineDemandedLiquidity(wc)
+      log.debug(s"[${exchangeConfig.name}] identified liquidity demand: $demandedLiquidity")
+      demandedLiquidity.flatMap { d =>
         tryToFindAGoodLiquidityProvidingOrder(d, wc)
       }
     }
@@ -274,7 +274,7 @@ class LiquidityBalancer(val config: Config,
         tradePairs.contains(TradePair(a, b)) || tradePairs.contains(TradePair(b, a))
       }
 
-      if (log.isTraceEnabled) log.trace(s"[${exchangeConfig.name}] re-balancing reserve asset wallet:${wc.balanceSnapshot} with pending incoming $pendingIncomingReserveLiquidity")
+      log.debug(s"[${exchangeConfig.name}] re-balancing reserve asset wallet:${wc.balanceSnapshot} with pending incoming $pendingIncomingReserveLiquidity")
       val currentReserveAssetsBalance: Seq[CryptoValue] = wc.balanceSnapshot
         .filter(e => exchangeConfig.reserveAssets.contains(e._1))
         .map(e => CryptoValue(e._1, e._2.amountAvailable))
@@ -418,7 +418,6 @@ class LiquidityBalancer(val config: Config,
       }
       if (stillUnfinished.isEmpty) {
         log.debug(s"[${exchangeConfig.name}] all ${orderRefs.size} liquidity transaction(s) finished")
-        sender() ! Finished()
       } else {
         throw new RuntimeException(s"Not all liquidity tx orders did finish. Still unfinished: [$stillUnfinished]") // should not happen, because TradeRoom/Exchange cleanup unfinsihed orders by themself!
       }
@@ -438,6 +437,7 @@ class LiquidityBalancer(val config: Config,
       waitUntilLiquidityOrdersFinished(
         placeLiquidityOrders(provideDemandOrders ++ incomingReserveLiquidityOrders ++ rebalanceReservesOrders)
       )
+      sender() ! Finished()
 
     } catch {
       case e: OrderBookTooFlatException =>
