@@ -83,10 +83,9 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
 
   val BaseRestEndpoint = "https://api.binance.com"
   val WebSocketEndpoint: Uri = Uri(s"wss://stream.binance.com:9443/stream")
-  // val IdBookTickerStream: Int = 1
-  var streamIds: Set[Int] = Set()
+  val IdBookTickerStream: Int = 1
 
-  var outstandingStreamSubscribeResponses: Set[Int] = streamIds
+  var outstandingStreamSubscribeResponses: Set[Int] = Set(IdBookTickerStream)
 
   private var binanceTradePairBySymbol: Map[String, BinanceTradePair] = _
 
@@ -118,7 +117,7 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
 
   def decodeDataMessage(j: JsObject): Seq[IncomingPublicBinanceJson] = {
     j.fields("stream").convertTo[String] match {
-      case s:String if s.endsWith("@bookTicker") =>
+      case "!@bookTicker" =>
         j.fields("data").convertTo[RawBookTickerStreamJson] match {
           case t if binanceTradePairBySymbol.contains(t.s) => Seq(t)
           case other =>
@@ -151,21 +150,9 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
   }
 
   def subscribeMessages: List[StreamSubscribeRequestJson] = {
-     // <symbol>@bookTicker
-    val tickerSymbols: Vector[String] = binanceTradePairBySymbol.values
-      .filter(e => tradePairs.contains(e.toTradePair))
-      .map(_.symbol)
-      .map(_.toLowerCase)
-      .toVector
-    var result: List[StreamSubscribeRequestJson] = Nil
-    for (id <- tickerSymbols.indices) {
-      streamIds += id
-      result = StreamSubscribeRequestJson(params = Seq(s"${tickerSymbols(id)}@bookTicker"), id = id) :: result
-    }
-    result
-//    List(
-//      StreamSubscribeRequestJson(params = tickerSymbols.map(e => s"$e@bookTicker"), id = IdBookTickerStream),
-//    )
+    List(
+      StreamSubscribeRequestJson(params = Seq("!@bookTicker"), id = IdBookTickerStream),
+    )
   }
 
   // flow to us
