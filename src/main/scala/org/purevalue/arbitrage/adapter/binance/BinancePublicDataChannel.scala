@@ -149,11 +149,8 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
       Future.successful(Nil)
   }
 
-  def subscribeMessages: List[StreamSubscribeRequestJson] = {
-    List(
-      StreamSubscribeRequestJson(params = Seq("!@bookTicker"), id = IdBookTickerStream),
-    )
-  }
+  def subscribeMessages: List[StreamSubscribeRequestJson] =
+    List(StreamSubscribeRequestJson(params = Seq("!bookTicker"), id = IdBookTickerStream))
 
   // flow to us
   // emits a list of Messages and then keep the connection open
