@@ -91,16 +91,14 @@ object CoinbasePublicDataChannel {
 
   def props(globalConfig: GlobalConfig,
             exchangeConfig: ExchangeConfig,
-            tickerTradePairs: Set[TradePair],
-            tradableTradePairs: Set[TradePair],
+            tradePairs: Set[TradePair],
             publicDataManager: ActorRef,
             coinbasePublicDataInquirer: ActorRef): Props = Props(
-    new CoinbasePublicDataChannel(globalConfig, exchangeConfig, tickerTradePairs, tradableTradePairs, publicDataManager, coinbasePublicDataInquirer))
+    new CoinbasePublicDataChannel(globalConfig, exchangeConfig, tradePairs, publicDataManager, coinbasePublicDataInquirer))
 }
 private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
                                                   exchangeConfig: ExchangeConfig,
-                                                  tickerTradePairs: Set[TradePair],
-                                                  tradableTradePairs: Set[TradePair],
+                                                  tradePairs: Set[TradePair],
                                                   publicDataManager: ActorRef,
                                                   coinbasePublicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[CoinbasePublicDataChannel])
@@ -156,10 +154,10 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
   def subscribeMessages: List[SubscribeRequestJson] = {
     List(
       SubscribeRequestJson(
-        product_ids = coinbaseTradePairByProductId.filter(e => tickerTradePairs.contains(e._2.toTradePair)).keys.toSeq,
+        product_ids = coinbaseTradePairByProductId.filter(e => tradePairs.contains(e._2.toTradePair)).keys.toSeq,
         channels = Seq(TickerChannelName)),
       SubscribeRequestJson(
-        product_ids = coinbaseTradePairByProductId.filter(e => tradableTradePairs.contains(e._2.toTradePair)).keys.toSeq,
+        product_ids = coinbaseTradePairByProductId.filter(e => tradePairs.contains(e._2.toTradePair)).keys.toSeq,
         channels = Seq(OrderBookChannelname))
       )
   }
@@ -208,6 +206,7 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
     coinbaseTradePairByProductId = Await.result(
       (coinbasePublicDataInquirer ? GetCoinbaseTradePairs()).mapTo[Set[CoinbaseTradePair]],
       timeout.duration.plus(500.millis))
+      .filter(e => tradePairs.contains(e.toTradePair))
       .map(e => (e.id, e))
       .toMap
   }

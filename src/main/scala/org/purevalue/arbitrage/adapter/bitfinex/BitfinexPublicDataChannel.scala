@@ -20,8 +20,8 @@ import org.purevalue.arbitrage.{adapter, _}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
-import scala.collection.{Seq, Set}
 import scala.collection.concurrent.TrieMap
+import scala.collection.{Seq, Set}
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor, Future, Promise}
 
@@ -170,11 +170,10 @@ object BitfinexPublicDataChannel {
 
   def props(globalConfig: GlobalConfig,
             exchangeConfig: ExchangeConfig,
-            tickerTradePairs: Set[TradePair],
-            tradableTradePairs: Set[TradePair],
+            tradePairs: Set[TradePair],
             exchangePublicDataManager: ActorRef,
             publicDataInquirer: ActorRef): Props =
-    Props(new BitfinexPublicDataChannel(globalConfig, exchangeConfig, tickerTradePairs, tradableTradePairs, exchangePublicDataManager, publicDataInquirer))
+    Props(new BitfinexPublicDataChannel(globalConfig, exchangeConfig, tradePairs, exchangePublicDataManager, publicDataInquirer))
 }
 
 /**
@@ -183,8 +182,7 @@ object BitfinexPublicDataChannel {
  */
 private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
                                                   exchangeConfig: ExchangeConfig,
-                                                  tickerTradePairs: Set[TradePair],
-                                                  tradableTradePairs: Set[TradePair],
+                                                  tradePairs: Set[TradePair],
                                                   exchangePublicDataManager: ActorRef,
                                                   publicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BitfinexPublicDataChannel])
@@ -366,7 +364,7 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
     wsList = List()
     connectedList = List()
     var connectionId: Int = 0
-    tickerTradePairs.grouped(MaximumNumberOfChannelsPerConnection).foreach { partition =>
+    tradePairs.grouped(MaximumNumberOfChannelsPerConnection).foreach { partition =>
       log.debug(s"""starting WebSocket stream partition for Tickers ${partition.mkString(",")}""")
       val subscribeMessages: List[SubscribeRequestJson] = partition.map(e => subscribeTickerMessage(e)).toList
       connectionId += 1
@@ -376,7 +374,7 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
       connectedList = createConnected(ws._1) :: connectedList
     }
 
-    tradableTradePairs.grouped(MaximumNumberOfChannelsPerConnection).foreach { partition =>
+    tradePairs.grouped(MaximumNumberOfChannelsPerConnection).foreach { partition =>
       log.debug(s"""starting WebSocket stream partition for OrderBooks ${partition.mkString(",")}""")
       val subscribeMessages: List[SubscribeRequestJson] = partition.map(e => subscribeOrderBookMessage(e)).toList
       connectionId += 1
@@ -396,6 +394,7 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
     bitfinexTradePairByApiSymbol = Await.result(
       (publicDataInquirer ? GetBitfinexTradePairs()).mapTo[Set[BitfinexTradePair]],
       timeout.duration.plus(500.millis))
+      .filter(e => tradePairs.contains(e.toTradePair))
       .map(e => (e.apiSymbol, e))
       .toMap
   }

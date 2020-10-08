@@ -7,8 +7,7 @@ import akka.actor.{Actor, ActorRef, Props}
 import akka.pattern.pipe
 import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager._
-import org.purevalue.arbitrage.adapter.{ExchangePublicData, ExchangePublicDataReadonly, WalletBalanceUpdate}
-import org.purevalue.arbitrage.traderoom.TradeRoom.OrderRef
+import org.purevalue.arbitrage.adapter.{ExchangePublicDataReadonly, WalletBalanceUpdate}
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.{ExchangeConfig, adapter}
 

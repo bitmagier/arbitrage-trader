@@ -89,13 +89,12 @@ object ExchangePublicDataManager {
 
   def props(config: Config,
             exchangeConfig: ExchangeConfig,
-            tickerTradePairs: Set[TradePair],
-            tradableTradePairs: Set[TradePair],
+            usableTradePairs: Set[TradePair],
             exchangePublicDataInquirer: ActorRef,
             exchange: ActorRef,
             publicDataChannelProps: ExchangePublicDataChannelInit,
             publicData: ExchangePublicData): Props =
-    Props(new ExchangePublicDataManager(config, exchangeConfig, tickerTradePairs, tradableTradePairs, exchangePublicDataInquirer, exchange, publicDataChannelProps, publicData))
+    Props(new ExchangePublicDataManager(config, exchangeConfig, usableTradePairs, exchangePublicDataInquirer, exchange, publicDataChannelProps, publicData))
 }
 
 /**
@@ -103,8 +102,7 @@ object ExchangePublicDataManager {
  */
 case class ExchangePublicDataManager(config: Config,
                                      exchangeConfig: ExchangeConfig,
-                                     tickerTradePairs: Set[TradePair],
-                                     tradableTradePairs: Set[TradePair],
+                                     usableTradePairs: Set[TradePair],
                                      exchangePublicDataInquirer: ActorRef,
                                      exchange: ActorRef,
                                      exchangePublicDataChannelProps: ExchangePublicDataChannelInit,
@@ -121,7 +119,7 @@ case class ExchangePublicDataManager(config: Config,
 
   def onTickerUpdate(): Unit = {
     if (!tickerCompletelyInitialized) {
-      tickerCompletelyInitialized = tickerTradePairs.subsetOf(publicData.ticker.keySet)
+      tickerCompletelyInitialized = usableTradePairs.subsetOf(publicData.ticker.keySet)
       if (tickerCompletelyInitialized) {
         exchange ! Initialized()
       }
@@ -189,7 +187,7 @@ case class ExchangePublicDataManager(config: Config,
   }
 
   override def preStart(): Unit = {
-    publicDataChannel = context.actorOf(exchangePublicDataChannelProps(config.global, exchangeConfig, tickerTradePairs, tradableTradePairs, self, exchangePublicDataInquirer),
+    publicDataChannel = context.actorOf(exchangePublicDataChannelProps(config.global, exchangeConfig, usableTradePairs, self, exchangePublicDataInquirer),
       s"${exchangeConfig.name}-PublicDataChannel")
   }
 

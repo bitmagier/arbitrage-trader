@@ -63,11 +63,10 @@ object BinancePublicDataChannel {
 
   def props(globalConfig: GlobalConfig,
             exchangeConfig: ExchangeConfig,
-            tickerTradePairs: Set[TradePair],
-            tradableTradePairs: Set[TradePair],
+            tradePairs: Set[TradePair],
             publicDataManager: ActorRef,
             binancePublicDataInquirer: ActorRef): Props =
-    Props(new BinancePublicDataChannel(globalConfig, exchangeConfig, tickerTradePairs, tradableTradePairs, publicDataManager, binancePublicDataInquirer))
+    Props(new BinancePublicDataChannel(globalConfig, exchangeConfig, tradePairs, publicDataManager, binancePublicDataInquirer))
 }
 /**
  * Binance TradePair-based data channel
@@ -75,8 +74,7 @@ object BinancePublicDataChannel {
  */
 private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
                                                 exchangeConfig: ExchangeConfig,
-                                                tickerTradePairs: Set[TradePair],
-                                                tradableTradePairs: Set[TradePair],
+                                                tradePairs: Set[TradePair],
                                                 publicDataManager: ActorRef,
                                                 binancePublicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BinancePublicDataChannel])
@@ -154,10 +152,10 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
 
   def subscribeMessages: List[StreamSubscribeRequestJson] = {
      // <symbol>@bookTicker
-    val tickerSymbols: Set[String] = tickerTradePairs.map(e => binanceTradePairBySymbol.values.find(e == _.toTradePair).get).map(_.symbol)
+    val tickerSymbols: Seq[String] = binanceTradePairBySymbol.values.filter(e => tradePairs.contains(e.toTradePair)).map(_.symbol).toSeq
     // TODO order books val orderBookSymbols: Set[String] = tradableTradePairs.map(e => binanceTradePairBySymbol.values.find(e == _.toTradePair).get).map(_.symbol)
     List(
-      StreamSubscribeRequestJson(params = tickerSymbols.map(e => s"$e@bookTicker").toSeq, id = IdBookTickerStream),
+      StreamSubscribeRequestJson(params = tickerSymbols.map(e => s"$e@bookTicker"), id = IdBookTickerStream),
     )
   }
 
@@ -225,6 +223,7 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
     binanceTradePairBySymbol = Await.result(
       (binancePublicDataInquirer ? GetBinanceTradePairs()).mapTo[Set[BinanceTradePair]],
       timeout.duration.plus(500.millis))
+      .filter(e => tradePairs.contains(e.toTradePair))
       .map(e => (e.symbol, e))
       .toMap
   }

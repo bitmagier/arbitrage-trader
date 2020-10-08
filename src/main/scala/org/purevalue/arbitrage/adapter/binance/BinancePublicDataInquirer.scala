@@ -4,7 +4,7 @@ import akka.actor.{Actor, ActorSystem, Props, Status}
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer._
 import org.purevalue.arbitrage.adapter.{Ask, Bid}
-import org.purevalue.arbitrage.traderoom.exchange.Exchange.{GetTickerTradePairs, TradePairs}
+import org.purevalue.arbitrage.traderoom.exchange.Exchange.{GetAllTradePairs, TradePairs}
 import org.purevalue.arbitrage.traderoom.{Asset, TradePair}
 import org.purevalue.arbitrage.util.HttpUtil.httpGetJson
 import org.purevalue.arbitrage.util.Util.stepSizeToFractionDigits
@@ -157,7 +157,7 @@ private[binance] class BinancePublicDataInquirer(globalConfig: GlobalConfig,
 
   override def receive: Receive = {
     // @formatter:off
-    case GetTickerTradePairs()        => sender() ! TradePairs(tradePairs) // from exchange
+    case GetAllTradePairs()     => sender() ! TradePairs(tradePairs) // from exchange
     case GetBinanceTradePairs() => sender() ! binanceTradePairs // from BinancePublicDataChannel
     case Status.Failure(cause)  => log.error("received failure", cause)
     // @formatter:on

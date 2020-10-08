@@ -23,10 +23,9 @@ import scala.concurrent.{Await, ExecutionContextExecutor, Future}
 import scala.util.{Failure, Success}
 
 object Exchange {
-  case class GetTickerTradePairs()
+  case class GetAllTradePairs()
   case class TradePairs(value: Set[TradePair])
-  case class RemoveTickerTradePair(tradePair: TradePair)
-  case class SetTradableTradePairs(tradeable: Set[TradePair])
+  case class SetUsableTradePairs(tradeable: Set[TradePair])
   case class RemoveOrphanOrder(ref: OrderRef)
   case class StartStreaming()
   case class StreamingStarted(exchange: String)
@@ -36,7 +35,7 @@ object Exchange {
   case class SwitchToInitializedMode()
 
   type ExchangePublicDataInquirerInit = Function2[GlobalConfig, ExchangeConfig, Props]
-  type ExchangePublicDataChannelInit = Function6[GlobalConfig, ExchangeConfig, Set[TradePair], Set[TradePair], ActorRef, ActorRef, Props]
+  type ExchangePublicDataChannelInit = Function5[GlobalConfig, ExchangeConfig, Set[TradePair], ActorRef, ActorRef, Props]
   type ExchangeAccountDataChannelInit = Function4[GlobalConfig, ExchangeConfig, ActorRef, ActorRef, Props]
 
   def props(exchangeName: String,
@@ -71,20 +70,16 @@ case class Exchange(exchangeName: String,
   var tradeSimulator: Option[ActorRef] = None
 
   // dynamic
-  var tickerTradePairs: Set[TradePair] = _ // all usable ones for calculations, etc.
-  var tradeableTradePairs: Set[TradePair] = _ // the ones where we want to trade with
+  var allTradePairs: Set[TradePair] = _
+  var usableTradePairs: Set[TradePair] = _ // all trade pairs we need for calculations and trades
   var publicDataManager: ActorRef = _
   var accountDataManager: ActorRef = _
   var pioneerOrderRunner: ActorRef = _
 
   def startPublicDataManager(): Unit = {
     publicDataManager = context.actorOf(
-      ExchangePublicDataManager.props(config, exchangeConfig, tickerTradePairs, tradeableTradePairs, publicDataInquirer, self, initStuff.exchangePublicDataChannelProps, publicData),
+      ExchangePublicDataManager.props(config, exchangeConfig, usableTradePairs, publicDataInquirer, self, initStuff.exchangePublicDataChannelProps, publicData),
       s"ExchangePublicDataManager-$exchangeName")
-  }
-
-  def removeTickerTradePair(tp: TradePair): Unit = {
-    tickerTradePairs = tickerTradePairs - tp
   }
 
   def initLiquidityManager(j: JoinTradeRoom): Unit = {
@@ -92,7 +87,7 @@ case class Exchange(exchangeName: String,
       LiquidityManager.props(
         config,
         exchangeConfig,
-        tickerTradePairs,
+        usableTradePairs,
         publicData.readonly,
         accountData.wallet,
         j.tradeRoom,
@@ -124,11 +119,11 @@ case class Exchange(exchangeName: String,
     publicDataInquirer = context.actorOf(initStuff.exchangePublicDataInquirerProps(config.global, exchangeConfig), s"PublicDataInquirer-$exchangeName")
 
     implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
-    tickerTradePairs = Await.result(
-      (publicDataInquirer ? GetTickerTradePairs()).mapTo[TradePairs].map(_.value),
+    allTradePairs = Await.result(
+      (publicDataInquirer ? GetAllTradePairs()).mapTo[TradePairs].map(_.value),
       timeout.duration.plus(500.millis))
 
-    log.info(s"$exchangeName: ${tickerTradePairs.size} TradePairs: ${tickerTradePairs.toSeq.sortBy(e => e.toString)}")
+    log.info(s"$exchangeName: ${allTradePairs.size} TradePairs: ${allTradePairs.toSeq.sortBy(e => e.toString)}")
   }
 
   def startAccountDataManager(): Unit = {
@@ -136,6 +131,7 @@ case class Exchange(exchangeName: String,
     if (exchangeConfig.secrets.apiKey.isEmpty || exchangeConfig.secrets.apiSecretKey.isEmpty) {
       throw new RuntimeException(s"Can not start AccountDataManager for exchange $exchangeName because API-Key is not set")
     } else {
+
       accountDataManager = context.actorOf(
         ExchangeAccountDataManager.props(
           config,
@@ -145,6 +141,7 @@ case class Exchange(exchangeName: String,
           initStuff.exchangeAccountDataChannelProps,
           accountData),
         s"ExchangeAccountDataManager-$exchangeName")
+
       if (tradeSimulationMode) {
         tradeSimulator = Some(context.actorOf(TradeSimulator.props(exchangeConfig, publicData.readonly, accountDataManager), s"TradeSimulator-$exchangeName"))
       }
@@ -225,18 +222,17 @@ case class Exchange(exchangeName: String,
     }
   }
 
-  def setTradableTradePairs(tradePairs: Set[TradePair]): Unit = {
-    tradeableTradePairs = tradePairs
-    log.info(s"[$exchangeName]  tradable pairs: ${tradePairs.toSeq.sortBy(_.toString)}")
+  def setUsableTradePairs(tradePairs: Set[TradePair]): Unit = {
+    usableTradePairs = tradePairs
+    log.info(s"[$exchangeName]  usable pairs: ${tradePairs.toSeq.sortBy(_.toString)}")
     sender() ! Done
   }
 
   // @formatter:off
   override def receive: Receive = {
+    case GetAllTradePairs()                       => sender() ! allTradePairs
+    case SetUsableTradePairs(tradePairs)          => setUsableTradePairs(tradePairs)
     case StartStreaming()                         => startStreaming()
-    case GetTickerTradePairs()                    => sender() ! tickerTradePairs
-    case RemoveTickerTradePair(tp)                => removeTickerTradePair(tp); sender() ! Done
-    case SetTradableTradePairs(tradePairs)        => setTradableTradePairs(tradePairs)
     case ExchangePublicDataManager.Initialized()  => publicDataManagerInitialized.arrived()
     case ExchangeAccountDataManager.Initialized() => accountDataManagerInitialized.arrived()
     case PioneerOrderSucceeded()                  => pioneerOrdersSucceeded.arrived()
