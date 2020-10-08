@@ -84,9 +84,8 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
   val BaseRestEndpoint = "https://api.binance.com"
   val WebSocketEndpoint: Uri = Uri(s"wss://stream.binance.com:9443/stream")
   val IdBookTickerStream: Int = 1
-  val BookTickerStreamName: String = "!bookTicker" // real-time stream
 
-  @volatile var outstandingStreamSubscribeResponses: Set[Int] = Set(IdBookTickerStream)
+  var outstandingStreamSubscribeResponses: Set[Int] = Set(IdBookTickerStream)
 
   private var binanceTradePairBySymbol: Map[String, BinanceTradePair] = _
 
@@ -118,7 +117,7 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
 
   def decodeDataMessage(j: JsObject): Seq[IncomingPublicBinanceJson] = {
     j.fields("stream").convertTo[String] match {
-      case BookTickerStreamName =>
+      case s:String if s.endsWith("@bookTicker") =>
         j.fields("data").convertTo[RawBookTickerStreamJson] match {
           case t if binanceTradePairBySymbol.contains(t.s) => Seq(t)
           case other =>

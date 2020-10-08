@@ -148,6 +148,7 @@ class TradeRoomInitCoordinator(val config: Config,
 
   def onStreamingStarted(exchange: String): Unit = {
     exchangesStreamingPending = exchangesStreamingPending - exchange
+    log.debug(s"streaming started on $exchange. Still waiting for $exchangesStreamingPending")
     if (exchangesStreamingPending.isEmpty) {
       onInitialized()
     }
