@@ -151,7 +151,11 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
 
   def subscribeMessages: List[StreamSubscribeRequestJson] = {
      // <symbol>@bookTicker
-    val tickerSymbols: Seq[String] = binanceTradePairBySymbol.values.filter(e => tradePairs.contains(e.toTradePair)).map(_.symbol).toSeq
+    val tickerSymbols: Seq[String] = binanceTradePairBySymbol.values
+      .filter(e => tradePairs.contains(e.toTradePair))
+      .map(_.symbol)
+      .map(_.toLowerCase)
+      .toSeq
     // TODO order books val orderBookSymbols: Set[String] = tradableTradePairs.map(e => binanceTradePairBySymbol.values.find(e == _.toTradePair).get).map(_.symbol)
     List(
       StreamSubscribeRequestJson(params = tickerSymbols.map(e => s"$e@bookTicker"), id = IdBookTickerStream),
