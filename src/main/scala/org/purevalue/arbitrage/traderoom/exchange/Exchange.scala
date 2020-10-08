@@ -123,7 +123,7 @@ case class Exchange(exchangeName: String,
       (publicDataInquirer ? GetAllTradePairs()).mapTo[TradePairs].map(_.value),
       timeout.duration.plus(500.millis))
 
-    log.info(s"$exchangeName: ${allTradePairs.size} TradePairs: ${allTradePairs.toSeq.sortBy(e => e.toString)}")
+    log.debug(s"$exchangeName: ${allTradePairs.size} Total TradePairs: ${allTradePairs.toSeq.sortBy(e => e.toString)}")
   }
 
   def startAccountDataManager(): Unit = {

@@ -95,7 +95,7 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
     symbol => binanceTradePairBySymbol(symbol).toTradePair
 
   def onStreamSubscribeResponse(j: JsObject): Unit = {
-    if (log.isTraceEnabled) log.trace(s"received $j")
+    log.debug(s"received $j")
     val channelId = j.fields("id").convertTo[Int]
     synchronized {
       outstandingStreamSubscribeResponses = outstandingStreamSubscribeResponses - channelId
