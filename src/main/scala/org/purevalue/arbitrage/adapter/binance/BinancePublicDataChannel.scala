@@ -117,7 +117,7 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
 
   def decodeDataMessage(j: JsObject): Seq[IncomingPublicBinanceJson] = {
     j.fields("stream").convertTo[String] match {
-      case "!@bookTicker" =>
+      case "!bookTicker" =>
         j.fields("data").convertTo[RawBookTickerStreamJson] match {
           case t if binanceTradePairBySymbol.contains(t.s) => Seq(t)
           case other =>
