@@ -185,15 +185,17 @@ class ExchangeAccountDataManager(config: Config,
   }
 
   def cancelOrderIfStillExist(c: CancelOrder): Unit = {
+    val cancelOrderOrigin = sender()
     implicit val timeout: Timeout = config.global.internalCommunicationTimeout
     if (accountData.activeOrders.contains(c.ref)) {
       (accountDataChannel ? c).mapTo[CancelOrderResult].onComplete {
         case Success(result) if result.orderUnknown =>
           accountData.activeOrders.remove(c.ref) // when order did not exist on exchange, we remove it here too
-          sender() ! result
+          cancelOrderOrigin ! result
           log.debug(s"removed order ${c.ref} in activeOrders")
-        case Success(result) => sender() ! result
-        case Failure(e) => log.error("CancelOrder failed", e)
+        case Success(result) => cancelOrderOrigin ! result
+        case Failure(e) =>
+          log.error("[houston, we...] CancelOrder failed", e)
       }
     }
   }
