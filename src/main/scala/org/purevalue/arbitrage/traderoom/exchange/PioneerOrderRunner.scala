@@ -89,8 +89,11 @@ class PioneerOrderRunner(config: Config,
 
       if (order.cumulativeFilledQuantity.isEmpty) failed("cumulativeFilledQuantity not set")
       if (diffMoreThan(order.cumulativeFilledQuantity.get, request.amountBaseAsset, MaxAmountDiff)) failed("cumulative filled quantity mismatch") // in most cases the fee is substracted from the amount we get
-      if (request.tradeSide == TradeSide.Buy && (order.priceAverage.isDefined && order.priceAverage.get > order.price.get)) failed("price average above price/limit")
-      if (request.tradeSide == TradeSide.Sell && (order.priceAverage.isDefined && order.priceAverage.get < order.price.get)) failed("price average below price/limit")
+      val PriceAverageRoundingToleranceRate = 0.00000001
+      if (request.tradeSide == TradeSide.Buy && order.priceAverage.isDefined &&
+        order.priceAverage.get * (1.0 - PriceAverageRoundingToleranceRate) > order.price.get) failed("price average above price/limit")
+      if (request.tradeSide == TradeSide.Sell && order.priceAverage.isDefined &&
+        order.priceAverage.get * (1.0 + PriceAverageRoundingToleranceRate) < order.price.get) failed("price average below price/limit")
 
       val incomingRequested = request.calcIncomingLiquidity
       val incomingReal = order.calcIncomingLiquidity(request.feeRate)
@@ -198,7 +201,7 @@ class PioneerOrderRunner(config: Config,
           s"validated: [${order1Validated.isArrived}, ${order2Validated.isArrived}, ${order3Validated.isArrived}]")
     } catch {
       case e: Throwable =>
-        log.error(s"[$ExchangeName] PioneerOrderRunner failed", e)
+        log.debug(s"[$ExchangeName] PioneerOrderRunner failed", e)
         exchange ! PioneerOrderFailed(e)
         stop()
     }
