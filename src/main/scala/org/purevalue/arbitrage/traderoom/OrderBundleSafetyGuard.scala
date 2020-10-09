@@ -32,16 +32,20 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
   def unsafeStats: Map[SafetyGuardDecision, Int] = stats
 
   private def orderLimitCloseToTicker(order: OrderRequest): Boolean = {
-    val ticker = tc.tickers(order.exchange)(order.tradePair)
-    val bestOfferPrice: Double = if (order.tradeSide == TradeSide.Buy) ticker.lowestAskPrice else ticker.highestBidPrice
-    val diff = ((order.limit - bestOfferPrice) / bestOfferPrice).abs
-    val valid = diff < config.maxOrderLimitTickerVariance
-    if (!valid) {
-      log.warn(s"${Emoji.Disagree}  Got OrderBundle with $order where the order-limit is too far away (rate=${formatDecimal(diff, 2)}) from ticker value " +
-        s"(max variance=${formatDecimal(config.maxOrderLimitTickerVariance)})")
-      log.debug(s"$order, $ticker")
+    if (exchangesConfig(order.exchange).tickerIsRealtime) {
+      val ticker = tc.tickers(order.exchange)(order.tradePair)
+      val bestOfferPrice: Double = if (order.tradeSide == TradeSide.Buy) ticker.lowestAskPrice else ticker.highestBidPrice
+      val diff = ((order.limit - bestOfferPrice) / bestOfferPrice).abs
+      val valid = diff < config.maxOrderLimitTickerVariance
+      if (!valid) {
+        log.warn(s"${Emoji.Disagree}  Got OrderBundle with $order where the order-limit is too far away (rate=${formatDecimal(diff, 2)}) from ticker value " +
+          s"(max variance=${formatDecimal(config.maxOrderLimitTickerVariance)})")
+        log.debug(s"$order, $ticker")
+      }
+      valid
+    } else {
+      true // in case our exchange ticker is not a realtime ticker (like on bitfinex), we just give back an okay here
     }
-    valid
   }
 
   private def tickerDataUpToDate(o: OrderRequest): Boolean = {

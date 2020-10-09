@@ -316,6 +316,9 @@ private[binance] case class CancelOrderResponseJson(symbol: String,
   )
 }
 
+// @see https://github.com/binance-exchange/binance-official-api-docs/blob/master/errors.md
+private[binance] case class ErrorResponseJson(code:Int, msg:String)
+
 private[binance] object BinanceAccountDataJsonProtocoll extends DefaultJsonProtocol {
   implicit val listenKeyJson: RootJsonFormat[ListenKeyJson] = jsonFormat1(ListenKeyJson)
   implicit val subscribeMsg: RootJsonFormat[AccountStreamSubscribeRequestJson] = jsonFormat3(AccountStreamSubscribeRequestJson)
@@ -330,6 +333,7 @@ private[binance] object BinanceAccountDataJsonProtocoll extends DefaultJsonProto
   //  implicit val newOrderResponseFillJson: RootJsonFormat[NewOrderResponseFillJson] = jsonFormat4(NewOrderResponseFillJson)
   //  implicit val newOrderResponseResultJson: RootJsonFormat[NewOrderResponseFullJson] = jsonFormat14(NewOrderResponseFullJson)
   implicit val cancelOrderResponseJson: RootJsonFormat[CancelOrderResponseJson] = jsonFormat13(CancelOrderResponseJson)
+  implicit val errorResponseJson: RootJsonFormat[ErrorResponseJson] = jsonFormat2(ErrorResponseJson)
 }
 
 
@@ -533,7 +537,7 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
   // fire and forget - error logging in case of failure
   def cancelOrder(tradePair: TradePair, externalOrderId: Long): Future[CancelOrderResult] = {
     val symbol = binanceTradePairsByTradePair(tradePair).symbol
-    httpRequestJsonBinanceAccount[CancelOrderResponseJson, JsValue](
+    httpRequestJsonBinanceAccount[CancelOrderResponseJson, ErrorResponseJson](
       HttpMethods.DELETE,
       s"$BinanceBaseRestEndpoint/api/v3/order?symbol=$symbol&orderId=$externalOrderId",
       None,
@@ -543,10 +547,11 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
       case Left(response) =>
         log.trace(s"Order successfully canceled: $response")
         exchangeAccountDataManager ! IncomingData(exchangeDataMapping(Seq(response)))
-        CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId.toString, success = true, None)
+        CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId.toString, success = true)
       case Right(errorResponse) =>
         log.error(s"CancelOrder failed: $errorResponse")
-        CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId.toString, success = false, Some(errorResponse.compactPrint))
+        val orderUnknown: Boolean = errorResponse.code == BinanceErrorCodes.NoSuchOrder
+        CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId.toString, success = false, orderUnknown, Some(errorResponse.toString))
     }
   }
 

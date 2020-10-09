@@ -416,7 +416,7 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
       }
     }
 
-    for {
+   for {
       serverTime <- queryServerTime()
       newOrderAck <- newLimitOrder(o, serverTime)
     } yield newOrderAck
@@ -434,8 +434,10 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
         exchangeConfig.secrets,
         serverTime
       ) map {
-        case (statusCode, j) if statusCode.isSuccess() => CancelOrderResult(exchangeConfig.name, ref.tradePair, productId, success = statusCode.isSuccess(), Some(s"HTTP-$statusCode $j"))
-        case (statusCode, j) => throw new RuntimeException(s"DELETE $uri failed with: $statusCode, $j")
+        case (statusCode, j) if statusCode.isSuccess() => CancelOrderResult(exchangeConfig.name, ref.tradePair, productId, success = true, orderUnknown = false, Some(s"HTTP-$statusCode $j"))
+        case (statusCode, j) =>
+          log.warn(s"DELETE $uri failed with: $statusCode, $j")
+          CancelOrderResult(exchangeConfig.name, ref.tradePair, productId, success = false, orderUnknown = true, Some(s"HTTP-$statusCode $j")) // TODO decode error message to check if reason = Order unknown. For now we always say orderUnknown=true here
       }
     }
 

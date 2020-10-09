@@ -35,9 +35,9 @@ class TradeSimulator(exchangeConfig: ExchangeConfig,
           Seq(OrderUpdate(externalOrderId, exchangeConfig.name, tradePair, o.side, None, None, None, None, None, Some(OrderStatus.CANCELED), None, None, None, Instant.now))
         )
         activeOrders.remove(externalOrderId)
-        CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId, success = true, None)
+        CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId, success = true, orderUnknown = false, None)
       } else {
-        CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId, success = false, Some("failed because we assume the order is already filled"))
+        CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId, success = false, orderUnknown = false, Some("failed because we assume the order is already filled"))
       }
     }
   }

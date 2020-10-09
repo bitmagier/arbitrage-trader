@@ -3,9 +3,10 @@ package org.purevalue.arbitrage.adapter
 import java.time.{Duration, Instant}
 import java.util.UUID
 
-import akka.actor.Status.Failure
 import akka.actor.SupervisorStrategy.Restart
 import akka.actor.{Actor, ActorRef, OneForOneStrategy, PoisonPill, Props}
+import akka.pattern.ask
+import akka.util.Timeout
 import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager._
 import org.purevalue.arbitrage.traderoom.TradeRoom.OrderRef
 import org.purevalue.arbitrage.traderoom._
@@ -18,6 +19,7 @@ import scala.collection._
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.Future
 import scala.concurrent.duration.DurationInt
+import scala.util.{Failure, Success}
 
 
 trait Retryable {
@@ -96,7 +98,7 @@ object ExchangeAccountDataManager {
   case class IncomingData(data: Seq[ExchangeAccountStreamData])
   case class Initialized()
   case class CancelOrder(ref: OrderRef)
-  case class CancelOrderResult(exchange: String, tradePair: TradePair, externalOrderId: String, success: Boolean, text: Option[String])
+  case class CancelOrderResult(exchange: String, tradePair: TradePair, externalOrderId: String, success: Boolean, orderUnknown: Boolean = false, text: Option[String] = None)
   case class NewLimitOrder(orderRequest: OrderRequest) // response is NewOrderAck
   case class NewOrderAck(exchange: String, tradePair: TradePair, externalOrderId: String, orderId: UUID) {
     def toOrderRef: OrderRef = OrderRef(exchange, tradePair, externalOrderId)
@@ -183,8 +185,16 @@ class ExchangeAccountDataManager(config: Config,
   }
 
   def cancelOrderIfStillExist(c: CancelOrder): Unit = {
+    implicit val timeout: Timeout = config.global.internalCommunicationTimeout
     if (accountData.activeOrders.contains(c.ref)) {
-      accountDataChannel.forward(c)
+      (accountDataChannel ? c).mapTo[CancelOrderResult].onComplete {
+        case Success(result) if result.orderUnknown =>
+          accountData.activeOrders.remove(c.ref) // when order did not exist on exchange, we remove it here too
+          sender() ! result
+          log.debug(s"removed order ${c.ref} in activeOrders")
+        case Success(result) => sender() ! result
+        case Failure(e) => log.error("CancelOrder failed", e)
+      }
     }
   }
 

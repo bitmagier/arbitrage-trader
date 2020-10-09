@@ -470,16 +470,14 @@ class TradeRoom(val config: Config,
 
     for (o: Order <- orderToCancel) {
       val source: String = activeLiquidityTx.values.find(_.orderRef.externalOrderId == o.externalId) match {
-        case Some(liquidityTx) => s"liquidity-tx: ${liquidityTx.orderRequest.shortDesc}"
+        case Some(liquidityTx) => s"from liquidity-tx: ${liquidityTx.orderRequest.shortDesc}"
         case None => activeOrderBundles.values.find(_.ordersRefs.exists(_.externalOrderId == o.externalId)) match {
-          case Some(orderBundle) => s"order-bundle: ${orderBundle.shortDesc}"
-          case None =>
-            log.warn(s"active $o not in our active-liquidity-tx or active-order-bundle list")
-            "unknown source"
+          case Some(orderBundle) => s"from order-bundle: ${orderBundle.shortDesc}"
+          case None => "not referenced in order-bundles nor liquidity-tx"
         }
       }
 
-      log.warn(s"${Emoji.Judgemental}  Canceling aged order from $source")
+      log.warn(s"${Emoji.Judgemental}  Canceling aged order ${o.shortDesc} $source")
       exchanges(o.exchange) ! CancelOrder(o.ref)
     }
   }

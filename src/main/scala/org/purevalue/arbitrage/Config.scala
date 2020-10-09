@@ -20,6 +20,7 @@ case class ExchangeConfig(name: String,
                           usdEquivalentCoin: Asset, // primary local USD equivalent coin. USDT, USDC etc. for amount calculations
                           feeRate: Double, // average rate
                           doNotTouchTheseAssets: Seq[Asset],
+                          tickerIsRealtime: Boolean, // whether we get a realtime ticker from that exchange or not
                           secrets: SecretsConfig,
                           refCode: Option[String],
                           assetSourceWeight: Int) {
@@ -51,6 +52,7 @@ object ExchangeConfig {
       Asset(usdEquivalentCoin),
       c.getDouble("fee-rate"),
       doNotTouchTheseAssets,
+      c.getBoolean("ticker-is-realtime"),
       secretsConfig(c.getConfig("secrets")),
       if (c.hasPath("ref-code")) Some(c.getString("ref-code")) else None,
       c.getInt("asset-source-weight")
@@ -150,6 +152,9 @@ object Config {
     val exchanges: Map[String, ExchangeConfig] = tradeRoom.activeExchanges
       .map(e => e -> ExchangeConfig(e, c.getConfig(s"exchange.$e"))).toMap
     val liquidityManager = LiquidityManagerConfig(c.getConfig("liquidity-manager"))
+
+    if (!exchanges(tradeRoom.referenceTickerExchange).tickerIsRealtime) throw new IllegalArgumentException("reference ticker needs to be a realtime ticker")
+
     Config(globalConfig, tradeRoom, exchanges, liquidityManager)
   }
 

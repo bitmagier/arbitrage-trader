@@ -12,6 +12,7 @@ import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer.{Finished, RunWithWorkingContext}
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLock, OrderBookTooFlatException, UniqueDemand}
 import org.purevalue.arbitrage.util.Emoji
+import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.{Config, ExchangeConfig, LiquidityManagerConfig}
 import org.slf4j.LoggerFactory
 
@@ -104,7 +105,7 @@ class LiquidityBalancer(val config: Config,
           log.debug(s"${Emoji.LookingDown}  [${exchangeConfig.name}] no good reserve asset found to satisfy $demand")
           None
         } else {
-          log.debug(s"[${exchangeConfig.name}] found best usable reserve asset: ${bestReserveAssets.get._1}, rating=${bestReserveAssets.get._2} for providing $demand")
+          log.debug(s"[${exchangeConfig.name}] found best usable reserve asset: ${bestReserveAssets.get._1}, rating=${formatDecimal(bestReserveAssets.get._2, 5)} for providing $demand")
           val orderAmount: Double = ceilToTxGranularity(demand.asset, demand.amount)
           val tradePair = TradePair(demand.asset, bestReserveAssets.get._1)
           val limit = determineRealisticLimit(tradePair, TradeSide.Buy, orderAmount)

@@ -545,14 +545,14 @@ private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
         case r: CancelOrderResponseJson if r.status == "SUCCESS" =>
           if (log.isTraceEnabled) log.trace(s"$r")
           exchangeAccountDataManager ! IncomingData(exchangeDataMapping(Seq(r.order)))
-          CancelOrderResult(exchangeConfig.name, tradePair, r.order.orderId.toString, success = true, Option(r.text))
+          CancelOrderResult(exchangeConfig.name, tradePair, r.order.orderId.toString, success = true)
         case r: CancelOrderResponseJson =>
           log.debug(s"Cancel order failed. Response: $r")
-          CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId.toString, success = false, Some(r.text))
+          CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId.toString, success = false, orderUnknown=false, Some(r.text))
       }
-      case Right(errorResponse) =>
+      case Right(errorResponse) =>  // TODO figure out what we get when order-id does not exist and set CancelOrderResult.orderUnknown accordingly. For now we take the error-response as orderUnknown=true
         log.warn(s"CancelOrder id=$externalOrderId failed: $errorResponse")
-        CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId.toString, success = false, Some(errorResponse.compactPrint))
+        CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId.toString, success = false, orderUnknown=true, Some(errorResponse.compactPrint))
     }
   }
 
