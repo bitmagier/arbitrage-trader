@@ -10,11 +10,11 @@
     </appender>
 
     <logger name="org.purevalue.arbitrage" level="INFO"/>
-    <logger name="org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator" level="DEBUG"/>
-    <logger name="org.purevalue.arbitrage.traderoom.exchange.LiquidityManager" level="DEBUG"/>
-    <logger name="org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer" level="DEBUG"/>
-    <logger name="org.purevalue.arbitrage.adapter.coinbase" level="DEBUG"/>
-    <logger name="org.purevalue.arbitrage.adapter.coinbase.CoinbaseAccountDataChannel" level="TRACE"/>
+<!--    <logger name="org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator" level="DEBUG"/>-->
+<!--    <logger name="org.purevalue.arbitrage.traderoom.exchange.LiquidityManager" level="DEBUG"/>-->
+<!--    <logger name="org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer" level="DEBUG"/>-->
+    <logger name="org.purevalue.arbitrage.traderoom.Order" level="DEBUG"/>
+    <logger name="org.purevalue.arbitrage.adapter.ExchangeAccountDataManager" level="DEBUG"/>
 
     <root level="INFO">
         <appender-ref ref="STDOUT"/>
