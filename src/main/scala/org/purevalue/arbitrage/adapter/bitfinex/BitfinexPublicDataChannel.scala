@@ -196,8 +196,8 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
   val tickerSymbolsByConnectionIdAndChannelId: collection.concurrent.Map[(Int, Int), String] = TrieMap() // Map[(connectionID,channelId), tickerSymbol]
   val orderBookSymbolsByConnectionIdAndChannelId: collection.concurrent.Map[(Int, Int), String] = TrieMap() // Map[(connectionID,channelId), orderBookSymbol]
 
-  var wsList: List[(Future[WebSocketUpgradeResponse], Promise[Option[Message]])] = _
-  var connectedList: List[Future[Done.type]] = _
+  var wsList: List[(Future[WebSocketUpgradeResponse], Promise[Option[Message]])] = List()
+  var connectedList: List[Future[Done.type]] = List()
 
   import WebSocketJsonProtocoll._
 

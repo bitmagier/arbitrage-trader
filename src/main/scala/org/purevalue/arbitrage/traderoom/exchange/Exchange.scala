@@ -224,7 +224,7 @@ case class Exchange(exchangeName: String,
 
   def setUsableTradePairs(tradePairs: Set[TradePair]): Unit = {
     usableTradePairs = tradePairs
-    log.info(s"[$exchangeName]  usable pairs: ${tradePairs.toSeq.sortBy(_.toString)}")
+    log.info(s"""[$exchangeName]  usable pairs: ${tradePairs.toSeq.sortBy(_.toString).mkString(", ")}""")
     sender() ! Done
   }
 

@@ -56,7 +56,8 @@ class LiquidityManagerSpec
       doNotTouchTheseAssets = Seq(Asset("OMG")),
       secrets = SecretsConfig("", "", None),
       refCode = None,
-      assetSourceWeight = 1
+      assetSourceWeight = 1,
+      tickerIsRealtime = true
     )
 
   private val globalConfig = GlobalConfig(10.seconds, Timeout(4.seconds), Timeout(10.seconds))

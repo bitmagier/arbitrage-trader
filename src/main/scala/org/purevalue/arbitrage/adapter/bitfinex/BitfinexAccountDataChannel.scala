@@ -561,7 +561,7 @@ private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
   }
 
   override def postStop(): Unit = {
-    if (!ws._2.isCompleted) ws._2.success(None)
+    if (ws != null && !ws._2.isCompleted) ws._2.success(None)
   }
 
   override def preStart(): Unit = {

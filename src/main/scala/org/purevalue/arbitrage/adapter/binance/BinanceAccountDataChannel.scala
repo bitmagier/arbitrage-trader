@@ -627,7 +627,7 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
   override def postStop(): Unit = {
     // TODO DELETE /api/v3/userDataStream?listenKey=
     // https://github.com/binance-exchange/binance-official-api-docs/blob/master/user-data-stream.md
-    if (!ws._2.isCompleted) ws._2.success(None)
+    if (ws != null && !ws._2.isCompleted) ws._2.success(None)
   }
 
   override def preStart(): Unit = {
