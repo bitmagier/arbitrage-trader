@@ -88,11 +88,12 @@ class PioneerOrderRunner(config: Config,
       if (order.orderStatus != OrderStatus.FILLED) failed("order status mismatch")
 
       if (order.cumulativeFilledQuantity.isEmpty) failed("cumulativeFilledQuantity not set")
-      // TODO This check is not applicable on bitfinex, because sometimes the fill is a lot less than the requested amount.
+      // This check is not applicable with the small acceptable diff value on bitfinex, because sometimes the reported fill is a lot less than the requested amount.
       // Example: amountBaseAsset:0.00175778 versus cumulativeFilledQty: Some(0.0015133)
       // OrderRequest(51c18f89-71b9-4a46-b367-4e4a242c251d, orderBundleId:None, bitfinex, BTC:USDT, Buy, 0.0015, amountBaseAsset:0.00175778, limit:11386.2768),
       // Order(52458298624,bitfinex,BTC:USDT,Buy,LIMIT,Some(11386.0),None,2020-10-10T08:39:21.581Z,0.00175778,FILLED,Some(0.0015133),Some(11383.443661891704),2020-10-10T08:39:21.587Z)
-      if (diffMoreThan(order.cumulativeFilledQuantity.get, request.amountBaseAsset, MaxAmountDiff)) failed("cumulative filled quantity mismatch") // in most cases the fee is substracted from the amount we get
+      val maxAmountDiff = if (exchangeConfig.name == "bitfinex") 0.2 else MaxAmountDiff
+      if (diffMoreThan(order.cumulativeFilledQuantity.get, request.amountBaseAsset, maxAmountDiff)) failed("cumulative filled quantity mismatch") // in most cases the fee is substracted from the amount we get
 
       val PriceAverageRoundingToleranceRate = 0.00000001
       if (request.tradeSide == TradeSide.Buy && order.priceAverage.isDefined &&
