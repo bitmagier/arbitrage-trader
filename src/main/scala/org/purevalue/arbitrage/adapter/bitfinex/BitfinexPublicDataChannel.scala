@@ -10,13 +10,13 @@ import akka.http.scaladsl.model.{StatusCodes, Uri}
 import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
-import org.purevalue.arbitrage.adapter.ExchangePublicDataManager.IncomingData
-import org.purevalue.arbitrage.adapter._
+import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataChannel.Connect
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.GetBitfinexTradePairs
 import org.purevalue.arbitrage.traderoom.TradePair
+import org.purevalue.arbitrage.traderoom.exchange.Exchange.IncomingPublicData
+import org.purevalue.arbitrage.traderoom.exchange._
 import org.purevalue.arbitrage.util.Emoji
-import org.purevalue.arbitrage.{adapter, _}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
@@ -44,7 +44,7 @@ private[bitfinex] case class RawTickerEntryJson(bid: Double, // Price of last hi
                                                 high: Double, // Daily high
                                                 low: Double) { // Daily low
   def toTicker(exchange: String, tradePair: TradePair): Ticker =
-    adapter.Ticker(exchange, tradePair, bid, None, ask, None, Some(lastPrice))
+    Ticker(exchange, tradePair, bid, None, ask, None, Some(lastPrice))
 }
 private[bitfinex] object RawTickerEntryJson {
   def apply(v: Vector[Double]): RawTickerEntryJson =
@@ -171,9 +171,9 @@ object BitfinexPublicDataChannel {
   def props(globalConfig: GlobalConfig,
             exchangeConfig: ExchangeConfig,
             tradePairs: Set[TradePair],
-            exchangePublicDataManager: ActorRef,
+            exchange: ActorRef,
             publicDataInquirer: ActorRef): Props =
-    Props(new BitfinexPublicDataChannel(globalConfig, exchangeConfig, tradePairs, exchangePublicDataManager, publicDataInquirer))
+    Props(new BitfinexPublicDataChannel(globalConfig, exchangeConfig, tradePairs, exchange, publicDataInquirer))
 }
 
 /**
@@ -183,7 +183,7 @@ object BitfinexPublicDataChannel {
 private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
                                                   exchangeConfig: ExchangeConfig,
                                                   tradePairs: Set[TradePair],
-                                                  exchangePublicDataManager: ActorRef,
+                                                  exchange: ActorRef,
                                                   publicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BitfinexPublicDataChannel])
   implicit val actorSystem: ActorSystem = Main.actorSystem
@@ -330,8 +330,8 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
       Sink.foreach[Message](message =>
         decodeMessage(connectionId, message)
           .map(e => exchangeDataMapping(connectionId, e))
-          .map(IncomingData)
-          .pipeTo(exchangePublicDataManager)
+          .map(IncomingPublicData)
+          .pipeTo(exchange)
       ),
       Source(
         subscribeMessages.map(m => TextMessage(m.toJson.compactPrint))
@@ -404,7 +404,7 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
       .filterNot(_._2.isCompleted)
       .foreach { c =>
         c._2.success(None) // close open connections
-    }
+      }
   }
 
   override def preStart() {

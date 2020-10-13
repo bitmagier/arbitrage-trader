@@ -7,10 +7,9 @@ import java.util.concurrent.atomic.AtomicReference
 import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, PoisonPill, Props}
 import akka.pattern.ask
 import akka.util.Timeout
-import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager.{CancelOrder, CancelOrderResult, NewLimitOrder, NewOrderAck}
-import org.purevalue.arbitrage.adapter.{ExchangeAccountData, ExchangePublicData}
 import org.purevalue.arbitrage.traderoom.TradeRoom._
 import org.purevalue.arbitrage.traderoom._
+import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.PioneerOrderRunner.{PioneerOrder, PioneerOrderFailed, PioneerOrderSucceeded, Watch}
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.util.{InitSequence, InitStep, Util, WaitingFor}
@@ -32,16 +31,12 @@ object PioneerOrderRunner {
 
   def props(config: Config,
             exchangeConfig: ExchangeConfig,
-            exchange: ActorRef,
-            accountData: ExchangeAccountData,
-            publicData: ExchangePublicData): Props =
-    Props(new PioneerOrderRunner(config, exchangeConfig, exchange, accountData, publicData))
+            exchange: ActorRef): Props =
+    Props(new PioneerOrderRunner(config, exchangeConfig, exchange))
 }
 class PioneerOrderRunner(config: Config,
                          exchangeConfig: ExchangeConfig,
-                         exchange: ActorRef,
-                         accountData: ExchangeAccountData,
-                         publicData: ExchangePublicData) extends Actor {
+                         exchange: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[PioneerOrderRunner])
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
@@ -70,6 +65,14 @@ class PioneerOrderRunner(config: Config,
   private val MaxPriceDiff = 0.001
   private val MaxAmountDiff = 0.003
 
+
+  def getPriceEstimate(pair: TradePair): Double = {
+    implicit val timeout: Timeout = config.global.internalCommunicationTimeout
+    Await.result(
+      (exchange ? GetPriceEstimate(pair)).mapTo[Double],
+      timeout.duration.plus(500.millis)
+    )
+  }
 
   def diffMoreThan(a: Double, b: Double, maxDiffRate: Double): Boolean = ((a - b).abs / a.abs) > maxDiffRate
 
@@ -126,7 +129,7 @@ class PioneerOrderRunner(config: Config,
       val sumUSD = OrderBill.aggregateValues(
         OrderBill.calcBalanceSheet(order, request.feeRate),
         exchangeConfig.usdEquivalentCoin,
-        (_, tradePair) => publicData.ticker.get(tradePair).map(_.priceEstimate))
+        (_, tradePair) => Some(getPriceEstimate(tradePair)))
       val maxAcceptableLoss = 0.03 + (request.feeRate * config.tradeRoom.pioneerOrderValueUSD)
       if (sumUSD < -maxAcceptableLoss) failed(s"unexpected loss of ${formatDecimal(sumUSD, 4)} USD") // more than 3 cent + fee loss is absolutely unacceptable
     }
@@ -154,38 +157,62 @@ class PioneerOrderRunner(config: Config,
     if (Instant.now.isAfter(deadline)) {
       throw new RuntimeException("Timeout while waiting for pioneer order to complete")
     }
+    implicit val timeout: Timeout = config.global.internalCommunicationTimeout
+    (exchange ? GetActiveOrders()).mapTo[Map[OrderRef, Order]].onComplete {
+      case Success(activeOrders) => activeOrders.get(o.ref) match {
 
-    accountData.activeOrders.get(o.ref) match {
-      case Some(order) if order.orderStatus.isFinal =>
-        validationMethod(o.request, order)
-        log.info(s"[$ExchangeName]  pioneer order ${o.request.shortDesc} successfully validated")
-        arrival.arrived()
-        accountData.activeOrders.remove(o.ref)
+        case Some(order) if order.orderStatus.isFinal =>
+          validationMethod(o.request, order)
+          log.info(s"[$ExchangeName]  pioneer order ${o.request.shortDesc} successfully validated")
+          arrival.arrived()
+          exchange ! RemoveActiveOrder(o.ref)
 
-      case Some(order) =>
-        log.trace(s"[$ExchangeName] pioneer order in progress: $order")
-        validationMethod(o.request, order)
+        case Some(order) =>
+          log.trace(s"[$ExchangeName] pioneer order in progress: $order")
+          validationMethod(o.request, order)
 
-      case None => // nop
+        case None => // nop
+
+      }
     }
+  }
+
+  def walletLiquidCryptoValues(): Future[Iterable[CryptoValue]] = {
+    implicit val timeout: Timeout = config.global.internalCommunicationTimeout
+    (exchange ? GetWalletLiquidCrypto()).mapTo[Iterable[CryptoValue]]
+  }
+
+  def convert(value: CryptoValue, targetAsset: Asset)(implicit timeout: Timeout): Future[CryptoValue] = {
+    (exchange ? ConvertValue(value, targetAsset)).mapTo[CryptoValue]
   }
 
   def watchBalance(expectedBalance: Iterable[CryptoValue], arrival: WaitingFor): Unit = {
     val SignificantBalanceDeviationInUSD: Double = 0.50
 
     var diff: Map[Asset, Double] = expectedBalance.map(e => e.asset -> e.amount).toMap
-    for (walletCryptoValue <- accountData.wallet.liquidCryptoValues(exchangeConfig.usdEquivalentCoin, publicData.ticker)) {
-      val diffAmount = diff.getOrElse(walletCryptoValue.asset, 0.0) - walletCryptoValue.amount
-      diff = diff + (walletCryptoValue.asset -> diffAmount)
-    }
 
-    val balanceArrived = !diff.map(e => CryptoValue(e._1, e._2))
-      .exists(_.convertTo(exchangeConfig.usdEquivalentCoin, publicData.ticker).amount > SignificantBalanceDeviationInUSD)
-    if (balanceArrived) {
-      log.info(s"expected wallet balance arrived")
-      arrival.arrived()
-    } else {
-      log.trace(s"diff between expected minus actual balance is $diff")
+    walletLiquidCryptoValues().onComplete {
+      case Success(liquidCryptoValues) =>
+        for (walletCryptoValue <- liquidCryptoValues) {
+          val diffAmount = diff.getOrElse(walletCryptoValue.asset, 0.0) - walletCryptoValue.amount
+          diff = diff + (walletCryptoValue.asset -> diffAmount)
+        }
+
+        implicit val timeout: Timeout = config.global.internalCommunicationTimeout
+        val diffInUSD: Future[Iterable[CryptoValue]] = Future.sequence(
+          diff
+            .map(e => CryptoValue(e._1, e._2))
+            .map(e => convert(e, exchangeConfig.usdEquivalentCoin))
+        )
+        diffInUSD.onComplete {
+          case Success(diff) =>
+            if (!diff.exists(_.amount > SignificantBalanceDeviationInUSD)) {
+              log.info(s"expected wallet balance arrived")
+              arrival.arrived()
+            } else {
+              log.trace(s"diff between expected minus actual balance is $diff")
+            }
+        }
     }
   }
 
@@ -214,33 +241,30 @@ class PioneerOrderRunner(config: Config,
   }
 
 
-  def submitPioneerOrder(tradePair: TradePair, tradeSide: TradeSide, amountBaseAsset: Double, unrealisticGoodlimit: Boolean): PioneerOrder = {
-    val realisticLimit = new OrderLimitChooser(
-      publicData.orderBook.get(tradePair),
-      publicData.ticker(tradePair)
-    ).determineRealisticOrderLimit(tradeSide, amountBaseAsset * 5.0, config.liquidityManager.txLimitAwayFromEdgeLimit).get
+  def submitPioneerOrder(pair: TradePair, side: TradeSide, amountBaseAsset: Double, unrealisticGoodlimit: Boolean): Future[PioneerOrder] = {
+    implicit val timeout: Timeout = config.global.internalCommunicationTimeout
 
-    val limit = if (unrealisticGoodlimit) {
-      tradeSide match {
-        case TradeSide.Buy => realisticLimit * 0.9
-        case TradeSide.Sell => realisticLimit * 1.1
+    (exchange ? DetermineRealisticLimit(pair, side, amountBaseAsset * 5.0, config.liquidityManager.txLimitAwayFromEdgeLimit))
+      .mapTo[Double]
+      .flatMap {
+        realisticLimit =>
+          val limit = if (unrealisticGoodlimit) {
+            side match {
+              case TradeSide.Buy => realisticLimit * 0.9
+              case TradeSide.Sell => realisticLimit * 1.1
+            }
+          } else {
+            realisticLimit
+          }
+
+          val orderRequest = OrderRequest(UUID.randomUUID(), None, ExchangeName, pair, side, exchangeConfig.feeRate, amountBaseAsset, limit)
+
+          log.debug(s"[$ExchangeName] pioneer order: ${orderRequest.shortDesc}")
+
+          (exchange ? NewLimitOrder(orderRequest)).mapTo[NewOrderAck]
+            .map(_.toOrderRef)
+            .map(PioneerOrder(orderRequest, _))
       }
-    } else {
-      realisticLimit
-    }
-
-    val orderRequest = OrderRequest(UUID.randomUUID(), None, ExchangeName, tradePair, tradeSide, exchangeConfig.feeRate,
-      amountBaseAsset, limit)
-
-    log.debug(s"[$ExchangeName] pioneer order: ${orderRequest.shortDesc}")
-
-    implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
-    val orderRef = Await.result(
-      (exchange ? NewLimitOrder(orderRequest)).mapTo[NewOrderAck],
-      timeout.duration.plus(1.second))
-      .toOrderRef
-
-    PioneerOrder(orderRequest, orderRef)
   }
 
   def cancelPioneerOrder(o: PioneerOrder): Unit = {
@@ -257,47 +281,69 @@ class PioneerOrderRunner(config: Config,
   }
 
   def submitFirstPioneerOrder(): Unit = {
-    val balanceBeforeOrder: Iterable[CryptoValue] = accountData.wallet.liquidCryptoValues(exchangeConfig.usdEquivalentCoin, publicData.ticker)
-    val tradePair = TradePair(SecondaryReserveAsset, PrimaryReserveAsset)
-    val amount = CryptoValue(exchangeConfig.usdEquivalentCoin, config.tradeRoom.pioneerOrderValueUSD)
-      .convertTo(tradePair.baseAsset, publicData.ticker).amount
+    implicit val timeout: Timeout = config.global.internalCommunicationTimeout
 
-    pioneerOrder1.set(Some(
-      submitPioneerOrder(tradePair, TradeSide.Buy, amount, unrealisticGoodlimit = false)))
+    val tradePair = TradePair(SecondaryReserveAsset, PrimaryReserveAsset)
+    val (balanceBeforeOrder, pioneerOrder) = Await.result(
+      for {
+        balanceBeforeOrder <- walletLiquidCryptoValues()
+        amount <- convert(
+          CryptoValue(exchangeConfig.usdEquivalentCoin, config.tradeRoom.pioneerOrderValueUSD),
+          tradePair.baseAsset)
+          .map(_.amount)
+        pioneerOrder <- submitPioneerOrder(tradePair, TradeSide.Buy, amount, unrealisticGoodlimit = false)
+      } yield (balanceBeforeOrder, pioneerOrder),
+      timeout.duration.plus(500.millis)
+    )
+
+    pioneerOrder1.set(Some(pioneerOrder))
 
     val expectedBalanceDiff: Seq[CryptoValue] =
       OrderBill.calcBalanceSheet(pioneerOrder1.get().get.request)
         .map(e => CryptoValue(e.asset, e.amount))
-
     afterPioneerOrder1BalanceExpected.set(Some(Util.applyBalanceDiff(balanceBeforeOrder, expectedBalanceDiff)))
   }
 
   def submitSecondPioneerOrder(): Unit = {
-    val balanceBeforeOrder = accountData.wallet.liquidCryptoValues(exchangeConfig.usdEquivalentCoin, publicData.ticker)
+    implicit val timeout: Timeout = config.global.internalCommunicationTimeout
     val tradePair = TradePair(SecondaryReserveAsset, PrimaryReserveAsset)
-    val amount = CryptoValue(exchangeConfig.usdEquivalentCoin, config.tradeRoom.pioneerOrderValueUSD)
-      .convertTo(tradePair.baseAsset, publicData.ticker).amount
+    val (balanceBeforeOrder, pioneerOrder) = Await.result(
+      for {
+        balanceBeforeOrder <- walletLiquidCryptoValues()
+        amount <- convert(
+          CryptoValue(exchangeConfig.usdEquivalentCoin, config.tradeRoom.pioneerOrderValueUSD),
+          tradePair.baseAsset)
+          .map(_.amount)
+        pioneerOrder <- submitPioneerOrder(tradePair, TradeSide.Sell, amount, unrealisticGoodlimit = false)
+      } yield (balanceBeforeOrder, pioneerOrder),
+      timeout.duration.plus(500.millis)
+    )
 
-    pioneerOrder2.set(Some(
-      submitPioneerOrder(tradePair, TradeSide.Sell, amount, unrealisticGoodlimit = false)))
+    pioneerOrder2.set(Some(pioneerOrder))
 
     val expectedBalanceDiff: Seq[CryptoValue] =
       OrderBill.calcBalanceSheet(pioneerOrder2.get().get.request)
         .map(e => CryptoValue(e.asset, e.amount))
-
     afterPioneerOrder2BalanceExpected.set(Some(Util.applyBalanceDiff(balanceBeforeOrder, expectedBalanceDiff)))
   }
 
   def submitBuyToCancelPioneerOrder(): Unit = {
-    val amountToBuy = CryptoValue(exchangeConfig.usdEquivalentCoin, config.tradeRoom.pioneerOrderValueUSD)
-      .convertTo(SecondaryReserveAsset, publicData.ticker).amount
-
-    pioneerOrder3.set(Some(
-      submitPioneerOrder(
-        TradePair(SecondaryReserveAsset, exchangeConfig.usdEquivalentCoin),
-        TradeSide.Buy,
-        amountToBuy,
-        unrealisticGoodlimit = true)))
+    implicit val timeout: Timeout = config.global.internalCommunicationTimeout
+    val pioneerOrder = Await.result(
+      for {
+        amountToBuy <- convert(
+          CryptoValue(exchangeConfig.usdEquivalentCoin, config.tradeRoom.pioneerOrderValueUSD),
+          SecondaryReserveAsset)
+          .map(_.amount)
+        pioneerOrder <- submitPioneerOrder(
+          TradePair(SecondaryReserveAsset, exchangeConfig.usdEquivalentCoin),
+          TradeSide.Buy,
+          amountToBuy,
+          unrealisticGoodlimit = true)
+      } yield pioneerOrder,
+      timeout.duration.plus(500.millis)
+    )
+    pioneerOrder3.set(Some(pioneerOrder))
 
     Thread.sleep(500)
     cancelPioneerOrder(pioneerOrder3.get().get)

@@ -8,14 +8,14 @@ import akka.http.scaladsl.model.{StatusCodes, Uri}
 import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
-import org.purevalue.arbitrage.adapter.ExchangePublicDataManager.IncomingData
+import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataChannel.{Connect, OnStreamsRunning}
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.GetBinanceTradePairs
-import org.purevalue.arbitrage.adapter.{ExchangePublicStreamData, Ticker}
 import org.purevalue.arbitrage.traderoom.TradePair
+import org.purevalue.arbitrage.traderoom.exchange.Exchange.IncomingPublicData
+import org.purevalue.arbitrage.traderoom.exchange.{ExchangePublicStreamData, Ticker}
 import org.purevalue.arbitrage.util.Emoji
 import org.purevalue.arbitrage.util.HttpUtil.httpGetJson
-import org.purevalue.arbitrage.{adapter, _}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
@@ -35,7 +35,7 @@ private[binance] case class RawBookTickerRestJson(symbol: String,
                                                   askPrice: String,
                                                   askQty: String) extends IncomingPublicBinanceJson {
   def toTicker(exchange: String, resolveSymbol: String => TradePair): Ticker = {
-    adapter.Ticker(exchange, resolveSymbol(symbol), bidPrice.toDouble, Some(bidQty.toDouble), askPrice.toDouble, Some(askQty.toDouble), None)
+    Ticker(exchange, resolveSymbol(symbol), bidPrice.toDouble, Some(bidQty.toDouble), askPrice.toDouble, Some(askQty.toDouble), None)
   }
 }
 
@@ -47,7 +47,7 @@ private[binance] case class RawBookTickerStreamJson(u: Long, // order book updat
                                                     A: String // best ask quantity
                                                    ) extends IncomingPublicBinanceJson {
   def toTicker(exchange: String, resolveSymbol: String => TradePair): Ticker =
-    adapter.Ticker(exchange, resolveSymbol(s), b.toDouble, Some(B.toDouble), a.toDouble, Some(A.toDouble), None)
+    Ticker(exchange, resolveSymbol(s), b.toDouble, Some(B.toDouble), a.toDouble, Some(A.toDouble), None)
 }
 
 private[binance] object WebSocketJsonProtocol extends DefaultJsonProtocol {
@@ -64,9 +64,9 @@ object BinancePublicDataChannel {
   def props(globalConfig: GlobalConfig,
             exchangeConfig: ExchangeConfig,
             tradePairs: Set[TradePair],
-            publicDataManager: ActorRef,
+            exchange: ActorRef,
             binancePublicDataInquirer: ActorRef): Props =
-    Props(new BinancePublicDataChannel(globalConfig, exchangeConfig, tradePairs, publicDataManager, binancePublicDataInquirer))
+    Props(new BinancePublicDataChannel(globalConfig, exchangeConfig, tradePairs, exchange, binancePublicDataInquirer))
 }
 /**
  * Binance TradePair-based data channel
@@ -75,7 +75,7 @@ object BinancePublicDataChannel {
 private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
                                                 exchangeConfig: ExchangeConfig,
                                                 tradePairs: Set[TradePair],
-                                                publicDataManager: ActorRef,
+                                                exchange: ActorRef,
                                                 binancePublicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BinancePublicDataChannel])
   implicit val actorSystem: ActorSystem = Main.actorSystem
@@ -159,8 +159,8 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
       Sink.foreach[Message](message =>
         decodeMessage(message)
           .map(exchangeDataMapping)
-          .map(IncomingData)
-          .pipeTo(publicDataManager)
+          .map(IncomingPublicData)
+          .pipeTo(exchange)
       ),
       Source(
         subscribeMessages.map(msg => TextMessage(msg.toJson.compactPrint))
@@ -205,7 +205,7 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
     httpGetJson[Seq[RawBookTickerRestJson], JsValue](s"$BaseRestEndpoint/api/v3/ticker/bookTicker") onComplete {
       case Success(Left(tickers)) =>
         val rawTicker = tickers.filter(e => binanceTradePairBySymbol.keySet.contains(e.symbol))
-        publicDataManager ! IncomingData(exchangeDataMapping(rawTicker))
+        exchange ! IncomingPublicData(exchangeDataMapping(rawTicker))
       case Success(Right(errorResponse)) => log.error(s"deliverBookTickerState failed: $errorResponse")
       case Failure(e) => log.error("Query/Transform RawBookTickerRestJson failed", e)
     }

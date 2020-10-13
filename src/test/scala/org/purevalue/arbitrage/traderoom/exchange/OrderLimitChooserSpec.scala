@@ -2,7 +2,6 @@ package org.purevalue.arbitrage.traderoom.exchange
 
 import akka.actor.ActorSystem
 import akka.testkit.{ImplicitSender, TestKit}
-import org.purevalue.arbitrage.adapter.{Ask, Bid, OrderBook, Ticker}
 import org.purevalue.arbitrage.traderoom.Asset.Bitcoin
 import org.purevalue.arbitrage.traderoom.{Asset, TradePair, TradeSide}
 import org.scalatest.BeforeAndAfterAll

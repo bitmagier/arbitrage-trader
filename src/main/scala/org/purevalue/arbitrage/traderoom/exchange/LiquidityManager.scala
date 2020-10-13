@@ -4,18 +4,14 @@ import java.time.Instant
 import java.util.UUID
 
 import akka.actor.Status.Failure
-import akka.actor.{Actor, ActorRef, Cancellable, PoisonPill, Props}
+import akka.actor.{Actor, ActorRef, PoisonPill, Props}
 import org.purevalue.arbitrage.Main.actorSystem
-import org.purevalue.arbitrage.adapter._
-import org.purevalue.arbitrage.traderoom.TradeRoom.{FinishedLiquidityTx, LiquidityTx}
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager._
 import org.purevalue.arbitrage.{Config, ExchangeConfig}
 import org.slf4j.LoggerFactory
 
-import scala.collection.Map
 import scala.concurrent.ExecutionContextExecutor
-import scala.concurrent.duration.DurationInt
 
 /*
 - The LiquidityManager is responsible for providing the Assets which are requested by Traders.
@@ -66,7 +62,10 @@ object LiquidityManager {
     def getUk: String = tradePattern + asset.officialSymbol
   }
 
-  case class HouseKeeping()
+  case class State(liquidityDemand: Map[String, UniqueDemand],
+                   liquidityLocks: Map[UUID, LiquidityLock])
+
+  case class GetState()
 
   case class LiquidityRequest(id: UUID,
                               createTime: Instant,
@@ -82,42 +81,7 @@ object LiquidityManager {
 
   class OrderBookTooFlatException(val tradePair: TradePair, val side: TradeSide) extends Exception
 
-  def determineRealisticLimit(orderBook: collection.Map[TradePair, OrderBook],
-                              ticker: collection.Map[TradePair, Ticker],
-                              tradePair: TradePair,
-                              tradeSide: TradeSide,
-                              amountBaseAsset: Double,
-                              txLimitAwayFromEdgeLimit: Double): Double = {
-    new OrderLimitChooser(orderBook.get(tradePair), ticker(tradePair))
-      .determineRealisticOrderLimit(tradeSide, amountBaseAsset, txLimitAwayFromEdgeLimit) match {
-      case Some(limit) => limit
-      case None => throw new OrderBookTooFlatException(tradePair, tradeSide)
-    }
-  }
-
-  /**
-   * Gives back a rating for trading a amount on that tradepair on the local exchange - compared to reference ticker
-   * Ratings can be interpreted as a percentage of the local limit needed to fulfill a local trade compared to the reference ticker.
-   * A result rate > 0 indicates a positive rating - being better than the reference ticker, a negative rate the opposite
-   */
-  def localExchangeRateRating(orderBook: collection.Map[TradePair, OrderBook],
-                              ticker: collection.Map[TradePair, Ticker],
-                              referenceTicker: collection.Map[TradePair, Ticker],
-                              tradePair: TradePair, tradeSide:
-                              TradeSide, amountBaseAsset: Double,
-                              txLimitAwayFromEdgeLimit: Double): Double = {
-    val localLimit: Double = determineRealisticLimit(orderBook, ticker, tradePair, tradeSide, amountBaseAsset, txLimitAwayFromEdgeLimit)
-    val referenceTickerPrice: Option[Double] = referenceTicker.get(tradePair).map(_.priceEstimate)
-    referenceTickerPrice match {
-      case Some(referencePrice) => tradeSide match {
-        case TradeSide.Buy => 1.0 - localLimit / referencePrice // 1 - x/R
-        case TradeSide.Sell => localLimit / referencePrice - 1.0 // x/R - 1
-      }
-      case None => 0.0 // we can not judge it, because no reference ticker available
-    }
-  }
-
-  def determineUnlockedBalance(balance: Map[Asset, Balance],
+  def determineUnlockedBalance(balance: collection.Map[Asset, Balance], // TODO Map instead of collection.Map
                                liquidityLocks: Map[UUID, LiquidityLock],
                                exchangeConfig: ExchangeConfig): Map[Asset, Double] = {
     val lockedLiquidity: Map[Asset, Double] = liquidityLocks
@@ -130,37 +94,27 @@ object LiquidityManager {
       .filterNot(_._1.isFiat)
       .filterNot(e => exchangeConfig.doNotTouchTheseAssets.contains(e._1))
       .map(e => (e._1, Math.max(0.0, e._2.amountAvailable - lockedLiquidity.getOrElse(e._1, 0.0)))
-      )
+      ).toMap
   }
-
 
   def props(config: Config,
             exchangeConfig: ExchangeConfig,
             tradePairs: Set[TradePair],
-            tpData: ExchangePublicDataReadonly,
             wallet: Wallet,
-            tradeRoom: ActorRef,
-            findOpenLiquidityTx: (LiquidityTx => Boolean) => Option[LiquidityTx],
-            findFinishedLiquidityTx: (FinishedLiquidityTx => Boolean) => Option[FinishedLiquidityTx],
-            referenceTicker: () => collection.Map[TradePair, Ticker]
-           ): Props =
-    Props(new LiquidityManager(config, exchangeConfig, tradePairs, tpData, wallet, tradeRoom, findOpenLiquidityTx, findFinishedLiquidityTx, referenceTicker))
+            tradeRoom: ActorRef): Props =
+    Props(new LiquidityManager(config, exchangeConfig, tradePairs, wallet, tradeRoom))
 }
 class LiquidityManager(val config: Config,
                        val exchangeConfig: ExchangeConfig,
                        val tradePairs: Set[TradePair],
-                       val publicData: ExchangePublicDataReadonly,
                        val wallet: Wallet,
-                       val tradeRoom: ActorRef,
-                       val findOpenLiquidityTx: (LiquidityTx => Boolean) => Option[LiquidityTx],
-                       val findFinishedLiquidityTx: (FinishedLiquidityTx => Boolean) => Option[FinishedLiquidityTx],
-                       val referenceTicker: () => collection.Map[TradePair, Ticker]
+                       val tradeRoom: ActorRef
                       ) extends Actor {
 
-  private case class LiquidityDemand(exchange: String,
-                                     tradePattern: String,
-                                     coins: Seq[CryptoValue],
-                                     dontUseTheseReserveAssets: Set[Asset]) {
+  case class LiquidityDemand(exchange: String,
+                             tradePattern: String,
+                             coins: Seq[CryptoValue],
+                             dontUseTheseReserveAssets: Set[Asset]) {
     if (coins.exists(_.asset.isFiat)) throw new IllegalArgumentException("Seriously, you demand for Fiat Money?")
   }
 
@@ -170,16 +124,13 @@ class LiquidityManager(val config: Config,
   }
 
   private val log = LoggerFactory.getLogger(classOf[LiquidityManager])
-  implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
+  private implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
-  var houseKeepingSchedule: Cancellable = actorSystem.scheduler.scheduleWithFixedDelay(1.minute, 30.seconds, self, HouseKeeping())
-  var liquidityBalancer: ActorRef = _
-  var houseKeepingRunning: Boolean = false
-  var shutdownInitiated: Boolean = false
+  private var shutdownInitiated: Boolean = false
 
   // Map(uk:"trade-pattern + asset", UniqueDemand))
-  var liquidityDemand: Map[String, UniqueDemand] = Map()
-  var liquidityLocks: Map[UUID, LiquidityLock] = Map()
+  private var liquidityDemand: Map[String, UniqueDemand] = Map()
+  private var liquidityLocks: Map[UUID, LiquidityLock] = Map()
 
   def noticeUniqueDemand(d: UniqueDemand): Unit = {
     if (log.isTraceEnabled) log.trace(s"noticed $d")
@@ -192,15 +143,9 @@ class LiquidityManager(val config: Config,
       .foreach(noticeUniqueDemand)
   }
 
-  def clearObsoleteDemands(): Unit = {
-    val limit = Instant.now.minus(config.liquidityManager.liquidityDemandActiveTime)
-    liquidityDemand = liquidityDemand.filter(_._2.lastRequested.isAfter(limit))
-  }
-
   def clearLock(id: UUID): Unit = {
     liquidityLocks = liquidityLocks - id
     if (log.isTraceEnabled) log.trace(s"Liquidity lock with ID $id cleared")
-    self ! HouseKeeping()
   }
 
   def addLock(l: LiquidityLock): Unit = {
@@ -208,14 +153,25 @@ class LiquidityManager(val config: Config,
     if (log.isTraceEnabled) log.trace(s"Liquidity locked: $l")
   }
 
+  def clearObsoleteDemands(): Unit = {
+    val limit = Instant.now.minus(config.liquidityManager.liquidityDemandActiveTime)
+    liquidityDemand = liquidityDemand.filter(_._2.lastRequested.isAfter(limit))
+  }
+
   def clearObsoleteLocks(): Unit = {
     val limit: Instant = Instant.now.minus(config.liquidityManager.liquidityLockMaxLifetime)
     liquidityLocks = liquidityLocks.filter(_._2.createTime.isAfter(limit))
   }
 
+  // just cleanup
+  def houseKeeping(): Unit = {
+    clearObsoleteLocks()
+    clearObsoleteDemands()
+  }
+
   // Accept, if free (not locked) coins are available.
   def lockLiquidity(r: LiquidityRequest): Option[LiquidityLock] = {
-    if (exchangeConfig.doNotTouchTheseAssets.intersect(r.coins).nonEmpty) throw new IllegalArgumentException
+    if (r.coins.exists(e => exchangeConfig.doNotTouchTheseAssets.contains(e.asset))) throw new IllegalArgumentException
     if (r.coins.exists(_.asset.isFiat)) throw new IllegalArgumentException
 
     val unlockedBalances: Map[Asset, Double] = determineUnlockedBalance(wallet.balance, liquidityLocks, exchangeConfig)
@@ -241,46 +197,25 @@ class LiquidityManager(val config: Config,
   def liquidityRequest(r: LiquidityRequest): Unit = {
     if (shutdownInitiated) sender ! None
     else {
+      houseKeeping()
       checkValidity(r)
       noticeDemand(LiquidityDemand(r)) // notice/refresh the demand, when 'someone' wants to lock liquidity
       sender() ! lockLiquidity(r)
-      self ! HouseKeeping()
     }
-  }
-
-  // Management takes care, that we follow the liquidity providing & back-converting strategy (described above)
-  def houseKeeping(): Unit = {
-    if (shutdownInitiated) return
-    if (houseKeepingRunning) return
-    houseKeepingRunning = true
-
-    clearObsoleteLocks()
-    clearObsoleteDemands()
-
-    liquidityBalancer ! LiquidityBalancer.RunWithWorkingContext(
-        wallet.balance.map(e => e._1 -> e._2).toMap,
-        liquidityDemand,
-        liquidityLocks)
-  }
-
-  override def preStart(): Unit = {
-    liquidityBalancer = context.actorOf(LiquidityBalancer.props(config, exchangeConfig, tradePairs, publicData, findOpenLiquidityTx, findFinishedLiquidityTx, referenceTicker, tradeRoom),
-      s"${exchangeConfig.name}-liquidity-manager-housekeeping")
   }
 
   def stop(): Unit = {
     shutdownInitiated = true
-    houseKeepingSchedule.cancel()
+    self ! PoisonPill
   }
 
   override def receive: Receive = {
     // @formatter:off
     case r: LiquidityRequest          => liquidityRequest(r)
     case LiquidityLockClearance(id)   => clearLock(id)
-    case HouseKeeping()               => houseKeeping()
-    case LiquidityBalancer.Finished() => houseKeepingRunning = false
+    case GetState()                   => houseKeeping(); sender() ! State(liquidityDemand, liquidityLocks)
     case TradeRoom.Stop(_)            => stop()
-    case Failure(e)                   => log.error("received failure", e); self ! PoisonPill
+    case Failure(e)                   => log.error("received failure", e)
     // @formatter:off
   }
 }

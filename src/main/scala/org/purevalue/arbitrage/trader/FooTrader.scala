@@ -2,30 +2,24 @@ package org.purevalue.arbitrage.trader
 
 import java.time.{Duration, Instant}
 import java.util.UUID
-import java.util.concurrent.TimeUnit
 
-import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
 import com.typesafe.config.Config
 import org.purevalue.arbitrage._
-import org.purevalue.arbitrage.trader.FooTrader.Trigger
-import org.purevalue.arbitrage.traderoom.TradeRoom.TradeContext
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.OrderLimitChooser
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.ExecutionContextExecutor
-import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
 object FooTrader {
-  case class Trigger()
-
-  def props(traderConfig: Config, tradeRoom: ActorRef, tc: TradeContext): Props = Props(new FooTrader(traderConfig, tradeRoom, tc))
+  def props(traderConfig: Config, tradeRoom: ActorRef): Props = Props(new FooTrader(traderConfig, tradeRoom))
 }
 
 /**
  * A basic trader to evolve the concept
  */
-class FooTrader(traderConfig: Config, tradeRoom: ActorRef, tc: TradeContext) extends Actor {
+class FooTrader(traderConfig: Config, tradeRoom: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[FooTrader])
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
@@ -44,9 +38,6 @@ class FooTrader(traderConfig: Config, tradeRoom: ActorRef, tc: TradeContext) ext
   val OrderBundleMinGainInUSD: Double = traderConfig.getDouble("order-bundle.min-gain-in-usd")
   val TradeAmountInUSD: Double = traderConfig.getDouble("order-bundle.trade-amount-in-usd")
 
-  val scheduleDelay: FiniteDuration = FiniteDuration(traderConfig.getDuration("schedule-delay").toNanos, TimeUnit.NANOSECONDS)
-  val schedule: Cancellable = actorSystem.scheduler.scheduleWithFixedDelay(3.minutes, scheduleDelay, self, Trigger())
-
   sealed trait NoResultReason
   case class NotEnoughExchangesAvailableForTrading() extends NoResultReason
   case class BuyOrSellBookEmpty() extends NoResultReason
@@ -56,12 +47,12 @@ class FooTrader(traderConfig: Config, tradeRoom: ActorRef, tc: TradeContext) ext
   case class MinGainTooLow() extends NoResultReason
   case class MinGainTooLow2() extends NoResultReason
 
-  def canTrade(exchange: String, tradePair: TradePair): Boolean =
+  def canTrade(exchange: String, tradePair: TradePair)(implicit tc: TradeContext): Boolean =
     !tc.doNotTouch(exchange).contains(tradePair.baseAsset) && !tc.doNotTouch(exchange).contains(tradePair.quoteAsset)
 
   // finds (average) exchange rate based on reference ticker, if tradepair is available there
   // otherwise ticker rate is retrieved from fallBackTickerExchanges
-  def findPrice(tradePair: TradePair, fallBackTickerExchanges: Iterable[String]): Option[Double] = {
+  def findPrice(tradePair: TradePair, fallBackTickerExchanges: Iterable[String])(implicit tc: TradeContext): Option[Double] = {
     def _findPrice(exchangeOptions: List[String]): Option[Double] = {
       if (exchangeOptions.isEmpty) None
       else tc.tickers(exchangeOptions.head).get(tradePair)
@@ -73,12 +64,12 @@ class FooTrader(traderConfig: Config, tradeRoom: ActorRef, tc: TradeContext) ext
     _findPrice(exchangesInOrder)
   }
 
-  def determineLimit(exchange: String, tradePair: TradePair, tradeSide: TradeSide, amountBaseAsset: Double): Option[Double] = {
+  def determineLimit(exchange: String, tradePair: TradePair, tradeSide: TradeSide, amountBaseAsset: Double)(implicit tc: TradeContext): Option[Double] = {
     new OrderLimitChooser(tc.orderBooks(exchange).get(tradePair), tc.tickers(exchange)(tradePair))
       .determineRealisticOrderLimit(tradeSide, amountBaseAsset, OrderLimitRealityAdjustmentRate)
   }
 
-  def findBestShot(tradePair: TradePair): Either[OrderRequestBundle, NoResultReason] = {
+  def findBestShot(tradePair: TradePair)(implicit tc: TradeContext): Either[OrderRequestBundle, NoResultReason] = {
     val availableExchanges: Iterable[String] =
       tc.tradePairs
         .filter(_._2.contains(tradePair))
@@ -158,7 +149,7 @@ class FooTrader(traderConfig: Config, tradeRoom: ActorRef, tc: TradeContext) ext
 
   var noResultReasonStats: Map[NoResultReason, Int] = Map()
 
-  def findBestShots(topN: Int): Seq[OrderRequestBundle] = {
+  def findBestShots(topN: Int)(implicit tc: TradeContext): Seq[OrderRequestBundle] = {
     var result: List[OrderRequestBundle] = List()
     val cryptoTradePairs = tc.tickers.values.flatMap(_.keys).filterNot(_.involvedAssets.exists(_.isFiat))
     for (tradePair: TradePair <- cryptoTradePairs) {
@@ -196,24 +187,18 @@ class FooTrader(traderConfig: Config, tradeRoom: ActorRef, tc: TradeContext) ext
     }
   }
 
-  log.info("FooTrader started")
-
   override def receive: Receive = {
-
-    // from Scheduler
-
-    case Trigger() =>
-      if (pendingOrderBundles.size < maxOpenOrderBundles) {
-        log.trace(s"Using TradeContext: with Tickers for Tradepairs[${tc.tickers.keys.mkString(",")}]")
-        lifeSign()
-        numSearchesDiff += 1
-        numSearchesTotal += 1
-        findBestShots(maxOpenOrderBundles - pendingOrderBundles.size).foreach { b =>
-          shotsDelivered += 1
-          tradeRoom ! b
-        }
+    case tc: TradeContext =>
+      lifeSign()
+      numSearchesDiff += 1
+      numSearchesTotal += 1
+      findBestShots(3)(tc).foreach { b =>
+        shotsDelivered += 1
+        tradeRoom ! b
       }
 
     case Status.Failure(cause) => log.error("received failure", cause)
   }
+
+  log.info("FooTrader started")
 }

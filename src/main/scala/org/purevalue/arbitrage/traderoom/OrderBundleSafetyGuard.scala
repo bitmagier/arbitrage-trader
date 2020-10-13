@@ -2,10 +2,8 @@ package org.purevalue.arbitrage.traderoom
 
 import java.time.{Duration, Instant}
 
-import org.purevalue.arbitrage.adapter.PublicDataTimestamps
-import org.purevalue.arbitrage.traderoom.TradeRoom.{ActiveOrderBundlesReadonly, TradeContext}
-import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.OrderBookTooFlatException
+import org.purevalue.arbitrage.traderoom.exchange.localExchangeRateRating
 import org.purevalue.arbitrage.util.Emoji
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.{ExchangeConfig, OrderBundleSafetyGuardConfig}
@@ -21,17 +19,14 @@ case object SameTradePairOrderStillActive extends SafetyGuardDecision
 case object TotalTransactionUneconomic extends SafetyGuardDecision
 
 class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
-                             val exchangesConfig: Map[String, ExchangeConfig],
-                             val tc: TradeContext,
-                             val dataAge: collection.Map[String, PublicDataTimestamps],
-                             val activeOrderBundles: ActiveOrderBundlesReadonly) {
+                             val exchangesConfig: Map[String, ExchangeConfig]) {
   private val log = LoggerFactory.getLogger(classOf[OrderBundleSafetyGuard])
   private var warningAlreadyWritten: Set[String] = Set()
   private var stats: Map[SafetyGuardDecision, Int] = Map()
 
   def unsafeStats: Map[SafetyGuardDecision, Int] = stats
 
-  private def orderLimitCloseToTicker(order: OrderRequest): Boolean = {
+  private def orderLimitCloseToTicker(order: OrderRequest)(implicit tc: TradeContext): Boolean = {
     if (exchangesConfig(order.exchange).tickerIsRealtime) {
       val ticker = tc.tickers(order.exchange)(order.tradePair)
       val bestOfferPrice: Double = if (order.tradeSide == TradeSide.Buy) ticker.lowestAskPrice else ticker.highestBidPrice
@@ -48,8 +43,8 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
     }
   }
 
-  private def tickerDataUpToDate(o: OrderRequest): Boolean = {
-    val lastSeen = (dataAge(o.exchange).heartbeatTS.toSeq ++ dataAge(o.exchange).tickerTS.toSeq ++ dataAge(o.exchange).orderBookTS.toSeq).max
+  private def dataUpToDate(o: OrderRequest)(implicit tc: TradeContext): Boolean = {
+    val lastSeen = (tc.heartbeatTS(o.exchange).toSeq ++ tc.tickerTS(o.exchange).toSeq ++ tc.orderBooksTS(o.exchange).toSeq).max
     val age = Duration.between(lastSeen, Instant.now)
     val r = age.compareTo(config.maxTickerAge) < 0
     if (!r) {
@@ -75,7 +70,7 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
    *
    * It is possible to use different Liquidity reserve assets for different involved assets/trades
    */
-  private def balanceOfLiquidityTransformationCompensationTransactionsInUSD(t: OrderRequestBundle): Option[Double] = {
+  private def balanceOfLiquidityTransformationCompensationTransactionsInUSD(t: OrderRequestBundle)(implicit tc: TradeContext): Option[Double] = {
     val involvedAssetsPerExchange: Map[String, Set[Asset]] =
       t.orderRequests
         .groupBy(_.exchange)
@@ -111,14 +106,14 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
       var reserveAssetRatings: Map[Asset, Double] = Map()
       for (r <- usableReserveAssets) {
         try {
-          val rating = LiquidityManager.localExchangeRateRating(
-            tc.orderBooks(exchange),
-            tc.tickers(exchange),
-            tc.referenceTicker,
+          val rating = localExchangeRateRating(
             TradePair(assetToProvide, r),
             TradeSide.Buy, // TODO [later, maybe] try other way around too - also in LiquidityManager
             amountToProvide,
             config.txLimitAwayFromEdgeLimit,
+            tc.tickers(exchange),
+            tc.referenceTicker,
+            tc.orderBooks(exchange)
           )
           reserveAssetRatings = reserveAssetRatings + (r -> rating)
         } catch {
@@ -178,7 +173,7 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
 
 
   // returns decision-result and the total win in case the decision-result is true
-  private def totalTransactionsWinInRage(t: OrderRequestBundle): (Boolean, Option[Double]) = {
+  private def totalTransactionsWinInRage(t: OrderRequestBundle)(implicit tc: TradeContext): (Boolean, Option[Double]) = {
     val b: Option[Double] = balanceOfLiquidityTransformationCompensationTransactionsInUSD(t)
     if (b.isEmpty) return (false, None)
     if ((t.bill.sumUSDAtCalcTime + b.get) < config.minTotalGainInUSD) {
@@ -189,10 +184,11 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
   }
 
   // reject OrderBundles, when there is another active order of the same exchange+tradepair still active
-  private def sameTradePairOrdersStillActive(bundle: OrderRequestBundle): Boolean = {
-    val activeExchangeOrderPairs: Set[(String, TradePair)] = activeOrderBundles.values
-      .flatMap(_.ordersRefs.map(o =>
-        (o.exchange, o.tradePair))).toSet
+  private def sameTradePairOrdersStillActive(bundle: OrderRequestBundle)(implicit tc: TradeContext): Boolean = {
+    val activeExchangeOrderPairs: Set[(String, TradePair)] =
+      tc.activeOrderBundles.values
+        .flatMap(_.orderRefs.map(o =>
+          (o.exchange, o.tradePair))).toSet
     if (bundle.orderRequests.exists(o => activeExchangeOrderPairs.contains((o.exchange, o.tradePair)))) {
       if (log.isDebugEnabled())
         log.debug(s"rejecting new $bundle because another order of same exchange+tradepair is still active. Active trade pairs: $activeExchangeOrderPairs")
@@ -202,7 +198,7 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
     } else false
   }
 
-  private def _isSafe(bundle: OrderRequestBundle): (Boolean, SafetyGuardDecision, Option[Double]) = {
+  private def _isSafe(bundle: OrderRequestBundle)(implicit tc: TradeContext): (Boolean, SafetyGuardDecision, Option[Double]) = {
 
     def unsafe(d: SafetyGuardDecision): (Boolean, SafetyGuardDecision, Option[Double]) = (false, d, None)
 
@@ -210,7 +206,7 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
       log.warn(s"${Emoji.Disagree}  Got OrderBundle with negative balance: ${bundle.bill.sumUSDAtCalcTime}. I will not execute that one!")
       log.debug(s"$bundle")
       unsafe(NegativeBalance)
-    } else if (!bundle.orderRequests.forall(tickerDataUpToDate)) {
+    } else if (!bundle.orderRequests.forall(dataUpToDate)) {
       unsafe(TickerOutdated)
     } else if (bundle.bill.sumUSDAtCalcTime >= config.maximumReasonableWinPerOrderBundleUSD) {
       log.warn(s"${Emoji.Disagree}  Got OrderBundle with unbelievable high estimated win of ${formatDecimal(bundle.bill.sumUSDAtCalcTime)} USD. I will rather not execute that one - seem to be a bug!")
@@ -228,7 +224,7 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
   }
 
   // returns decision result and the total win. in case of a positive decision result
-  def isSafe(bundle: OrderRequestBundle): (Boolean, Option[Double]) = {
+  def isSafe(bundle: OrderRequestBundle)(implicit tc: TradeContext): (Boolean, Option[Double]) = {
     _isSafe(bundle) match {
       case (result, reason, win) =>
         this.synchronized {

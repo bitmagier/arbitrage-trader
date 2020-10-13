@@ -11,13 +11,13 @@ import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
 import org.purevalue.arbitrage._
-import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager._
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexAccountDataChannel.{Connect, OnStreamsRunning}
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexHttpUtil.httpRequestJsonBitfinexAccount
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexOrderUpdateJson.{toOrderStatus, toOrderType}
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.{GetBitfinexAssets, GetBitfinexTradePairs}
-import org.purevalue.arbitrage.adapter.{Balance, ExchangeAccountStreamData, WalletAssetUpdate}
 import org.purevalue.arbitrage.traderoom._
+import org.purevalue.arbitrage.traderoom.exchange.Exchange._
+import org.purevalue.arbitrage.traderoom.exchange.{Balance, ExchangeAccountStreamData, WalletAssetUpdate}
 import org.purevalue.arbitrage.util.HttpUtil.hmacSha384Signature
 import org.purevalue.arbitrage.util.Util.{convertBytesToLowerCaseHex, formatDecimal}
 import org.purevalue.arbitrage.util.WrongAssumption
@@ -284,13 +284,13 @@ object BitfinexAccountDataChannel {
 
   def props(globalConfig: GlobalConfig,
             exchangeConfig: ExchangeConfig,
-            exchangeAccountDataManager: ActorRef,
+            exchange: ActorRef,
             publicDataInquirer: ActorRef): Props =
-    Props(new BitfinexAccountDataChannel(globalConfig, exchangeConfig, exchangeAccountDataManager, publicDataInquirer))
+    Props(new BitfinexAccountDataChannel(globalConfig, exchangeConfig, exchange, publicDataInquirer))
 }
 private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
                                                    exchangeConfig: ExchangeConfig,
-                                                   exchangeAccountDataManager: ActorRef,
+                                                   exchange: ActorRef,
                                                    exchangePublicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BitfinexAccountDataChannel])
 
@@ -438,8 +438,8 @@ private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
       Sink.foreach[Message](message =>
         decodeMessage(message)
           .map(exchangeDataMapping)
-          .map(IncomingData)
-          .pipeTo(exchangeAccountDataManager)
+          .map(IncomingAccountData)
+          .pipeTo(exchange)
       ),
       Source(List(
         TextMessage(authMessage.toJson.compactPrint)
@@ -522,7 +522,7 @@ private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
         case r: SubmitOrderResponseJson if r.status == "SUCCESS" && r.orders.length == 1 =>
           if (log.isTraceEnabled) log.trace(s"$r")
           val order = r.orders.head
-          exchangeAccountDataManager ! IncomingData(exchangeDataMapping(Seq(order)))
+          exchange ! IncomingAccountData(exchangeDataMapping(Seq(order)))
           NewOrderAck(exchangeConfig.name, o.tradePair, order.orderId.toString, o.id)
         case r: SubmitOrderResponseJson =>
           throw new RuntimeException(s"Something went wrong while placing a limit-order. Response is: $r")
@@ -544,20 +544,20 @@ private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
       case Left(response) => response match {
         case r: CancelOrderResponseJson if r.status == "SUCCESS" =>
           if (log.isTraceEnabled) log.trace(s"$r")
-          exchangeAccountDataManager ! IncomingData(exchangeDataMapping(Seq(r.order)))
+          exchange ! IncomingAccountData(exchangeDataMapping(Seq(r.order)))
           CancelOrderResult(exchangeConfig.name, tradePair, r.order.orderId.toString, success = true)
         case r: CancelOrderResponseJson =>
           log.debug(s"Cancel order failed. Response: $r")
-          CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId.toString, success = false, orderUnknown=false, Some(r.text))
+          CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId.toString, success = false, orderUnknown = false, Some(r.text))
       }
-      case Right(errorResponse) =>  // TODO figure out what we get when order-id does not exist and set CancelOrderResult.orderUnknown accordingly. For now we take the error-response as orderUnknown=true
+      case Right(errorResponse) => // TODO figure out what we get when order-id does not exist and set CancelOrderResult.orderUnknown accordingly. For now we take the error-response as orderUnknown=true
         log.warn(s"CancelOrder id=$externalOrderId failed: $errorResponse")
-        CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId.toString, success = false, orderUnknown=true, Some(errorResponse.compactPrint))
+        CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId.toString, success = false, orderUnknown = true, Some(errorResponse.compactPrint))
     }
   }
 
   def onStreamsRunning(): Unit = {
-    exchangeAccountDataManager ! Initialized()
+    exchange ! AccountDataChannelInitialized()
   }
 
   override def postStop(): Unit = {

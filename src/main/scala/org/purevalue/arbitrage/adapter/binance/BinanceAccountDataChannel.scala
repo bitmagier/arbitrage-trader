@@ -11,16 +11,16 @@ import akka.http.scaladsl.model.{HttpMethods, StatusCodes, Uri}
 import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
-import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager._
-import org.purevalue.arbitrage.adapter._
+import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.binance.BinanceAccountDataChannel.{Connect, OnStreamsRunning, SendPing}
 import org.purevalue.arbitrage.adapter.binance.BinanceHttpUtil.httpRequestJsonBinanceAccount
 import org.purevalue.arbitrage.adapter.binance.BinanceOrder.{toOrderStatus, toOrderType, toTradeSide}
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.{BinanceBaseRestEndpoint, GetBinanceTradePairs}
 import org.purevalue.arbitrage.traderoom._
+import org.purevalue.arbitrage.traderoom.exchange.Exchange._
+import org.purevalue.arbitrage.traderoom.exchange.{Balance, ExchangeAccountStreamData, WalletAssetUpdate, WalletBalanceUpdate}
 import org.purevalue.arbitrage.util.Util.{alignToStepSizeCeil, alignToStepSizeNearest, formatDecimal, formatDecimalWithFixPrecision}
 import org.purevalue.arbitrage.util.{BadCalculationError, WrongAssumption}
-import org.purevalue.arbitrage.{adapter, _}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
@@ -91,7 +91,7 @@ private[binance] case class BalanceUpdateJson(e: String, // event type
                                              ) extends IncomingBinanceAccountJson {
   def toWalletBalanceUpdate: WalletBalanceUpdate = {
     if (!Asset.isKnown(a)) throw new Exception(s"We need to ignore a BalanceUpdateJson here, because it's asset is unknown: $this")
-    adapter.WalletBalanceUpdate(Asset(a), d.toDouble)
+    WalletBalanceUpdate(Asset(a), d.toDouble)
   }
 }
 
@@ -317,7 +317,7 @@ private[binance] case class CancelOrderResponseJson(symbol: String,
 }
 
 // @see https://github.com/binance-exchange/binance-official-api-docs/blob/master/errors.md
-private[binance] case class ErrorResponseJson(code:Int, msg:String)
+private[binance] case class ErrorResponseJson(code: Int, msg: String)
 
 private[binance] object BinanceAccountDataJsonProtocoll extends DefaultJsonProtocol {
   implicit val listenKeyJson: RootJsonFormat[ListenKeyJson] = jsonFormat1(ListenKeyJson)
@@ -345,14 +345,14 @@ object BinanceAccountDataChannel {
 
   def props(globalConfig: GlobalConfig,
             exchangeConfig: ExchangeConfig,
-            exchangeAccountDataManager: ActorRef,
+            exchange: ActorRef,
             publicDataInquirer: ActorRef): Props =
-    Props(new BinanceAccountDataChannel(globalConfig, exchangeConfig, exchangeAccountDataManager, publicDataInquirer))
+    Props(new BinanceAccountDataChannel(globalConfig, exchangeConfig, exchange, publicDataInquirer))
 }
 
 private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
                                                  exchangeConfig: ExchangeConfig,
-                                                 exchangeAccountDataManager: ActorRef,
+                                                 exchange: ActorRef,
                                                  exchangePublicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BinanceAccountDataChannel])
 
@@ -464,9 +464,9 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
       .map {
         case Left(response) =>
           if (log.isTraceEnabled) log.trace(s"received initial account information: $response")
-          IncomingData(exchangeDataMapping(Seq(response)))
+          IncomingAccountData(exchangeDataMapping(Seq(response)))
         case Right(errorResponse) => throw new RuntimeException(s"deliverAccountInformation failed: $errorResponse")
-      }.pipeTo(exchangeAccountDataManager)
+      }.pipeTo(exchange)
   }
 
   def deliverOpenOrders(): Unit = {
@@ -475,9 +475,9 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
       .map {
         case Left(response) =>
           if (log.isTraceEnabled) log.trace(s"received initial open orders: $response")
-          IncomingData(exchangeDataMapping(response))
+          IncomingAccountData(exchangeDataMapping(response))
         case Right(errorResponse) => throw new RuntimeException(s"deliverOpenOrders failed: $errorResponse")
-      }.pipeTo(exchangeAccountDataManager)
+      }.pipeTo(exchange)
   }
 
   def pingUserStream(): Unit = {
@@ -546,7 +546,7 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
     ).map {
       case Left(response) =>
         log.trace(s"Order successfully canceled: $response")
-        exchangeAccountDataManager ! IncomingData(exchangeDataMapping(Seq(response)))
+        exchange ! IncomingAccountData(exchangeDataMapping(Seq(response)))
         CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId.toString, success = true)
       case Right(errorResponse) =>
         log.error(s"CancelOrder failed: $errorResponse")
@@ -580,7 +580,7 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
   def onStreamsRunning(): Unit = {
     deliverAccountInformation()
     deliverOpenOrders()
-    exchangeAccountDataManager ! ExchangeAccountDataManager.Initialized()
+    exchange ! AccountDataChannelInitialized()
   }
 
   val SubscribeMessages: List[AccountStreamSubscribeRequestJson] = List(
@@ -594,8 +594,8 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
       Sink.foreach[Message](message =>
         decodeMessage(message)
           .map(exchangeDataMapping)
-          .map(IncomingData)
-          .pipeTo(exchangeAccountDataManager)
+          .map(IncomingAccountData)
+          .pipeTo(exchange)
       ),
       Source(
         SubscribeMessages.map(msg => TextMessage(msg.toJson.compactPrint))

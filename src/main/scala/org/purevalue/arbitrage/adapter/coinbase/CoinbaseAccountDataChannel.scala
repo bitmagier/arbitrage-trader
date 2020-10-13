@@ -11,14 +11,14 @@ import akka.http.scaladsl.model.{HttpMethods, HttpResponse, StatusCodes}
 import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
-import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager._
 import org.purevalue.arbitrage.adapter.coinbase.CoinbaseAccountDataChannel.{Connect, OnStreamsRunning}
 import org.purevalue.arbitrage.adapter.coinbase.CoinbaseHttpUtil.{Signature, httpRequestCoinbaseAccount, httpRequestJsonCoinbaseAccount, parseServerTime}
 import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataChannel.CoinbaseWebSocketEndpoint
 import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataInquirer.{CoinbaseBaseRestEndpoint, DeliverAccounts, GetCoinbaseTradePairs}
-import org.purevalue.arbitrage.adapter.{Balance, CompleteWalletUpdate, ExchangeAccountStreamData}
 import org.purevalue.arbitrage.traderoom.TradeRoom.OrderRef
 import org.purevalue.arbitrage.traderoom._
+import org.purevalue.arbitrage.traderoom.exchange.Exchange._
+import org.purevalue.arbitrage.traderoom.exchange.{Balance, CompleteWalletUpdate, ExchangeAccountStreamData}
 import org.purevalue.arbitrage.util.HttpUtil
 import org.purevalue.arbitrage.util.Util.{alignToStepSizeCeil, alignToStepSizeNearest, formatDecimalWithFixPrecision}
 import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig, Main}
@@ -244,12 +244,12 @@ object CoinbaseAccountDataChannel {
 
   def props(globalConfig: GlobalConfig,
             exchangeConfig: ExchangeConfig,
-            exchangeAccountDataManager: ActorRef,
-            exchangePublicDataInquirer: ActorRef): Props = Props(new CoinbaseAccountDataChannel(globalConfig, exchangeConfig, exchangeAccountDataManager, exchangePublicDataInquirer))
+            exchange: ActorRef,
+            exchangePublicDataInquirer: ActorRef): Props = Props(new CoinbaseAccountDataChannel(globalConfig, exchangeConfig, exchange, exchangePublicDataInquirer))
 }
 private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
                                                    exchangeConfig: ExchangeConfig,
-                                                   exchangeAccountDataManager: ActorRef,
+                                                   exchange: ActorRef,
                                                    exchangePublicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[CoinbaseAccountDataChannel])
 
@@ -325,7 +325,7 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
       case HttpResponse(code, headers, entity, protocol) =>
         (code,
           entity.toStrict(globalConfig.httpTimeout)
-          .map(_.data.utf8String)) match {
+            .map(_.data.utf8String)) match {
           case (code, entity) if code.isSuccess() => entity.map(parseServerTime)
           case (code, entity) => throw new RuntimeException(s"coinbase: GET /time failed with: $code, $entity")
         }
@@ -346,8 +346,8 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
       Sink.foreach[Message](message =>
         decodeMessage(message)
           .map(_.map(exchangeDataMapping))
-          .map(IncomingData)
-          .pipeTo(exchangeAccountDataManager)
+          .map(IncomingAccountData)
+          .pipeTo(exchange)
       ),
       Source(
         List(TextMessage(subscribeMessage.toJson.compactPrint))
@@ -379,7 +379,7 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
   }
 
   def onStreamsRunning(): Unit = {
-    exchangeAccountDataManager ! Initialized()
+    exchange ! AccountDataChannelInitialized()
   }
 
 
@@ -406,7 +406,7 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
       httpRequestJsonCoinbaseAccount[NewOrderResponseJson, String](HttpMethods.POST, s"$CoinbaseBaseRestEndpoint/orders", Some(requestBody), exchangeConfig.secrets, serverTime)
         .map {
           case Left(newOrderResponse) =>
-            exchangeAccountDataManager ! IncomingData(Seq(newOrderResponse.toOrderUpdate(exchangeConfig.name, id => coinbaseTradePairsByProductId(id).toTradePair)))
+            exchange ! IncomingAccountData(Seq(newOrderResponse.toOrderUpdate(exchangeConfig.name, id => coinbaseTradePairsByProductId(id).toTradePair)))
             newOrderResponse.toNewOrderAck(exchangeConfig.name, id => coinbaseTradePairsByProductId(id).toTradePair, o.id)
           case Right(error) => throw new RuntimeException(s"newLimitOrder failed: $error")
         } recover {
@@ -416,7 +416,7 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
       }
     }
 
-   for {
+    for {
       serverTime <- queryServerTime()
       newOrderAck <- newLimitOrder(o, serverTime)
     } yield newOrderAck
@@ -449,27 +449,28 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
 
   def deliverAccounts(): Unit = {
 
-    def queryAccounts(serverTime: Double): Future[IncomingData] = {
+    def queryAccounts(serverTime: Double): Future[IncomingAccountData] = {
       httpRequestJsonCoinbaseAccount[Seq[CoinbaseAccountJson], JsObject](HttpMethods.GET, s"$CoinbaseBaseRestEndpoint/accounts", None, exchangeConfig.secrets, serverTime)
         .map {
-          case Left(accounts) => Seq(CompleteWalletUpdate(
-            accounts
-              .map(_.toBalance)
-              .map(e => e.asset -> e)
-              .toMap
-          ))
+          case Left(accounts) =>
+            Seq(CompleteWalletUpdate(
+              accounts
+                .map(_.toBalance)
+                .map(e => e.asset -> e)
+                .toMap
+            ))
           case Right(error) =>
             log.warn(s"coinbase: queryAccounts() failed: $error")
             Nil
         }
-        .map(e => IncomingData(e))
+        .map(e => IncomingAccountData(e))
     }
 
     (for {
       serverTime <- queryServerTime()
       accounts <- queryAccounts(serverTime)
     } yield accounts)
-      .pipeTo(exchangeAccountDataManager)
+      .pipeTo(exchange)
   }
 
   override def postStop(): Unit = {

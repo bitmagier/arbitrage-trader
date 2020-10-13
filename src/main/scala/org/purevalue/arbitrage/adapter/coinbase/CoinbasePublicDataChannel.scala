@@ -8,11 +8,11 @@ import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebS
 import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
-import org.purevalue.arbitrage.adapter.ExchangePublicDataManager.IncomingData
-import org.purevalue.arbitrage.adapter._
 import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataChannel.{CoinbaseWebSocketEndpoint, Connect}
 import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataInquirer.GetCoinbaseTradePairs
 import org.purevalue.arbitrage.traderoom.TradePair
+import org.purevalue.arbitrage.traderoom.exchange.Exchange.IncomingPublicData
+import org.purevalue.arbitrage.traderoom.exchange.{Ask, Bid, ExchangePublicStreamData, OrderBook, OrderBookUpdate, Ticker}
 import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig, Main}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsonParser, RootJsonFormat, enrichAny}
@@ -92,14 +92,14 @@ object CoinbasePublicDataChannel {
   def props(globalConfig: GlobalConfig,
             exchangeConfig: ExchangeConfig,
             tradePairs: Set[TradePair],
-            publicDataManager: ActorRef,
+            exchange: ActorRef,
             coinbasePublicDataInquirer: ActorRef): Props = Props(
-    new CoinbasePublicDataChannel(globalConfig, exchangeConfig, tradePairs, publicDataManager, coinbasePublicDataInquirer))
+    new CoinbasePublicDataChannel(globalConfig, exchangeConfig, tradePairs, exchange, coinbasePublicDataInquirer))
 }
 private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
                                                   exchangeConfig: ExchangeConfig,
                                                   tradePairs: Set[TradePair],
-                                                  publicDataManager: ActorRef,
+                                                  exchange: ActorRef,
                                                   coinbasePublicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[CoinbasePublicDataChannel])
   implicit val actorSystem: ActorSystem = Main.actorSystem
@@ -159,7 +159,7 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
       SubscribeRequestJson(
         product_ids = coinbaseTradePairByProductId.filter(e => tradePairs.contains(e._2.toTradePair)).keys.toSeq,
         channels = Seq(OrderBookChannelname))
-      )
+    )
   }
 
   // flow to us
@@ -168,8 +168,8 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
       Sink.foreach[Message](message =>
         decodeMessage(message)
           .map(_.map(exchangeDataMapping))
-          .map(IncomingData)
-          .pipeTo(publicDataManager)
+          .map(IncomingPublicData)
+          .pipeTo(exchange)
       ),
       Source(
         subscribeMessages.map(e => TextMessage(e.toJson.compactPrint))

@@ -4,17 +4,14 @@ import akka.actor.{Actor, ActorRef, Props}
 import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage.Config
-import org.purevalue.arbitrage.adapter._
 import org.purevalue.arbitrage.adapter.binance.{BinanceAccountDataChannel, BinancePublicDataChannel, BinancePublicDataInquirer}
 import org.purevalue.arbitrage.adapter.bitfinex.{BitfinexAccountDataChannel, BitfinexPublicDataChannel, BitfinexPublicDataInquirer}
 import org.purevalue.arbitrage.adapter.coinbase.{CoinbaseAccountDataChannel, CoinbasePublicDataChannel, CoinbasePublicDataInquirer}
-import org.purevalue.arbitrage.traderoom.TradeRoom.{ConcurrentMap, OrderRef}
 import org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator.InitializedTradeRoom
-import org.purevalue.arbitrage.traderoom.exchange.Exchange
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
+import org.purevalue.arbitrage.traderoom.exchange.{Exchange, ExchangeAccountDataChannelInit, ExchangePublicDataChannelInit, ExchangePublicDataInquirerInit}
 import org.slf4j.LoggerFactory
 
-import scala.collection.concurrent.TrieMap
 import scala.concurrent.Await
 import scala.concurrent.duration.DurationInt
 
@@ -37,11 +34,6 @@ class TradeRoomInitCoordinator(val config: Config,
   var allTradePairs:      Map[String, Set[TradePair]] = Map()
   var usableTradePairs:   Map[String, Set[TradePair]] = Map()
   var exchanges:          Map[String, ActorRef] = Map()
-  var tickers:            Map[String, ConcurrentMap[TradePair, Ticker]] = Map()
-  var orderBooks:         Map[String, ConcurrentMap[TradePair, OrderBook]] = Map()
-  var dataAge:            Map[String, PublicDataTimestamps] = Map()
-  var wallets:            Map[String, Wallet] = Map()
-  var activeOrders:       Map[String, ConcurrentMap[OrderRef, Order]] = Map()
   // @formatter:on
 
   val AllExchanges: Map[String, ExchangeInitStuff] = Map(
@@ -82,6 +74,7 @@ class TradeRoomInitCoordinator(val config: Config,
     val globalArbitragePairs = allGlobalTradePairs.filter(e => allTradePairs.count(_._2.contains(e)) > 1)
 
     val arbitrageAssets = globalArbitragePairs.flatMap(_.involvedAssets)
+
     def condition3(exchange: String, tp: TradePair): Boolean = {
       (arbitrageAssets.contains(tp.baseAsset) && (tp.quoteAsset == config.exchanges(exchange).usdEquivalentCoin || config.exchanges(exchange).reserveAssets.contains(tp.quoteAsset))) ||
         (arbitrageAssets.contains(tp.quoteAsset) && tp.baseAsset == config.exchanges(exchange).usdEquivalentCoin || config.exchanges(exchange).reserveAssets.contains(tp.baseAsset))
@@ -99,28 +92,13 @@ class TradeRoomInitCoordinator(val config: Config,
   }
 
   def startExchange(exchangeName: String, exchangeInit: ExchangeInitStuff): Unit = {
-    tickers = tickers + (exchangeName -> TrieMap())
-    orderBooks = orderBooks + (exchangeName -> TrieMap())
-    dataAge = dataAge + (exchangeName -> PublicDataTimestamps(None, None, None))
-    wallets = wallets + (exchangeName -> Wallet(exchangeName, Map(), config.exchanges(exchangeName)))
-    activeOrders = activeOrders + (exchangeName -> TrieMap())
-
     exchanges = exchanges +
       (exchangeName -> context.actorOf(
         Exchange.props(
           exchangeName,
           config,
           config.exchanges(exchangeName),
-          exchangeInit,
-          ExchangePublicData(
-            tickers(exchangeName),
-            orderBooks(exchangeName),
-            dataAge(exchangeName)
-          ),
-          ExchangeAccountData(
-            wallets(exchangeName),
-            activeOrders(exchangeName)
-          )
+          exchangeInit
         ), "Exchange-" + exchangeName))
   }
 
@@ -141,7 +119,7 @@ class TradeRoomInitCoordinator(val config: Config,
 
   def onInitialized(): Unit = {
     log.debug("TradeRoom initialized")
-    val tradeRoom = context.actorOf(TradeRoom.props(config, exchanges, usableTradePairs, tickers, orderBooks, dataAge, wallets, activeOrders), "TradeRoom")
+    val tradeRoom = context.actorOf(TradeRoom.props(config, exchanges, usableTradePairs), "TradeRoom")
     parent ! InitializedTradeRoom(tradeRoom)
     context.watch(tradeRoom)
   }

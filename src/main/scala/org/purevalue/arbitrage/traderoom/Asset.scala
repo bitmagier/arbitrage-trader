@@ -1,8 +1,7 @@
 package org.purevalue.arbitrage.traderoom
 
-import org.purevalue.arbitrage.adapter.Ticker
 import org.purevalue.arbitrage.traderoom.Asset.Bitcoin
-import org.purevalue.arbitrage.traderoom.TradeRoom.TickersReadonly
+import org.purevalue.arbitrage.traderoom.exchange.Ticker
 import org.purevalue.arbitrage.util.Util.formatDecimal
 
 
@@ -31,8 +30,12 @@ class Asset(val officialSymbol: String,
       canConvertIndirectly(targetAsset, Bitcoin, conversionRateExists)
   }
 
-  def canConvertTo(targetAsset: Asset, ticker: collection.Map[TradePair, Ticker]): Boolean = {
+  def canConvertTo(targetAsset: Asset, ticker: Map[TradePair, Ticker]): Boolean = {
     canConvertTo(targetAsset, tp => ticker.contains(tp))
+  }
+
+  def canConvertTo(targetAsset: Asset, tradePairs: Set[TradePair]): Boolean = {
+    canConvertTo(targetAsset, tp => tradePairs.contains(tp))
   }
 
   override def equals(obj: Any): Boolean = {
@@ -116,7 +119,7 @@ abstract class TradePair extends Ordered[TradePair] {
 
   def reverse: TradePair = TradePair(quoteAsset, baseAsset)
 
-  def involvedAssets: Seq[Asset] = Seq(baseAsset, quoteAsset)
+  def involvedAssets: Set[Asset] = Set(baseAsset, quoteAsset)
 
   override def toString: String = s"${baseAsset.officialSymbol}:${quoteAsset.officialSymbol}"
 
@@ -149,8 +152,11 @@ case class CryptoValue(asset: Asset, amount: Double) {
 
   override def toString: String = s"${formatDecimal(amount, asset.defaultFractionDigits)} ${asset.officialSymbol}"
 
-  def canConvertTo(targetAsset: Asset, ticker: collection.Map[TradePair, Ticker]): Boolean =
+  def canConvertTo(targetAsset: Asset, ticker: Map[TradePair, Ticker]): Boolean =
     this.asset.canConvertTo(targetAsset, ticker)
+
+  def canConvertTo(targetAsset: Asset, tradePairs: Set[TradePair]): Boolean =
+    this.asset.canConvertTo(targetAsset, tradePairs)
 
   def convertTo(targetAsset: Asset, findConversionRate: TradePair => Option[Double]): CryptoValue = {
     if (this.asset == targetAsset)
@@ -176,7 +182,7 @@ case class CryptoValue(asset: Asset, amount: Double) {
     }
   }
 
-  def convertTo(targetAsset: Asset, ticker: collection.Map[TradePair, Ticker]): CryptoValue =
+  def convertTo(targetAsset: Asset, ticker: Map[TradePair, Ticker]): CryptoValue =
     convertTo(targetAsset, tp => ticker.get(tp).map(_.priceEstimate))
 }
 /**
@@ -192,12 +198,6 @@ case class LocalCryptoValue(exchange: String, asset: Asset, amount: Double) {
   def convertTo(targetAsset: Asset, findConversionRate: (String, TradePair) => Option[Double]): LocalCryptoValue = {
     val v = CryptoValue(asset, amount)
       .convertTo(targetAsset, tradepair => findConversionRate(exchange, tradepair))
-    LocalCryptoValue(exchange, v.asset, v.amount)
-  }
-
-  def convertTo(targetAsset: Asset, tickers: TickersReadonly): LocalCryptoValue = {
-    val v = CryptoValue(asset, amount)
-      .convertTo(targetAsset, tickers(exchange))
     LocalCryptoValue(exchange, v.asset, v.amount)
   }
 

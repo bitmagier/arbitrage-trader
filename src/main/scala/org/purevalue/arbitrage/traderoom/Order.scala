@@ -3,8 +3,8 @@ package org.purevalue.arbitrage.traderoom
 import java.time.Instant
 import java.util.UUID
 
-import org.purevalue.arbitrage.adapter.{ExchangeAccountStreamData, Ticker}
-import org.purevalue.arbitrage.traderoom.TradeRoom.{OrderRef, TickersReadonly}
+import org.purevalue.arbitrage.traderoom.TradeRoom.OrderRef
+import org.purevalue.arbitrage.traderoom.exchange.{ExchangeAccountStreamData, Ticker}
 import org.purevalue.arbitrage.util.IncomingDataError
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.slf4j.LoggerFactory
@@ -296,12 +296,12 @@ object OrderBill {
 
   def aggregateValues(balanceSheet: Iterable[LocalCryptoValue],
                       targetAsset: Asset,
-                      tickers: TickersReadonly): Double =
-    aggregateValues(balanceSheet, targetAsset, (exchange, tradePair) => tickers(exchange).get(tradePair).map(_.priceEstimate))
+                      tickers: Map[String, Map[TradePair, Ticker]]): Double =
+    aggregateValues(balanceSheet, targetAsset, (e, pair) => tickers(e).get(pair).map(_.priceEstimate))
 
   def calc(orders: Seq[OrderRequest],
            aggregateUSDxAsset: Asset,
-           referenceTicker: collection.Map[TradePair, Ticker]): OrderBill = {
+           referenceTicker: Map[TradePair, Ticker]): OrderBill = {
     if (!Asset.UsdEquivalentCoins.contains(aggregateUSDxAsset)) throw new IllegalArgumentException("not a USD equivalent asset")
 
     val balanceSheet: Seq[LocalCryptoValue] = orders.flatMap(calcBalanceSheet)

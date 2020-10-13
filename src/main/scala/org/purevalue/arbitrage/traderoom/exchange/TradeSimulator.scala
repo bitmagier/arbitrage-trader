@@ -4,25 +4,26 @@ import java.time.Instant
 import java.util.UUID
 
 import akka.actor.{Actor, ActorRef, Props}
-import akka.pattern.pipe
+import akka.pattern.{ask, pipe}
+import akka.util.Timeout
 import org.purevalue.arbitrage.Main.actorSystem
-import org.purevalue.arbitrage.adapter.ExchangeAccountDataManager._
-import org.purevalue.arbitrage.adapter.{ExchangePublicDataReadonly, WalletBalanceUpdate}
 import org.purevalue.arbitrage.traderoom._
-import org.purevalue.arbitrage.{ExchangeConfig, adapter}
+import org.purevalue.arbitrage.traderoom.exchange.Exchange._
+import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig}
 
 import scala.collection.concurrent.TrieMap
-import scala.concurrent.{ExecutionContextExecutor, Future}
+import scala.concurrent.duration.DurationInt
+import scala.concurrent.{Await, ExecutionContextExecutor, Future}
 
 object TradeSimulator {
-  def props(exchangeConfig: ExchangeConfig,
-            publicData: ExchangePublicDataReadonly,
-            accountDataManager: ActorRef): Props =
-    Props(new TradeSimulator(exchangeConfig, publicData, accountDataManager))
+  def props(globalConfig: GlobalConfig,
+            exchangeConfig: ExchangeConfig,
+            exchange: ActorRef): Props =
+    Props(new TradeSimulator(globalConfig, exchangeConfig, exchange))
 }
-class TradeSimulator(exchangeConfig: ExchangeConfig,
-                     publicData: ExchangePublicDataReadonly,
-                     accountDataManager: ActorRef) extends Actor {
+class TradeSimulator(globalConfig: GlobalConfig,
+                     exchangeConfig: ExchangeConfig,
+                     exchange: ActorRef) extends Actor {
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
   val activeOrders: collection.concurrent.Map[String, Order] = TrieMap() // external-order-id -> Order
@@ -31,7 +32,7 @@ class TradeSimulator(exchangeConfig: ExchangeConfig,
     Future.successful {
       if (activeOrders.contains(externalOrderId)) {
         val o = activeOrders(externalOrderId)
-        accountDataManager ! IncomingData(
+        exchange ! IncomingAccountData(
           Seq(OrderUpdate(externalOrderId, exchangeConfig.name, tradePair, o.side, None, None, None, None, None, Some(OrderStatus.CANCELED), None, None, None, Instant.now))
         )
         activeOrders.remove(externalOrderId)
@@ -51,10 +52,14 @@ class TradeSimulator(exchangeConfig: ExchangeConfig,
   def limitOrderFilled(externalOrderId: String, creationTime: Instant, o: OrderRequest): OrderUpdate =
     OrderUpdate(externalOrderId, o.exchange, o.tradePair, o.tradeSide, Some(OrderType.LIMIT), Some(o.limit), None, Some(o.amountBaseAsset), Some(creationTime), Some(OrderStatus.FILLED), Some(o.amountBaseAsset), None, Some(o.limit), Instant.now)
 
-  def walletBalanceUpdate(delta: LocalCryptoValue): WalletBalanceUpdate = adapter.WalletBalanceUpdate(delta.asset, delta.amount)
+  def walletBalanceUpdate(delta: LocalCryptoValue): WalletBalanceUpdate = WalletBalanceUpdate(delta.asset, delta.amount)
 
-  def orderLimitCloseToTicker(o: OrderRequest, maxDiffRate: Double): Boolean = {
-    val tickerPrice = publicData.ticker(o.tradePair).priceEstimate
+  def orderLimitCloseToTickerSync(o: OrderRequest, maxDiffRate: Double): Boolean = {
+    implicit val timeout: Timeout = globalConfig.internalCommunicationTimeout
+    val tickerPrice = Await.result(
+      (exchange ? GetPriceEstimate(o.tradePair)).mapTo[Double],
+      timeout.duration.plus(500.millis)
+    )
     val diffRate = (1.0 - tickerPrice / o.limit).abs
     diffRate < maxDiffRate
   }
@@ -63,25 +68,25 @@ class TradeSimulator(exchangeConfig: ExchangeConfig,
     Thread.sleep(100)
     val creationTime = Instant.now
     val limitOrder = newLimitOrder(externalOrderId, creationTime, o)
-    accountDataManager ! SimulatedData(limitOrder)
+    exchange ! SimulatedAccountData(limitOrder)
 
     activeOrders.update(limitOrder.externalOrderId, limitOrder.toOrder)
 
-    if (orderLimitCloseToTicker(o, 0.03)) {
+    if (orderLimitCloseToTickerSync(o, 0.03)) {
       Thread.sleep(100)
-      accountDataManager ! SimulatedData(limitOrderPartiallyFilled(externalOrderId, creationTime, o))
+      exchange ! SimulatedAccountData(limitOrderPartiallyFilled(externalOrderId, creationTime, o))
       val out = o.calcOutgoingLiquidity
       val outPart = LocalCryptoValue(out.exchange, out.asset, -out.amount / 2)
       val in = o.calcIncomingLiquidity
       val inPart = LocalCryptoValue(in.exchange, in.asset, in.amount / 2)
-      accountDataManager ! SimulatedData(walletBalanceUpdate(outPart))
-      accountDataManager ! SimulatedData(walletBalanceUpdate(inPart))
+      exchange ! SimulatedAccountData(walletBalanceUpdate(outPart))
+      exchange ! SimulatedAccountData(walletBalanceUpdate(inPart))
 
       Thread.sleep(100)
-      accountDataManager ! SimulatedData(limitOrderFilled(externalOrderId, creationTime, o))
+      exchange ! SimulatedAccountData(limitOrderFilled(externalOrderId, creationTime, o))
       activeOrders.remove(limitOrder.externalOrderId)
-      accountDataManager ! SimulatedData(walletBalanceUpdate(outPart))
-      accountDataManager ! SimulatedData(walletBalanceUpdate(inPart))
+      exchange ! SimulatedAccountData(walletBalanceUpdate(outPart))
+      exchange ! SimulatedAccountData(walletBalanceUpdate(inPart))
     }
   }
 

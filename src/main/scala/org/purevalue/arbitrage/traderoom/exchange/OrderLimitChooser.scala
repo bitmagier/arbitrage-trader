@@ -1,6 +1,5 @@
 package org.purevalue.arbitrage.traderoom.exchange
 
-import org.purevalue.arbitrage.adapter.{Ask, Bid, OrderBook, Ticker}
 import org.purevalue.arbitrage.traderoom.TradeSide
 import org.slf4j.LoggerFactory
 

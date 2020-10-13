@@ -19,7 +19,7 @@ case class ExchangeConfig(name: String,
                           assetBlocklist: Set[Asset],
                           usdEquivalentCoin: Asset, // primary local USD equivalent coin. USDT, USDC etc. for amount calculations
                           feeRate: Double, // average rate
-                          doNotTouchTheseAssets: Seq[Asset],
+                          doNotTouchTheseAssets: Set[Asset],
                           tickerIsRealtime: Boolean, // whether we get a realtime ticker from that exchange or not
                           secrets: SecretsConfig,
                           refCode: Option[String],
@@ -30,7 +30,7 @@ object ExchangeConfig {
   def apply(name: String, c: com.typesafe.config.Config): ExchangeConfig = {
     val rawDoNotTouchAssets = c.getStringList("do-not-touch-these-assets").asScala
     rawDoNotTouchAssets.foreach(Asset.register(_, None, None))
-    val doNotTouchTheseAssets = rawDoNotTouchAssets.map(e => Asset(e))
+    val doNotTouchTheseAssets = rawDoNotTouchAssets.map(e => Asset(e)).toSet
     if (doNotTouchTheseAssets.exists(_.isFiat)) throw new IllegalArgumentException(s"$name: Don't worry bro, I'll never touch Fiat Money")
     val rawReserveAssets = c.getStringList("reserve-assets").asScala
     rawReserveAssets.foreach(Asset.register(_, None, None))
@@ -87,6 +87,7 @@ case class TradeRoomConfig(tradeSimulation: Boolean,
                            pioneerOrderValueUSD: Double,
                            dataManagerInitTimeout: Duration,
                            statsReportInterval: Duration,
+                           traderTriggerInterval: Duration,
                            orderBundleSafetyGuard: OrderBundleSafetyGuardConfig,
                            activeExchanges: List[String]) {
   if (pioneerOrderValueUSD > 100.0) throw new IllegalArgumentException("pioneer order value is unnecessary big")
@@ -102,6 +103,7 @@ object TradeRoomConfig {
       c.getDouble("pioneer-order-value-usd"),
       c.getDuration("data-manager-init-timeout"),
       c.getDuration("stats-report-interval"),
+      c.getDuration("trader-trigger-interval"),
       OrderBundleSafetyGuardConfig(c.getConfig("order-bundle-safety-guard")),
       c.getStringList("active-exchanges").asScala.toList
     )
