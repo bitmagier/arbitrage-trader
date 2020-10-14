@@ -4,7 +4,7 @@ import java.time.Instant
 import java.util.UUID
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props, Status}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{HttpMethods, StatusCodes, Uri}
@@ -20,7 +20,7 @@ import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.{Balance, ExchangeAccountStreamData, WalletAssetUpdate, WalletBalanceUpdate}
 import org.purevalue.arbitrage.util.Util.{alignToStepSizeCeil, alignToStepSizeNearest, formatDecimal, formatDecimalWithFixPrecision}
-import org.purevalue.arbitrage.util.{BadCalculationError, WrongAssumption}
+import org.purevalue.arbitrage.util.{BadCalculationError, RestartIntentionException, WrongAssumption}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
@@ -618,7 +618,7 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
     ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow)
     ws._2.future.onComplete { e =>
       log.info(s"connection closed: ${e.get}")
-      self ! Kill
+      throw new RestartIntentionException(s"binance account connection lost") // trigger restart
     }
     connected = createConnected
   }

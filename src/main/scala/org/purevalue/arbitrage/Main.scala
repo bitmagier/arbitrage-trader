@@ -1,8 +1,9 @@
 package org.purevalue.arbitrage
 
-import akka.actor.SupervisorStrategy.Restart
+import akka.actor.SupervisorStrategy.{Restart, Stop}
 import akka.actor.{Actor, ActorRef, ActorSystem, AllForOneStrategy, Props, Status}
 import org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator
+import org.purevalue.arbitrage.util.RestartIntentionException
 import org.slf4j.{Logger, LoggerFactory}
 
 import scala.concurrent.duration.DurationInt
@@ -32,7 +33,8 @@ class RootGuardian(val config: Config) extends Actor {
 */
   override val supervisorStrategy: AllForOneStrategy = {
     AllForOneStrategy(maxNrOfRetries = 5, withinTimeRange = 20.minutes, loggingEnabled = true) {
-      case _: Throwable => Restart
+      case e: RestartIntentionException => log.info(s"restart intended: ${e.getMessage}"); Restart
+      case e: Throwable => log.warn(s"Stopping actor system, because:", e); Stop
     }
   }
 

@@ -57,9 +57,9 @@ object LiquidityManager {
   case class UniqueDemand(tradePattern: String, // UK (different trader or different trading strategy shall be represented by a different tradePattern)
                           asset: Asset, // UK
                           amount: Double,
-                          dontUseTheseReserveAssets: Set[Asset],
+                          dontUseTheseReserveAssets: Set[Asset], // not used any more; replaced by exchange rate rating
                           lastRequested: Instant) {
-    def getUk: String = tradePattern + asset.officialSymbol
+    def uk: String = tradePattern + asset.officialSymbol
   }
 
   case class State(liquidityDemand: Map[String, UniqueDemand],
@@ -81,7 +81,7 @@ object LiquidityManager {
 
   class OrderBookTooFlatException(val tradePair: TradePair, val side: TradeSide) extends Exception
 
-  def determineUnlockedBalance(balance: collection.Map[Asset, Balance], // TODO Map instead of collection.Map
+  def determineUnlockedBalance(balance: Map[Asset, Balance],
                                liquidityLocks: Map[UUID, LiquidityLock],
                                exchangeConfig: ExchangeConfig): Map[Asset, Double] = {
     val lockedLiquidity: Map[Asset, Double] = liquidityLocks
@@ -94,7 +94,7 @@ object LiquidityManager {
       .filterNot(_._1.isFiat)
       .filterNot(e => exchangeConfig.doNotTouchTheseAssets.contains(e._1))
       .map(e => (e._1, Math.max(0.0, e._2.amountAvailable - lockedLiquidity.getOrElse(e._1, 0.0)))
-      ).toMap
+      )
   }
 
   def props(config: Config,
@@ -134,7 +134,7 @@ class LiquidityManager(val config: Config,
 
   def noticeUniqueDemand(d: UniqueDemand): Unit = {
     if (log.isTraceEnabled) log.trace(s"noticed $d")
-    liquidityDemand = liquidityDemand + (d.getUk -> d)
+    liquidityDemand = liquidityDemand + (d.uk -> d)
   }
 
   def noticeDemand(d: LiquidityDemand): Unit = {

@@ -160,13 +160,8 @@ package object exchange {
    */
   def localExchangeRateRating(pair: TradePair,
                               side: TradeSide,
-                              quantity: Double,
-                              realityAdjustmentRate: Double,
-                              ticker: Map[TradePair, Ticker],
-                              referenceTicker: Map[TradePair, Ticker],
-                              orderBook: Map[TradePair, OrderBook]
-                             ): Double = {
-    val localLimit = determineRealisticLimit(pair, side, quantity, realityAdjustmentRate, ticker, orderBook)
+                              localLimit: Double,
+                              referenceTicker: Map[TradePair, Ticker]): Double = {
     referenceTicker.get(pair).map(_.priceEstimate) match {
       case Some(referencePrice) => side match {
         case TradeSide.Buy => 1.0 - localLimit / referencePrice // 1 - x/R
@@ -174,5 +169,17 @@ package object exchange {
       }
       case None => 0.0 // we can not judge it, because no reference ticker available
     }
+  }
+
+  def localExchangeRateRating(pair: TradePair,
+                              side: TradeSide,
+                              quantity: Double,
+                              realityAdjustmentRate: Double,
+                              ticker: Map[TradePair, Ticker],
+                              referenceTicker: Map[TradePair, Ticker],
+                              orderBook: Map[TradePair, OrderBook]
+                             ): Double = {
+    val localLimit = determineRealisticLimit(pair, side, quantity, realityAdjustmentRate, ticker, orderBook)
+    localExchangeRateRating(pair, side, localLimit, referenceTicker)
   }
 }

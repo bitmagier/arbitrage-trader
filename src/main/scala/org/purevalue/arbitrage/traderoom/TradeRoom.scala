@@ -1,5 +1,6 @@
 package org.purevalue.arbitrage.traderoom
 
+import java.time.temporal.ChronoUnit
 import java.time.{Duration, Instant}
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -64,13 +65,14 @@ object TradeRoom {
 
   // communication
   case class GetReferenceTicker()
-  case class GetActiveLiquidityTxs()
   case class LogStats()
   case class HouseKeeping()
   case class TriggerTrader()
   case class Stop(timeout: Duration)
   case class NewLiquidityTransformationOrder(orderRequest: OrderRequest)
-  case class FindFinishedLiquidityTx(f: FinishedLiquidityTx => Boolean)
+  case class GetActiveLiquidityTxs()
+  case class GetFinishedLiquidityTxs()
+//  case class FindFinishedLiquidityTx(f: FinishedLiquidityTx => Boolean)
   case class JoinTradeRoom(tradeRoom: ActorRef)
   case class TradeRoomJoined(exchange: String)
 
@@ -111,7 +113,7 @@ class TradeRoom(val config: Config,
   private var activeOrderBundles: Map[UUID, OrderBundle] = Map() // Map(order-bundle-id -> OrderBundle) maintained by TradeRoom
   private var activeLiquidityTx: Map[OrderRef, LiquidityTx] = Map() // maintained by TradeRoom
   private var finishedOrderBundles: List[FinishedOrderBundle] = List()
-  private var finishedLiquidityTxs: List[FinishedLiquidityTx] = List()
+  private var finishedLiquidityTxs: Map[OrderRef, FinishedLiquidityTx] = Map()
 
   private var shutdownInitiated: Boolean = false
 
@@ -288,7 +290,7 @@ class TradeRoom(val config: Config,
 
       val lastHourLiquidityTxSumUSDT: Double =
         OrderBill.aggregateValues(
-          finishedLiquidityTxs
+          finishedLiquidityTxs.values
             .filter(b => Duration.between(b.finishTime, now).toHours < 1)
             .flatMap(_.bill.balanceSheet),
           reportingUsdEquivalentCoin,
@@ -307,7 +309,7 @@ class TradeRoom(val config: Config,
           (_, tp) => referenceTicker.get(tp).map(_.priceEstimate))
       val totalLiquidityTxSumUSDT: Double =
         OrderBill.aggregateValues(
-          finishedLiquidityTxs
+          finishedLiquidityTxs.values
             .flatMap(_.bill.balanceSheet),
           reportingUsdEquivalentCoin,
           (_, tp) => referenceTicker.get(tp).map(_.priceEstimate))
@@ -323,8 +325,9 @@ class TradeRoom(val config: Config,
           .groupBy(_.orderStatus)
           .map(e => (e._1, e._2.size))
 
-      val liquidityTxOrders1h = finishedLiquidityTxs.map(_.finishedOrder)
-      val orderBundleOrders1h = finishedOrderBundles.flatMap(_.finishedOrders)
+      val lastHourLimit = Instant.now.minus(1, ChronoUnit.HOURS)
+      val liquidityTxOrders1h = finishedLiquidityTxs.values.filter(_.finishTime.isAfter(lastHourLimit)).map(_.finishedOrder)
+      val orderBundleOrders1h = finishedOrderBundles.filter(_.finishTime.isAfter(lastHourLimit)).flatMap(_.finishedOrders)
 
       log.info(s"""${Emoji.Robot}  Last 1h final order status: trader tx:[${orderStateStats(orderBundleOrders1h).mkString(",")}], liquidity tx: [${orderStateStats(liquidityTxOrders1h).mkString(",")}]""")
     }
@@ -406,9 +409,7 @@ class TradeRoom(val config: Config,
         val usdEquivalentCoin: Asset = config.exchanges(order.exchange).usdEquivalentCoin
         val bill: OrderBill = OrderBill.calc(Seq(order), referenceTicker, usdEquivalentCoin, feeRates)
         val finishedLiquidityTx = FinishedLiquidityTx(tx, order, order.lastUpdateTime, bill)
-        this.synchronized {
-          finishedLiquidityTxs = finishedLiquidityTx :: finishedLiquidityTxs
-        }
+        finishedLiquidityTxs = finishedLiquidityTxs.updated(finishedLiquidityTx.liquidityTx.orderRef, finishedLiquidityTx)
         activeLiquidityTx = activeLiquidityTx - tx.orderRef
         exchanges(tx.orderRef.exchange) ! RemoveActiveOrder(tx.orderRef)
         exchanges(tx.lockedLiquidity.exchange) ! LiquidityLockClearance(tx.lockedLiquidity.liquidityRequestId)
@@ -591,7 +592,8 @@ class TradeRoom(val config: Config,
 
     case GetReferenceTicker()                          => referenceTicker.pipeTo(sender())
     case GetActiveLiquidityTxs()                       => sender() ! activeLiquidityTx
-    case FindFinishedLiquidityTx(f)                    => sender() ! finishedLiquidityTxs.find(f)
+    case GetFinishedLiquidityTxs()                     => sender() ! finishedLiquidityTxs
+//    case FindFinishedLiquidityTx(f)                    => sender() ! finishedLiquidityTxs.find(f)
 
     case LogStats()                                    => logStats()
     case HouseKeeping()                                => houseKeeping()

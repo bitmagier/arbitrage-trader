@@ -3,7 +3,7 @@ package org.purevalue.arbitrage.adapter.bitfinex
 import java.time.Instant
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, Kill, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{StatusCodes, Uri}
@@ -16,7 +16,7 @@ import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.GetBi
 import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.IncomingPublicData
 import org.purevalue.arbitrage.traderoom.exchange._
-import org.purevalue.arbitrage.util.Emoji
+import org.purevalue.arbitrage.util.{Emoji, RestartIntentionException}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
@@ -381,7 +381,7 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
       val ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow(connectionId, subscribeMessages))
       ws._2.future.onComplete { e =>
         log.info(s"connection closed: ${e.get}")
-        self ! Kill // trigger restart
+        throw new RestartIntentionException(s"bitfinex public connection lost") // trigger restart
       }
       wsList = ws :: wsList
       connectedList = createConnected(ws._1) :: connectedList

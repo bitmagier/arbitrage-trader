@@ -4,7 +4,7 @@ import java.time.Instant
 import java.util.UUID
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Kill, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props, Status}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{HttpMethods, HttpResponse, StatusCodes}
@@ -19,8 +19,8 @@ import org.purevalue.arbitrage.traderoom.TradeRoom.OrderRef
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.{Balance, CompleteWalletUpdate, ExchangeAccountStreamData}
-import org.purevalue.arbitrage.util.HttpUtil
 import org.purevalue.arbitrage.util.Util.{alignToStepSizeCeil, alignToStepSizeNearest, formatDecimalWithFixPrecision}
+import org.purevalue.arbitrage.util.{HttpUtil, RestartIntentionException}
 import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig, Main}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsonParser, RootJsonFormat, enrichAny}
@@ -373,7 +373,7 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
     ws = Http().singleWebSocketRequest(WebSocketRequest(CoinbaseWebSocketEndpoint), wsFlow())
     ws._2.future.onComplete { e =>
       log.info(s"connection closed: ${e.get}")
-      self ! Kill
+      throw new RestartIntentionException(s"coinbase account connection lost") // trigger restart
     }
     connected = createConnected
   }

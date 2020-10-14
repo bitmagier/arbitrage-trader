@@ -15,7 +15,7 @@ import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancerRun.WorkingContext
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{GetState, LiquidityLockClearance, LiquidityRequest}
 import org.purevalue.arbitrage.traderoom.exchange.PioneerOrderRunner.{PioneerOrderFailed, PioneerOrderSucceeded}
-import org.purevalue.arbitrage.util.{Emoji, InitSequence, InitStep, WaitingFor}
+import org.purevalue.arbitrage.util.{Emoji, InitSequence, InitStep, RestartIntentionException, WaitingFor}
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
@@ -288,22 +288,25 @@ case class Exchange(exchangeName: String,
     case IncomingAccountData(data)                => data.foreach(applyAccountData)
     case SimulatedAccountData(dataset)            => applySimulatedAccountData(dataset)
 
-    case GetAllTradePairs()                       => sender() ! allTradePairs
-    case GetActiveOrders()                        => sender() ! accountData.activeOrders
+    case o: NewLimitOrder                         => onNewLimitOrder(o) // needed for pioneer order runner
+    case c: CancelOrder                           => onCancelOrder(c) // needed for pioneer order runner
+
+    case WalletUpdateTrigger()                    => if (!walletInitialized.isArrived) walletInitialized.arrived()
+    case t: OrderUpdateTrigger                    => if (tradeRoom.isDefined) tradeRoom.get.forward(t)
+
     case SetUsableTradePairs(tradePairs)          => setUsableTradePairs(tradePairs)
     case RemoveActiveOrder(ref)                   => accountData.activeOrders = accountData.activeOrders - ref
     case StartStreaming()                         => startStreaming()
     case AccountDataChannelInitialized()          => accountDataChannelInitialized.arrived()
     case PioneerOrderSucceeded()                  => pioneerOrdersSucceeded.arrived()
-    case PioneerOrderFailed(e)                    => log.error(s"[$exchangeName] Pioneer order failed", e)
+    case PioneerOrderFailed(e)                    => log.error(s"[$exchangeName] Pioneer order failed", e); self ! PoisonPill
     case j: JoinTradeRoom                         => joinTradeRoom(j)
-    case WalletUpdateTrigger()                    => if (!walletInitialized.isArrived) walletInitialized.arrived()
-    case t: OrderUpdateTrigger                    => if (tradeRoom.isDefined) tradeRoom.get.forward(t)
-    case o: NewLimitOrder                         => onNewLimitOrder(o) // needed only for pioneer order runner
-    case c: CancelOrder                           => onCancelOrder(c) // needed only for pioneer order runner
 
-    case ConvertValue(value, target)              => sender() ! value.convertTo(target, publicData.ticker)
+    case GetAllTradePairs()                       => sender() ! allTradePairs
+    case GetActiveOrders()                        => sender() ! accountData.activeOrders
     case GetPriceEstimate(tradePair)              => sender() ! publicData.ticker(tradePair).priceEstimate
+    case GetWalletLiquidCrypto()                  => sender() ! accountData.wallet.liquidCryptoValues(exchangeConfig.usdEquivalentCoin, publicData.ticker)
+    case ConvertValue(value, target)              => sender() ! value.convertTo(target, publicData.ticker)
     case m:DetermineRealisticLimit                => determineRealisticLimit(m).pipeTo(sender())
 
     case Done                                     => // ignoring Done from cascaded JoinTradeRoom
@@ -462,7 +465,7 @@ case class Exchange(exchangeName: String,
   def stalePublicDataWatch(): Unit = {
     val lastSeen: Instant = (publicData.heartbeatTS.toSeq ++ publicData.tickerTS.toSeq ++ publicData.orderBookTS.toSeq).max
     if (Duration.between(lastSeen, Instant.now).compareTo(config.tradeRoom.restarWhenDataStreamIsOlderThan) > 0) {
-      throw new RuntimeException(s"${Emoji.Robot}  Killing Exchange actor ($exchangeName) because of outdated data")
+      throw new RestartIntentionException(s"${Emoji.Robot}  Killing Exchange actor ($exchangeName) because of outdated data")
     }
   }
 
@@ -471,8 +474,10 @@ case class Exchange(exchangeName: String,
   }
 
   def liquidityHouseKeeping(): Unit = {
-    implicit val timeout: Timeout = config.global.internalCommunicationTimeout
+    if (liquidityHouseKeepingRunning) return
     liquidityHouseKeepingRunning = true
+
+    implicit val timeout: Timeout = config.global.internalCommunicationTimeout
 
     val f1 = (liquidityManager ? GetState()).mapTo[LiquidityManager.State]
     val f2 = (tradeRoom.get ? GetReferenceTicker()).mapTo[TickerSnapshot]
@@ -482,18 +487,21 @@ case class Exchange(exchangeName: String,
       referenceTicker <- f2
       activeLiquidityTxs <- f3
     } yield (lmState, referenceTicker.ticker, activeLiquidityTxs)).onComplete {
+
       case Success((lmState, referenceTicker, activeLiquidityTxs)) =>
-        val wc = WorkingContext(
-          publicData.ticker,
-          referenceTicker,
-          publicData.orderBook,
-          accountData.wallet.balance.map(e => e._1 -> e._2),
-          lmState.liquidityDemand,
-          lmState.liquidityLocks,
-          activeLiquidityTxs)
+        val wc =
+          WorkingContext(
+            publicData.ticker,
+            referenceTicker,
+            publicData.orderBook,
+            accountData.wallet.balance.map(e => e._1 -> e._2),
+            lmState.liquidityDemand,
+            lmState.liquidityLocks,
+            activeLiquidityTxs)
 
         liquidityBalancerRunTempActor = context.actorOf(LiquidityBalancerRun.props(config, exchangeConfig, usableTradePairs, self, tradeRoom.get, wc),
-          s"${exchangeConfig.name}-liquidity-manager-housekeeping")
+          s"${exchangeConfig.name}-liquidity-balancer-run")
+
       case Failure(cause) => log.error(s"[$exchangeName]  liquidityHouseKeeping()", cause)
     }
   }
@@ -526,34 +534,36 @@ case class Exchange(exchangeName: String,
 
   // @formatter:off
   def initializedModeReceive: Receive = {
-    case IncomingPublicData(data)      => applyPublicDataset(data)
-    case IncomingAccountData(data)     => data.foreach(applyAccountData)
-    case SimulatedAccountData(dataset) => applySimulatedAccountData(dataset)
+    case IncomingPublicData(data)        => applyPublicDataset(data)
+    case IncomingAccountData(data)       => data.foreach(applyAccountData)
+    case SimulatedAccountData(dataset)   => applySimulatedAccountData(dataset)
 
-    case o: NewLimitOrder              => onNewLimitOrder(o)
-    case c: CancelOrder                => onCancelOrder(c)
-    case l: LiquidityRequest           => liquidityManager.forward(l)
-    case c: LiquidityLockClearance     => liquidityManager.forward(c)
-    case _: WalletUpdateTrigger        => // currently unused
-    case t: OrderUpdateTrigger         => tradeRoom.get.forward(t)
-    case RemoveActiveOrder(ref)        => accountData.activeOrders = accountData.activeOrders - ref
-    case RemoveOrphanOrder(ref)        => removeOrphanOrder(ref)
+    case _: WalletUpdateTrigger          => // currently unused
+    case t: OrderUpdateTrigger           => tradeRoom.get.forward(t)
 
-    case ConvertValue(value, target)   => sender() ! value.convertTo(target, publicData.ticker)
-    case GetPriceEstimate(tradePair)   => sender() ! publicData.ticker(tradePair).priceEstimate
-    case m:DetermineRealisticLimit     => determineRealisticLimit(m).pipeTo(sender())
+    case o: NewLimitOrder                => onNewLimitOrder(o)
+    case c: CancelOrder                  => onCancelOrder(c)
+    case l: LiquidityRequest             => liquidityManager.forward(l)
+    case c: LiquidityLockClearance       => liquidityManager.forward(c)
+    case RemoveActiveOrder(ref)          => accountData.activeOrders = accountData.activeOrders - ref
+    case RemoveOrphanOrder(ref)          => removeOrphanOrder(ref)
 
-    case GetActiveOrder(ref)           => sender() ! accountData.activeOrders.get(ref)
-    case GetTickerSnapshot()           => sender() ! TickerSnapshot(exchangeName, publicData.ticker)
-    case GetWallet()                   => sender() ! accountData.wallet
-    case GetWalletLiquidCrypto()       => sender() ! accountData.wallet.liquidCryptoValues(exchangeConfig.usdEquivalentCoin, publicData.ticker)
-    case GetFullDataSnapshot()         => sender() ! exchangeDataSnapshot
+    case GetTickerSnapshot()             => sender() ! TickerSnapshot(exchangeName, publicData.ticker)
+    case GetWallet()                     => sender() ! accountData.wallet
+    case GetWalletLiquidCrypto()         => sender() ! accountData.wallet.liquidCryptoValues(exchangeConfig.usdEquivalentCoin, publicData.ticker)
+    case GetActiveOrder(ref)             => sender() ! accountData.activeOrders.get(ref)
+    case GetActiveOrders()               => sender() ! accountData.activeOrders
+    case GetFullDataSnapshot()           => sender() ! exchangeDataSnapshot
 
-    case DataHouseKeeping()            => dataHouseKeeping()
-    case LiquidityHouseKeeping()       => liquidityHouseKeeping()
-    case LiquidityBalancerRun.Finished()  => liquidityHouseKeepingRunning = false
-    case s: TradeRoom.Stop             => onStop(s)
-    case Status.Failure(cause)         => log.error("received failure", cause); self ! PoisonPill
+    case GetPriceEstimate(tradePair)     => sender() ! publicData.ticker(tradePair).priceEstimate
+    case m:DetermineRealisticLimit       => determineRealisticLimit(m).pipeTo(sender())
+    case ConvertValue(value, target)     => sender() ! value.convertTo(target, publicData.ticker)
+
+    case DataHouseKeeping()              => dataHouseKeeping()
+    case LiquidityHouseKeeping()         => liquidityHouseKeeping()
+    case OldLiquidityBalancerRun.Finished() => liquidityHouseKeepingRunning = false
+    case s: TradeRoom.Stop               => onStop(s)
+    case Status.Failure(cause)           => log.error("received failure", cause); self ! PoisonPill
   }
   // @formatter:off
 }

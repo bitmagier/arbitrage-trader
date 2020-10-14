@@ -19,7 +19,7 @@ class Asset(val officialSymbol: String,
       intermediateAsset.canConvertDirectlyTo(targetAsset, conversionRateExists)
   }
 
-  private def canConvertDirectlyTo(targetAsset: Asset, conversionRateExists: TradePair => Boolean): Boolean = {
+  def canConvertDirectlyTo(targetAsset: Asset, conversionRateExists: TradePair => Boolean): Boolean = {
     this == targetAsset ||
       conversionRateExists(TradePair(this, targetAsset)) ||
       conversionRateExists(TradePair(targetAsset, this))
@@ -61,13 +61,12 @@ object Asset {
   )
 
   // often used assets
+  lazy val Bitcoin: Asset = Asset("BTC")
   lazy val Euro: Asset = Asset("EUR")
   lazy val USDollar: Asset = Asset("USD")
-
-  lazy val Bitcoin: Asset = Asset("BTC")
   lazy val AssetUSDT: Asset = Asset("USDT")
-
   lazy val AssetUSDC: Asset = Asset("USDC")
+
   lazy val UsdEquivalentCoins: Set[Asset] = Set(AssetUSDT, AssetUSDC)
 
   // this is the reference to know exactly about which asset (or coin) we are talking (no matter at which exchange)
@@ -81,11 +80,15 @@ object Asset {
 
   def register(officialSymbol: String, name: Option[String], _isFiat: Option[Boolean], defaultFractionDigits: Int = 5, sourceWeight: Int = 0): Unit = {
     val isFiat: Boolean = KnownFiatAssets.contains(officialSymbol) || _isFiat.contains(true)
+
+    def mergeName(a: Option[String], b:Option[String]): Option[String] = Seq(a,b).flatten.headOption
+
     synchronized {
       allAssets =
         allAssets.get(officialSymbol) match {
           case None => allAssets + (officialSymbol -> new Asset(officialSymbol, name, isFiat, defaultFractionDigits, sourceWeight))
-          case Some(oldValue) if oldValue.sourceWeight < sourceWeight => allAssets + (officialSymbol -> new Asset(officialSymbol, name, isFiat, defaultFractionDigits, sourceWeight))
+          case Some(oldValue) if oldValue.sourceWeight < sourceWeight =>
+            allAssets + (officialSymbol -> new Asset(officialSymbol, mergeName(name, oldValue.name), isFiat, defaultFractionDigits, sourceWeight))
           case Some(oldValue) if oldValue.name.isEmpty && name.isDefined => allAssets + // merge name
             (oldValue.officialSymbol -> new Asset(oldValue.officialSymbol, name, oldValue.isFiat, oldValue.defaultFractionDigits, oldValue.sourceWeight))
           case _ => allAssets

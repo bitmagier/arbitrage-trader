@@ -24,6 +24,7 @@ case class ExchangeConfig(name: String,
                           secrets: SecretsConfig,
                           refCode: Option[String],
                           assetSourceWeight: Int) {
+  def primaryReserveAsset: Asset = reserveAssets.head
 }
 
 object ExchangeConfig {
