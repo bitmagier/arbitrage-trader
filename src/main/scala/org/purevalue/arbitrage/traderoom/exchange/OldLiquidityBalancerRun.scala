@@ -100,7 +100,7 @@ class OldLiquidityBalancerRun(val config: Config,
               TradePair(demand.asset, e),
               Buy,
               demand.amount,
-              c.txLimitAwayFromEdgeLimit,
+              c.setTxLimitAwayFromEdgeLimit,
               wc.ticker,
               wc.referenceTicker,
               wc.orderBook))) // join local exchange rate rating
@@ -116,7 +116,7 @@ class OldLiquidityBalancerRun(val config: Config,
           s"rating=${formatDecimal(bestReserveAssets.get._2, 5)} for providing $demand")
         val orderAmount: Double = ceilToTxGranularity(demand.asset, demand.amount)
         val tradePair = TradePair(demand.asset, bestReserveAssets.get._1)
-        val limit = determineRealisticLimit(tradePair, Buy, orderAmount, c.txLimitAwayFromEdgeLimit, wc.ticker, wc.orderBook)
+        val limit = determineRealisticLimit(tradePair, Buy, orderAmount, c.setTxLimitAwayFromEdgeLimit, wc.ticker, wc.orderBook)
         val orderRequest = OrderRequest(UUID.randomUUID(), None, exchangeConfig.name, tradePair, Buy, exchangeConfig.feeRate, orderAmount, limit)
         Some(NewLiquidityTransformationOrder(orderRequest))
       }
@@ -194,7 +194,7 @@ class OldLiquidityBalancerRun(val config: Config,
             TradePair(cryptoValue.asset, e),
             Sell,
             cryptoValue.amount,
-            c.txLimitAwayFromEdgeLimit,
+            c.setTxLimitAwayFromEdgeLimit,
             wc.ticker,
             wc.referenceTicker,
             wc.orderBook))) // add local exchange rate rating
@@ -228,7 +228,7 @@ class OldLiquidityBalancerRun(val config: Config,
       }
 
       val tradePair = TradePair(cryptoValue.asset, destinationReserveAsset.get)
-      val limit: Double = determineRealisticLimit(tradePair, Sell, cryptoValue.amount, c.txLimitAwayFromEdgeLimit, wc.ticker, wc.orderBook)
+      val limit: Double = determineRealisticLimit(tradePair, Sell, cryptoValue.amount, c.setTxLimitAwayFromEdgeLimit, wc.ticker, wc.orderBook)
       val orderRequest = OrderRequest(
         UUID.randomUUID(),
         None,
@@ -368,7 +368,7 @@ class OldLiquidityBalancerRun(val config: Config,
               .convertTo(tradePair.baseAsset, wc.ticker).amount
 
             val orderAmountBaseAsset = bucketsToTransfer * baseAssetBucketValue
-            val limit = determineRealisticLimit(tradePair, tradeSide, orderAmountBaseAsset, c.txLimitAwayFromEdgeLimit, wc.ticker, wc.orderBook)
+            val limit = determineRealisticLimit(tradePair, tradeSide, orderAmountBaseAsset, c.setTxLimitAwayFromEdgeLimit, wc.ticker, wc.orderBook)
             OrderRequest(UUID.randomUUID(), None, exchangeConfig.name, tradePair, tradeSide, exchangeConfig.feeRate, orderAmountBaseAsset, limit)
 
           case tp if tradePairs.contains(tp.reverse) =>
@@ -378,7 +378,7 @@ class OldLiquidityBalancerRun(val config: Config,
               .convertTo(tradePair.quoteAsset, wc.ticker).amount
 
             val amountBaseAssetEstimate = bucketsToTransfer * quoteAssetBucketValue / wc.ticker(tradePair).priceEstimate
-            val limit = determineRealisticLimit(tradePair, tradeSide, amountBaseAssetEstimate, c.txLimitAwayFromEdgeLimit, wc.ticker, wc.orderBook)
+            val limit = determineRealisticLimit(tradePair, tradeSide, amountBaseAssetEstimate, c.setTxLimitAwayFromEdgeLimit, wc.ticker, wc.orderBook)
             val orderAmountBaseAsset = bucketsToTransfer * quoteAssetBucketValue / limit
             OrderRequest(UUID.randomUUID(), None, exchangeConfig.name, tradePair, tradeSide, exchangeConfig.feeRate, orderAmountBaseAsset, limit)
 
