@@ -78,10 +78,6 @@ class LiquidityBalancer(val config: Config,
     )
   }
 
-  def determineUnlockedBalance(): Map[Asset, Double] =
-    LiquidityManager.determineUnlockedBalance(wc.balanceSnapshot, wc.liquidityLocks, exchangeConfig)
-
-
   // (demand - supply) & greater than zero
   // demand-buckets = (amount / tx-granularity-of-asset).round + 1
   def calcUnsatisfiedDemand: Map[Asset, Int] = {
@@ -101,14 +97,16 @@ class LiquidityBalancer(val config: Config,
   // (supply - max(demand, lock)) & greater-than-zero
   // supply-buckets = (amount / tx-granularity-of-asset).round - 1
   def calcPureSupplyOverhead: Map[Asset, Int] = {
-    wc.balanceSnapshot.map {
-      case (asset, balance) =>
-        val demand: Double = wc.liquidityDemand.values.find(_.asset == asset).map(_.amount).getOrElse(0.0)
-        val locked: Double = wc.liquidityLocks.values.flatMap(_.coins).filter(_.asset == asset).map(_.amount).sum
-        val overheadAmount: Double = balance.amountAvailable - Math.max(demand, locked)
-        val overheadBuckets: Int = toSupplyBuckets(asset, overheadAmount)
-        (asset, overheadBuckets)
-    }.filter(_._2 > 0.0)
+    wc.balanceSnapshot
+      .filterNot(_._1.isFiat)
+      .map {
+        case (asset, balance) =>
+          val demand: Double = wc.liquidityDemand.values.find(_.asset == asset).map(_.amount).getOrElse(0.0)
+          val locked: Double = wc.liquidityLocks.values.flatMap(_.coins).filter(_.asset == asset).map(_.amount).sum
+          val overheadAmount: Double = balance.amountAvailable - Math.max(demand, locked)
+          val overheadBuckets: Int = toSupplyBuckets(asset, overheadAmount)
+          (asset, overheadBuckets)
+      }.filter(_._2 > 0.0)
   }
 
   def tradePairAndSide(source: Asset, destination: Asset): (TradePair, TradeSide) = {
