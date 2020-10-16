@@ -15,7 +15,7 @@ import org.purevalue.arbitrage.traderoom.OrderSetPlacer.NewOrderSet
 import org.purevalue.arbitrage.traderoom.TradeRoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityRequest}
-import org.purevalue.arbitrage.traderoom.exchange.{FullDataSnapshot, OrderBook, Ticker, TickerSnapshot, Wallet}
+import org.purevalue.arbitrage.traderoom.exchange.{FullDataSnapshot, LiquidityBalancerStats, OrderBook, Ticker, TickerSnapshot, Wallet}
 import org.purevalue.arbitrage.util.Emoji
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.slf4j.LoggerFactory
@@ -72,7 +72,7 @@ object TradeRoom {
   case class NewLiquidityTransformationOrder(orderRequest: OrderRequest)
   case class GetActiveLiquidityTxs()
   case class GetFinishedLiquidityTxs()
-//  case class FindFinishedLiquidityTx(f: FinishedLiquidityTx => Boolean)
+  //  case class FindFinishedLiquidityTx(f: FinishedLiquidityTx => Boolean)
   case class JoinTradeRoom(tradeRoom: ActorRef)
   case class TradeRoomJoined(exchange: String)
 
@@ -183,11 +183,11 @@ class TradeRoom(val config: Config,
 
   def tryToPlaceLiquidityTransformationOrder(request: OrderRequest): Future[Option[OrderRef]] = {
     if (shutdownInitiated) return Future.successful(None)
-    if (doNotTouchAssets(request.exchange).intersect(request.tradePair.involvedAssets).nonEmpty)
+    if (doNotTouchAssets(request.exchange).intersect(request.pair.involvedAssets).nonEmpty)
       return Future.failed(new IllegalArgumentException)
 
     // this should not occur - but here is a last guard
-    if (activeLiquidityTx.keys.exists(ref => ref.exchange == request.exchange && ref.tradePair == request.tradePair)) {
+    if (activeLiquidityTx.keys.exists(ref => ref.exchange == request.exchange && ref.tradePair == request.pair)) {
       log.warn(s"Ignoring liquidity tx because a similar one (same trade pair on same exchange) is still in place: $request")
       return Future.successful(None)
     }
@@ -232,7 +232,7 @@ class TradeRoom(val config: Config,
     if (shutdownInitiated) return
 
     if (bundle.orderRequests.exists(e =>
-      doNotTouchAssets(e.exchange).intersect(e.tradePair.involvedAssets).nonEmpty)) {
+      doNotTouchAssets(e.exchange).intersect(e.pair.involvedAssets).nonEmpty)) {
       log.warn(s"ignoring $bundle containing a DO-NOT-TOUCH asset")
     }
 
@@ -317,6 +317,8 @@ class TradeRoom(val config: Config,
       log.info(s"${Emoji.Robot}  Total cumulated gain: ${formatDecimal(totalSumUSDT, 2)} USD " +
         s"(arbitrage orders: ${formatDecimal(totalArbitrageSumUSDT, 2)} USD, liquidity tx: " +
         s"${formatDecimal(totalLiquidityTxSumUSDT, 2)} USD) ")
+
+      LiquidityBalancerStats.logStats()
     }
 
     def logFinalOrderStateStats(): Unit = {

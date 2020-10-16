@@ -496,11 +496,11 @@ private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
     def toSubmitLimitOrderJson(o: OrderRequest, resolveSymbol: TradePair => String, affiliateCode: Option[String]): SubmitLimitOrderJson = {
       SubmitLimitOrderJson(
         "EXCHANGE LIMIT", // has to be "EXCHANGE ..." see https://github.com/bitfinexcom/bitfinex-api-node/issues/220
-        resolveSymbol.apply(o.tradePair),
-        formatDecimal(o.limit, Math.min(Math.max(MinPricePrecision, o.tradePair.quoteAsset.defaultFractionDigits), MaxPricePrecision)),
-        o.tradeSide match {
-          case TradeSide.Buy => formatDecimal(o.amountBaseAsset, o.tradePair.baseAsset.defaultFractionDigits)
-          case TradeSide.Sell => formatDecimal(-o.amountBaseAsset, o.tradePair.baseAsset.defaultFractionDigits)
+        resolveSymbol.apply(o.pair),
+        formatDecimal(o.limit, Math.min(Math.max(MinPricePrecision, o.pair.quoteAsset.defaultFractionDigits), MaxPricePrecision)),
+        o.side match {
+          case TradeSide.Buy => formatDecimal(o.amountBaseAsset, o.pair.baseAsset.defaultFractionDigits)
+          case TradeSide.Sell => formatDecimal(-o.amountBaseAsset, o.pair.baseAsset.defaultFractionDigits)
         },
         affiliateCode match {
           case Some(code) => JsObject(Map("aff_code" -> JsString(code)))
@@ -523,7 +523,7 @@ private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
           if (log.isTraceEnabled) log.trace(s"$r")
           val order = r.orders.head
           exchange ! IncomingAccountData(exchangeDataMapping(Seq(order)))
-          NewOrderAck(exchangeConfig.name, o.tradePair, order.orderId.toString, o.id)
+          NewOrderAck(exchangeConfig.name, o.pair, order.orderId.toString, o.id)
         case r: SubmitOrderResponseJson =>
           throw new RuntimeException(s"Something went wrong while placing a limit-order. Response is: $r")
       }

@@ -80,8 +80,8 @@ class PioneerOrderRunner(config: Config,
     def failed(reasonShort: String) = throw new RuntimeException(s"Pioneer order validation failed. reason: '$reasonShort'! \n$request, \n$order")
 
     if (order.exchange != request.exchange) failed("exchange name mismatch")
-    if (order.side != request.tradeSide) failed("trade side mismatch")
-    if (order.tradePair != request.tradePair) failed("trade pair mismatch")
+    if (order.side != request.side) failed("trade side mismatch")
+    if (order.pair != request.pair) failed("trade pair mismatch")
     if (order.orderType != OrderType.LIMIT) failed("order type mismatch")
     if (diffMoreThan(order.quantity, request.amountBaseAsset, MaxAmountDiff)) failed("quantity mismatch")
 
@@ -99,24 +99,24 @@ class PioneerOrderRunner(config: Config,
       if (diffMoreThan(order.cumulativeFilledQuantity.get, request.amountBaseAsset, maxAmountDiff)) failed("cumulative filled quantity mismatch") // in most cases the fee is substracted from the amount we get
 
       val PriceAverageRoundingToleranceRate = 0.00000001
-      if (request.tradeSide == TradeSide.Buy && order.priceAverage.isDefined &&
+      if (request.side == TradeSide.Buy && order.priceAverage.isDefined &&
         order.priceAverage.get * (1.0 - PriceAverageRoundingToleranceRate) > order.price.get) failed("price average above price/limit")
-      if (request.tradeSide == TradeSide.Sell && order.priceAverage.isDefined &&
+      if (request.side == TradeSide.Sell && order.priceAverage.isDefined &&
         order.priceAverage.get * (1.0 + PriceAverageRoundingToleranceRate) < order.price.get) failed("price average below price/limit")
 
       val incomingRequested = request.calcIncomingLiquidity
       val incomingReal = order.calcIncomingLiquidity(request.feeRate)
-      val expectedIncomingAsset: Asset = request.tradeSide match {
-        case TradeSide.Buy => request.tradePair.baseAsset
-        case TradeSide.Sell => request.tradePair.quoteAsset
+      val expectedIncomingAsset: Asset = request.side match {
+        case TradeSide.Buy => request.pair.baseAsset
+        case TradeSide.Sell => request.pair.quoteAsset
       }
       if (incomingReal.asset != expectedIncomingAsset) failed("incoming asset mismatch")
       if (incomingReal.amount < incomingRequested.amount && diffMoreThan(incomingReal.amount, incomingRequested.amount, MaxAmountDiff))
         failed("incoming amount mismatch")
 
-      val expectedOutgoingAsset: Asset = request.tradeSide match {
-        case TradeSide.Buy => request.tradePair.quoteAsset
-        case TradeSide.Sell => request.tradePair.baseAsset
+      val expectedOutgoingAsset: Asset = request.side match {
+        case TradeSide.Buy => request.pair.quoteAsset
+        case TradeSide.Sell => request.pair.baseAsset
       }
       val outgoingRequested = request.calcOutgoingLiquidity
       val outgoingReal = order.calcOutgoingLiquidity(request.feeRate)
@@ -140,8 +140,8 @@ class PioneerOrderRunner(config: Config,
     def failed(reasonShort: String) = throw new RuntimeException(s"Pioneer order validation failed. reason: '$reasonShort'! \n$request, \n$order")
 
     if (order.exchange != request.exchange) failed("exchange name mismatch")
-    if (order.side != request.tradeSide) failed("trade side mismatch")
-    if (order.tradePair != request.tradePair) failed("trade pair mismatch")
+    if (order.side != request.side) failed("trade side mismatch")
+    if (order.pair != request.pair) failed("trade pair mismatch")
     if (order.orderType != OrderType.LIMIT) failed("order type mismatch")
     if (order.price.isEmpty) failed("orderPrice not set")
     if (diffMoreThan(order.price.get, request.limit, MaxPriceDiff)) failed("order price mismatch")

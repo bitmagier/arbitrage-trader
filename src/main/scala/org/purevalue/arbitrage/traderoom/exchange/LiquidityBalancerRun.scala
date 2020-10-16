@@ -1,50 +1,26 @@
 package org.purevalue.arbitrage.traderoom.exchange
 
 import java.time.Instant
-import java.util.UUID
 
 import akka.actor.{Actor, ActorRef, ActorSystem, PoisonPill, Props}
 import akka.pattern.ask
 import akka.util.Timeout
-import org.purevalue.arbitrage.traderoom.TradeRoom.{FinishedLiquidityTx, GetFinishedLiquidityTxs, LiquidityTx, NewLiquidityTransformationOrder, OrderRef}
-import org.purevalue.arbitrage.traderoom.TradeSide.{Buy, Sell}
-import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancerRun.{Finished, Run, WorkingContext}
-import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLock, OrderBookTooFlatException, UniqueDemand}
-import org.purevalue.arbitrage.traderoom.{Asset, CryptoValue, OrderRequest, TradePair, TradeRoom, TradeSide}
+import org.purevalue.arbitrage.traderoom.TradeRoom.{FinishedLiquidityTx, GetFinishedLiquidityTxs, NewLiquidityTransformationOrder, OrderRef}
+import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer.WorkingContext
+import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancerRun.{Finished, Run}
+import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.OrderBookTooFlatException
+import org.purevalue.arbitrage.traderoom.{TradePair, TradeRoom}
 import org.purevalue.arbitrage.{Config, ExchangeConfig, Main}
 import org.slf4j.LoggerFactory
 
-import scala.annotation.tailrec
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor, Future}
 import scala.util.control.Breaks.{break, breakable}
 import scala.util.{Failure, Success}
 
-trait LMStatisticEvent {
-  def exchange: String
-}
-case class NoGoodManufacturingOptionAvailable(exchange: String, demandAsset: Asset) extends LMStatisticEvent
-case class LiquidityRebalanceCurrentlyLossy(exchange: String, source: Asset, destination: Asset) extends LMStatisticEvent
-
-object LMStats {
-  private var stats: Map[LMStatisticEvent, Int] = Map()
-
-  def inc(e: LMStatisticEvent): Unit = {
-    stats.synchronized {
-      stats = stats.updated(e, stats.getOrElse(e, 0))
-    }
-  }
-}
-
 
 object LiquidityBalancerRun {
-  case class WorkingContext(ticker: Map[TradePair, Ticker],
-                            referenceTicker: Map[TradePair, Ticker],
-                            orderBook: Map[TradePair, OrderBook],
-                            balanceSnapshot: Map[Asset, Balance],
-                            liquidityDemand: Map[String, UniqueDemand],
-                            liquidityLocks: Map[UUID, LiquidityLock],
-                            activeLiquidityTx: Map[OrderRef, LiquidityTx])
+
   private case class Run()
   case class Finished()
 
@@ -71,17 +47,7 @@ class LiquidityBalancerRun(val config: Config,
 
   if (wc.liquidityLocks.values.exists(_.exchange != exchangeConfig.name)) throw new IllegalArgumentException
 
-  // tx granularity = asset's bucket size
-  def bucketSize(asset: Asset): Double =
-    CryptoValue(exchangeConfig.usdEquivalentCoin, config.liquidityManager.txValueGranularityInUSD)
-      .convertTo(asset, wc.ticker)
-      .amount
-
-  def toSupplyBuckets(asset: Asset, amount: Double): Int = Math.max(0, (amount / bucketSize(asset)).round.toInt - 1)
-
-  def toBucketsRound(asset: Asset, amount: Double): Int = (amount / bucketSize(asset)).round.toInt
-
-  def placeOrders(orders: Seq[NewLiquidityTransformationOrder]): Future[Seq[OrderRef]] = {
+  def placeOrders(orders: Iterable[NewLiquidityTransformationOrder]): Future[Iterable[OrderRef]] = {
     if (orders.isEmpty) return Future.successful(Nil)
     implicit val timeout: Timeout = config.global.internalCommunicationTimeout
 
@@ -97,7 +63,7 @@ class LiquidityBalancerRun(val config: Config,
     ).map(_.flatten)
   }
 
-  def unfinishedOrders(refs: Seq[OrderRef]): Future[Seq[OrderRef]] = {
+  def unfinishedOrders(refs: Iterable[OrderRef]): Future[Iterable[OrderRef]] = {
     implicit val timeout: Timeout = config.global.internalCommunicationTimeout
     (tradeRoom ? GetFinishedLiquidityTxs()).mapTo[List[FinishedLiquidityTx]]
       .map(l =>
@@ -105,11 +71,11 @@ class LiquidityBalancerRun(val config: Config,
           !l.exists(_.finishedOrder.ref == e)))
   }
 
-  def waitUntilLiquidityOrdersFinished(orderRefs: Seq[TradeRoom.OrderRef]): Unit = {
+  def waitUntilLiquidityOrdersFinished(orderRefs: Iterable[TradeRoom.OrderRef]): Unit = {
     if (orderRefs.isEmpty) return
 
     val orderFinishDeadline = Instant.now.plus(config.tradeRoom.maxOrderLifetime.multipliedBy(2))
-    var stillUnfinished: Seq[OrderRef] = null
+    var stillUnfinished: Iterable[OrderRef] = null
     breakable {
       do {
         stillUnfinished = Await.result(
@@ -127,243 +93,12 @@ class LiquidityBalancerRun(val config: Config,
     }
   }
 
-  def createOrders(transfers: Seq[LiquidityTransfer]): Seq[NewLiquidityTransformationOrder] = {
-    transfers.map(e => NewLiquidityTransformationOrder(
-      OrderRequest(UUID.randomUUID(), None, exchangeConfig.name, e.pair, e.side, exchangeConfig.feeRate, e.quantity, e.limit))
-    )
-  }
-
-  def determineUnlockedBalance(): Map[Asset, Double] =
-    LiquidityManager.determineUnlockedBalance(wc.balanceSnapshot, wc.liquidityLocks, exchangeConfig)
-
-
-  // (demand - supply) & greater than zero
-  // demand-buckets = (amount / tx-granularity-of-asset).round + 1
-  def calcUnsatisfiedDemand: Map[Asset, Int] = {
-    val pureDemand: Map[Asset, Double] = wc.liquidityDemand.values
-      .map(e => (e.asset, e.amount))
-      .groupBy(_._1)
-      .map(e => e._1 -> e._2.map(_._2).sum)
-
-    pureDemand.map {
-      case (asset, pureDemand) =>
-        val resultingDemand: Double = pureDemand - wc.balanceSnapshot.get(asset).map(_.amountAvailable).getOrElse(0.0)
-        val demandBuckets: Int = if (resultingDemand <= 0.0) 0 else (resultingDemand / bucketSize(asset)).round.toInt + 1
-        (asset, demandBuckets)
-    }
-  }
-
-  // (supply - max(demand, lock)) & greater-than-zero
-  // supply-buckets = (amount / tx-granularity-of-asset).round - 1
-  def calcPureSupplyOverhead: Map[Asset, Int] = {
-    wc.balanceSnapshot.map {
-      case (asset, balance) =>
-        val demand: Double = wc.liquidityDemand.values.find(_.asset == asset).map(_.amount).getOrElse(0.0)
-        val locked: Double = wc.liquidityLocks.values.flatMap(_.coins).filter(_.asset == asset).map(_.amount).sum
-        val overheadAmount: Double = balance.amountAvailable - Math.max(demand, locked)
-        val overheadBuckets: Int = toSupplyBuckets(asset, overheadAmount)
-        (asset, overheadBuckets)
-    }.filter(_._2 > 0.0)
-  }
-
-  case class LiquidityTransfer(supplyAsset: Asset, pair: TradePair, side: TradeSide, buckets: Int, quantity: Double, limit: Double, exchangeRateRating: Double)
-
-  def tradePairAndSide(destination: Asset, source: Asset): (TradePair, TradeSide) = {
-    // @formatter:off
-    tradePairs.find(e => e.baseAsset == destination && e.quoteAsset == source) match {
-      case Some(pair) => (pair, Buy)
-      case None       => (TradePair(source, destination), Sell)
-    } // @formatter:on
-  }
-
-  // determines remaining-supply = supply minus all transfers from that supply
-  def calcRemainingSupply(supply: Map[Asset, Int], transfers: Iterable[LiquidityTransfer]): Map[Asset, Int] = {
-    var result = supply
-    for (t <- transfers) {
-      if (result.contains(t.supplyAsset)) {
-        val remainingBuckets = Math.max(0, result(t.supplyAsset) - t.buckets)
-        if (remainingBuckets == 0) result = result - t.supplyAsset
-        else result = result + (t.supplyAsset -> remainingBuckets)
-      }
-    }
-    result
-  }
-
-  /**
-   * Fill unsatisfied-demands (in order) using supply-overhead:
-   * - [1] when there is a trade pair available
-   * - [2] and when exchange-rate is acceptable
-   * - [3] then use one with the best exchange rate rating
-   * - [4] if multiple options are left, use non-reserve-assets first (any), then use reserve-assets (in reverse order)
-   *
-   * @return total number of possible transactions (in buckets) to satisfy the demand
-   */
-  def fillDemand(unsatisfiedDemand: List[(Asset, Int)], supplyOverhead: Map[Asset, Int]): List[LiquidityTransfer] = {
-    /**
-     * @return a number indicating the asset's preference level regarding option [4]
-     *         a higher preference-level is preferred over a lower one
-     */
-    def sourceAssetPreference(asset: Asset): Int = {
-      if (exchangeConfig.reserveAssets.contains(asset)) {
-        exchangeConfig.reserveAssets.indexOf(asset) // position of reserve asset
-      } else {
-        exchangeConfig.reserveAssets.size // one number above reserve assets for any non-reserve asset
-      }
-    }
-
-    /**
-     * @return (remainingDemandBuckets:Int, remainingSupply:Map[Asset,Int], transfer:Option[LiquidityBucketTransfer])
-     */
-    def findTransfer(demandAsset: Asset, demandBuckets: Int, supply: Map[Asset, Int]): (Int, Map[Asset, Int], Option[LiquidityTransfer]) = {
-      val transferOptions =
-        supply
-          .filter(_._1.canConvertDirectlyTo(demandAsset, tradePairs)) // transfer possible
-          .map(e => {
-            val (pair, side) = tradePairAndSide(demandAsset, e._1)
-            val buckets: Int = Math.min(demandBuckets, e._2)
-            val quantity: Double = buckets * bucketSize(pair.baseAsset)
-            val limit = determineRealisticLimit(pair, side, quantity, config.liquidityManager.setTxLimitAwayFromEdgeLimit, wc.ticker, wc.orderBook)
-            val exchangeRateRating: Double = localExchangeRateRating(pair, side, limit, wc.referenceTicker)
-            LiquidityTransfer(e._1, pair, side, buckets, quantity, limit, exchangeRateRating)
-          })
-          .filter(_.exchangeRateRating >= -config.liquidityManager.maxAcceptableExchangeRateLossVersusReferenceTicker) // rating above loss limit
-
-      transferOptions match {
-        case options if options.isEmpty =>
-          LMStats.inc(NoGoodManufacturingOptionAvailable(exchangeConfig.name, demandAsset))
-
-          (demandBuckets, supply, None)
-
-        case transferOptions =>
-          val bestRating = transferOptions.map(_.exchangeRateRating).max
-          val BestRatingToleranceLevel = 0.00001
-          val transfer = transferOptions
-            .filter(_.exchangeRateRating >= bestRating - BestRatingToleranceLevel)
-            .maxBy(e => sourceAssetPreference(e.supplyAsset))
-
-          (demandBuckets - transfer.buckets, calcRemainingSupply(supply, Seq(transfer)), Some(transfer))
-      }
-    }
-
-    /**
-     * @return (remainingDemand, remainingSupply, transfer)
-     */
-    @tailrec
-    def findNextTransfer(demand: List[(Asset, Int)], supply: Map[Asset, Int]): (List[(Asset, Int)], Map[Asset, Int], Option[LiquidityTransfer]) = {
-      if (demand.isEmpty) (demand, supply, None)
-      else findTransfer(demand.head._1, demand.head._2, supply) match {
-        case (remainingDemandBuckets: Int, rs: Map[Asset, Int], Some(t: LiquidityTransfer)) => ((demand.head._1, remainingDemandBuckets) :: demand.tail, rs, Some(t))
-        case (_, _, None) => findNextTransfer(demand.tail, supply)
-      }
-    }
-
-    findNextTransfer(unsatisfiedDemand, supplyOverhead) match {
-      case (_, _, None) => Nil
-      case (remainingDemand, remainingSupply, Some(transfer)) => transfer :: fillDemand(remainingDemand, remainingSupply)
-    }
-  }
-
-  /**
-   * Remaining final supply overhead with respect to minKeepReserveBuckets
-   */
-  def calcFinalSupplyOverhead(supplyOverhead: Map[Asset, Int],
-                              minimumKeepReserveAssetBuckets: Int): Map[Asset, Int] = {
-    supplyOverhead
-      .map { // @formatter:off
-          case (asset, buckets) if exchangeConfig.reserveAssets.contains(asset) => (asset, Math.max(0, buckets - minimumKeepReserveAssetBuckets))
-          case (asset, buckets)                                                 => (asset, buckets)
-        } // @formatter:on
-      .filter(_._2 != 0)
-  }
-
-  // = supply +- transfers
-  def calcSupplyAfterTransfers(supply: Map[Asset, Int], transfers: Iterable[LiquidityTransfer]): Map[Asset, Int] = {
-    var result: Map[Asset, Int] = supply
-
-    for (t <- transfers) {
-      val diff: Seq[(Asset, Int)] = t.side match {
-        case Buy => Seq((t.pair.baseAsset, t.buckets), (t.pair.quoteAsset, -t.buckets))
-        case Sell => Seq((t.pair.quoteAsset, t.buckets), (t.pair.baseAsset, -t.buckets))
-      }
-      diff.foreach { d =>
-        if (result.contains(d._1)) {
-          result = result.updated(d._1, result(d._1) + d._2)
-        }
-      }
-    }
-    result
-  }
-
-  // delivers secondary reserve asset liquidity demand - sorted by importance of reserve asset
-  def calcSecondaryReserveFillUpDemand(previousTransfers: Iterable[LiquidityTransfer],
-                                       minimumKeepReserveAssetBuckets: Int): List[(Asset, Int)] = {
-    val secondaryReserveBalanceBuckets: Map[Asset, Int] =
-      exchangeConfig.reserveAssets.tail
-        .map(e => e -> toSupplyBuckets(e, wc.balanceSnapshot.get(e).map(_.amountAvailable).getOrElse(0.0)))
-        .toMap
-
-    val secondaryReserveBalanceAfterTransfers: Map[Asset, Int] = calcSupplyAfterTransfers(secondaryReserveBalanceBuckets, previousTransfers)
-    if (secondaryReserveBalanceAfterTransfers.exists(_._2 < 0)) throw new IllegalArgumentException(s"$secondaryReserveBalanceAfterTransfers")
-
-    secondaryReserveBalanceAfterTransfers
-      .map(e => e._1 -> (minimumKeepReserveAssetBuckets - e._2)) // asset -> demand
-      .filter(_._2 > 0) // take only positive demands
-      .toList
-      .sortBy(e => exchangeConfig.reserveAssets.indexOf(e._1)) // sort by position of reserve asset
-  }
-
-  def transferSupplyTo(destination: Asset, supply: Map[Asset, Int]): Iterable[LiquidityTransfer] = {
-    supply
-      .flatMap { e =>
-        val (pair, side) = tradePairAndSide(destination, e._1)
-        val quantity: Double = bucketSize(pair.baseAsset) * e._2
-        val limit: Double = determineRealisticLimit(pair, side, quantity, config.liquidityManager.setTxLimitAwayFromEdgeLimit, wc.ticker, wc.orderBook)
-        val exchangeRateRating: Double = localExchangeRateRating(pair, side, limit, wc.referenceTicker)
-        if (exchangeRateRating >= config.liquidityManager.maxAcceptableExchangeRateLossVersusReferenceTicker) {
-          Some(LiquidityTransfer(e._1, pair, side, e._2, quantity, limit, exchangeRateRating))
-        } else {
-          LMStats.inc(LiquidityRebalanceCurrentlyLossy(exchangeConfig.name, e._1, destination))
-          None
-        }
-      }
-  }
 
   def balanceLiquidity(): Unit = {
-    def squash(unsquashed: Iterable[LiquidityTransfer]): Iterable[LiquidityTransfer] = {
-      unsquashed
-        .groupBy(e => (e.supplyAsset, e.pair, e.side))
-        .map { e =>
-          val quantity = e._2.map(_.quantity).sum
-          val limit = determineRealisticLimit(e._1._2, e._1._3, quantity, config.liquidityManager.setTxLimitAwayFromEdgeLimit, wc.ticker, wc.orderBook)
-          LiquidityTransfer(e._1._1, e._1._2, e._1._3, e._2.map(_.buckets).sum, quantity, limit, 0.0) // rating is not important any more, we just merge already approved single transfers and find an appropriate limit
-        }
-    }
-
-
     try {
-      // satisfy noticed liquidity demand
-      val unsatisfiedDemand: List[(Asset, Int)] = calcUnsatisfiedDemand.toList.sortBy(_._2)
-      val supplyOverhead: Map[Asset, Int] = calcPureSupplyOverhead
-      val fillDemandTransfers: Iterable[LiquidityTransfer] = fillDemand(unsatisfiedDemand, supplyOverhead)
-
-      // fill-up secondary reserve assets in order
-      val minimumKeepReserveAssetBuckets: Int = toBucketsRound(exchangeConfig.usdEquivalentCoin, config.liquidityManager.minimumKeepReserveLiquidityPerAssetInUSD)
-      val afterDemandsFilledSupplyOverhead: Map[Asset, Int] =
-        calcFinalSupplyOverhead(
-          calcRemainingSupply(supplyOverhead, fillDemandTransfers),
-          minimumKeepReserveAssetBuckets
-        ).filterNot(_._1 == exchangeConfig.primaryReserveAsset) // primary reserve asset is the default sink, so there is no supply overhead here anymore
-
-      val secondaryReserveFillUpDemand: List[(Asset, Int)] = calcSecondaryReserveFillUpDemand(fillDemandTransfers, minimumKeepReserveAssetBuckets)
-      val secondaryReserveFillUpTransfers: Iterable[LiquidityTransfer] = fillDemand(secondaryReserveFillUpDemand, afterDemandsFilledSupplyOverhead)
-
-      // transfer remaining supply overhead to primary reserve asset
-      val primaryReserveInflowTransfers: Iterable[LiquidityTransfer] =
-        transferSupplyTo(exchangeConfig.primaryReserveAsset, calcRemainingSupply(afterDemandsFilledSupplyOverhead, secondaryReserveFillUpTransfers))
-
       placeOrders(
-        createOrders(
-          squash(fillDemandTransfers ++ secondaryReserveFillUpTransfers ++ primaryReserveInflowTransfers).toSeq)).onComplete {
+        new LiquidityBalancer(config, exchangeConfig, tradePairs, wc).calculateOrders()
+      ).onComplete {
         // @formatter:off
         case Success(orderRefs)                    => waitUntilLiquidityOrdersFinished(orderRefs)
         case Failure(e: OrderBookTooFlatException) => log.warn(s"[to be improved] [${exchangeConfig.name}] Cannot perform liquidity housekeeping because the order book of trade pair ${e.tradePair} was too flat")

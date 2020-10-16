@@ -28,8 +28,8 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
 
   private def orderLimitCloseToTicker(order: OrderRequest)(implicit tc: TradeContext): Boolean = {
     if (exchangesConfig(order.exchange).tickerIsRealtime) {
-      val ticker = tc.tickers(order.exchange)(order.tradePair)
-      val bestOfferPrice: Double = if (order.tradeSide == TradeSide.Buy) ticker.lowestAskPrice else ticker.highestBidPrice
+      val ticker = tc.tickers(order.exchange)(order.pair)
+      val bestOfferPrice: Double = if (order.side == TradeSide.Buy) ticker.lowestAskPrice else ticker.highestBidPrice
       val diff = ((order.limit - bestOfferPrice) / bestOfferPrice).abs
       val valid = diff < config.maxOrderLimitTickerVariance
       if (!valid) {
@@ -78,7 +78,7 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
           e._1,
           e._2
             .flatMap(o =>
-              Seq(o.tradePair.baseAsset, o.tradePair.quoteAsset))
+              Seq(o.pair.baseAsset, o.pair.quoteAsset))
             .toSet))
     val uninvolvedReserveAssetsPerExchange: Map[String, Set[Asset]] =
       t.orderRequests
@@ -189,7 +189,7 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
       tc.activeOrderBundles.values
         .flatMap(_.orderRefs.map(o =>
           (o.exchange, o.tradePair))).toSet
-    if (bundle.orderRequests.exists(o => activeExchangeOrderPairs.contains((o.exchange, o.tradePair)))) {
+    if (bundle.orderRequests.exists(o => activeExchangeOrderPairs.contains((o.exchange, o.pair)))) {
       if (log.isDebugEnabled())
         log.debug(s"rejecting new $bundle because another order of same exchange+tradepair is still active. Active trade pairs: $activeExchangeOrderPairs")
       else

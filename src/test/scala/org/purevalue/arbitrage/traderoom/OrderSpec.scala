@@ -2,7 +2,7 @@ package org.purevalue.arbitrage.traderoom
 
 import java.util.UUID
 
-import org.purevalue.arbitrage.traderoom.Asset.Bitcoin
+import org.purevalue.arbitrage.traderoom.Asset.BTC
 import org.scalatest.TestSuite
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpecLike
@@ -24,7 +24,7 @@ class OrderSpec extends TestSuite
           UUID.randomUUID(),
           null,
           "e1",
-          TradePair(Asset("ALGO"), Bitcoin),
+          TradePair(Asset("ALGO"), BTC),
           TradeSide.Buy,
           0.01,
           100.0,
@@ -32,7 +32,7 @@ class OrderSpec extends TestSuite
         ))
 
       balance should have size 2
-      balance should contain allOf (LocalCryptoValue("e1", Bitcoin, -0.42 * 100.0), LocalCryptoValue("e1", Asset("ALGO"), 100.0 * 0.99))
+      balance should contain allOf (LocalCryptoValue("e1", BTC, -0.42 * 100.0), LocalCryptoValue("e1", Asset("ALGO"), 100.0 * 0.99))
     }
 
     "calculate correct balance sheet of a Sell trannsaction" in {
@@ -41,7 +41,7 @@ class OrderSpec extends TestSuite
           UUID.randomUUID(),
           null,
           "e1",
-          TradePair(Asset("ALGO"), Bitcoin),
+          TradePair(Asset("ALGO"), BTC),
           TradeSide.Sell,
           0.01,
           100.0,
@@ -49,7 +49,7 @@ class OrderSpec extends TestSuite
         ))
 
       balance should have size 2
-      balance should contain allOf (LocalCryptoValue("e1", Bitcoin, 0.42 * 100.0), LocalCryptoValue("e1", Asset("ALGO"), -100.0 * 1.01))
+      balance should contain allOf (LocalCryptoValue("e1", BTC, 0.42 * 100.0), LocalCryptoValue("e1", Asset("ALGO"), -100.0 * 1.01))
     }
   }
 }

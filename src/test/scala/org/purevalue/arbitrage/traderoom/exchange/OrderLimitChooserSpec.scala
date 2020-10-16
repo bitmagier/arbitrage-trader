@@ -2,7 +2,7 @@ package org.purevalue.arbitrage.traderoom.exchange
 
 import akka.actor.ActorSystem
 import akka.testkit.{ImplicitSender, TestKit}
-import org.purevalue.arbitrage.traderoom.Asset.Bitcoin
+import org.purevalue.arbitrage.traderoom.Asset.BTC
 import org.purevalue.arbitrage.traderoom.{Asset, TradePair, TradeSide}
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.matchers.should.Matchers
@@ -19,14 +19,14 @@ class OrderLimitChooserSpec extends TestKit(ActorSystem("ExchangeLiquidityManage
 
       val limitChooser = new OrderLimitChooser(
         None,
-        Ticker("e1", TradePair(Bitcoin, Asset("USDT")), 9999.0, None, 10001.0, None, Some(10000.0))
+        Ticker("e1", TradePair(BTC, Asset("USDT")), 9999.0, None, 10001.0, None, Some(10000.0))
       )
 
       limitChooser.determineEdgeOrderLimit(TradeSide.Buy, 1.0).get shouldBe 10000.0 +- 0.000001
     }
 
     "find optimal limit for Sell and Buy" in {
-      val book = OrderBook("e1", TradePair(Bitcoin, Asset("USDT")),
+      val book = OrderBook("e1", TradePair(BTC, Asset("USDT")),
         Map(
           10000.1 -> Bid(1000.1, 100),
           10000.0 -> Bid(10000.0, 2),

@@ -18,7 +18,7 @@ import org.slf4j.LoggerFactory
 
 case class Order(externalId: String,
                  exchange: String,
-                 tradePair: TradePair,
+                 pair: TradePair,
                  side: TradeSide,
                  orderType: OrderType,
                  price: Option[Double], // may not be there for MARKET orders
@@ -34,10 +34,10 @@ case class Order(externalId: String,
       case TradeSide.Buy => "<-"
       case TradeSide.Sell => "->"
     }
-    s"[$exchange side ${cumulativeFilledQuantity.map(formatDecimal(_, tradePair.baseAsset.defaultFractionDigits))} " +
-      s"${tradePair.baseAsset.officialSymbol}$direction${tradePair.quoteAsset.officialSymbol} " +
-      s"""filled ${if (cumulativeFilledQuantity.isDefined && priceAverage.isDefined) formatDecimal(cumulativeFilledQuantity.get * priceAverage.get, tradePair.quoteAsset.defaultFractionDigits) else "n/a"} """ +
-      s"price ${price.map(formatDecimal(_, tradePair.quoteAsset.defaultFractionDigits))} $orderStatus]"
+    s"[$exchange side ${cumulativeFilledQuantity.map(formatDecimal(_, pair.baseAsset.defaultFractionDigits))} " +
+      s"${pair.baseAsset.officialSymbol}$direction${pair.quoteAsset.officialSymbol} " +
+      s"""filled ${if (cumulativeFilledQuantity.isDefined && priceAverage.isDefined) formatDecimal(cumulativeFilledQuantity.get * priceAverage.get, pair.quoteAsset.defaultFractionDigits) else "n/a"} """ +
+      s"price ${price.map(formatDecimal(_, pair.quoteAsset.defaultFractionDigits))} $orderStatus]"
   }
 
 
@@ -51,7 +51,7 @@ case class Order(externalId: String,
       if (Seq(OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED).contains(orderStatus))
         LocalCryptoValue(
           exchange,
-          tradePair.quoteAsset,
+          pair.quoteAsset,
           (priceAverage, cumulativeFilledQuantity) match {
             case (Some(p), Some(q)) => p * q
             case (Some(p), None) => p * quantity
@@ -59,18 +59,18 @@ case class Order(externalId: String,
             case _ if price.isDefined => price.get * quantity
             // if something falls through here, we have to avoid using this function in this case
           })
-      else LocalCryptoValue(exchange, tradePair.quoteAsset, 0.0)
+      else LocalCryptoValue(exchange, pair.quoteAsset, 0.0)
 
     case TradeSide.Sell =>
       if (Seq(OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED).contains(orderStatus))
         LocalCryptoValue(
           exchange,
-          tradePair.baseAsset,
+          pair.baseAsset,
           cumulativeFilledQuantity match {
             case Some(q) => q * (1.0 + feeRate)
             case None => quantity * (1.0 + feeRate)
           })
-      else LocalCryptoValue(exchange, tradePair.baseAsset, 0.0)
+      else LocalCryptoValue(exchange, pair.baseAsset, 0.0)
   }
 
   // absolute (positive) amount minus fees
@@ -78,18 +78,18 @@ case class Order(externalId: String,
     case TradeSide.Buy =>
       if (Seq(OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED).contains(orderStatus))
         LocalCryptoValue(exchange,
-          tradePair.baseAsset,
+          pair.baseAsset,
           cumulativeFilledQuantity match {
             case Some(q) => q * (1.0 - feeRate)
             case None => quantity * (1.0 - feeRate)
           })
-      else LocalCryptoValue(exchange, tradePair.baseAsset, 0.0)
+      else LocalCryptoValue(exchange, pair.baseAsset, 0.0)
 
     case TradeSide.Sell =>
       if (Seq(OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED).contains(orderStatus))
         LocalCryptoValue(
           exchange,
-          tradePair.quoteAsset,
+          pair.quoteAsset,
           (priceAverage, cumulativeFilledQuantity) match {
             case (Some(p), Some(q)) => p * q
             case (Some(p), None) => p * quantity
@@ -97,17 +97,17 @@ case class Order(externalId: String,
             case _ if price.isDefined => price.get * quantity
             // if something falls through here, we have to avoid using this function in this case
           })
-      else LocalCryptoValue(exchange, tradePair.quoteAsset, 0.0)
+      else LocalCryptoValue(exchange, pair.quoteAsset, 0.0)
   }
 
-  def ref: TradeRoom.OrderRef = OrderRef(exchange, tradePair, externalId)
+  def ref: TradeRoom.OrderRef = OrderRef(exchange, pair, externalId)
 
   private val log = LoggerFactory.getLogger(classOf[Order])
 
   def applyUpdate(u: OrderUpdate): Unit = {
     if (u.exchange != exchange ||
       u.externalOrderId != externalId ||
-      u.tradePair != tradePair ||
+      u.pair != pair ||
       u.side != side ||
       (u.orderType.isDefined && u.orderType.get != orderType))
       throw new IllegalArgumentException(s"$u does not match \n$this")
@@ -172,7 +172,7 @@ object OrderStatus {
  */
 case class OrderUpdate(externalOrderId: String,
                        exchange: String,
-                       tradePair: TradePair,
+                       pair: TradePair,
                        side: TradeSide,
                        orderType: Option[OrderType],
                        orderPrice: Option[Double], // may be the original price or a rounded one from the exchange. May not be there for market orders
@@ -192,7 +192,7 @@ case class OrderUpdate(externalOrderId: String,
   def toOrder: Order = Order(
     externalOrderId,
     exchange,
-    tradePair,
+    pair,
     side,
     orderType.get, // shall and will fail when an OrderUpdate without orderType is used for toOrder
     orderPrice,
@@ -227,37 +227,37 @@ case class OrderUpdate(externalOrderId: String,
 case class OrderRequest(id: UUID,
                         orderBundleId: Option[UUID], // mandatory for arbitrage orders, empty for liquidity tx orders
                         exchange: String,
-                        tradePair: TradePair,
-                        tradeSide: TradeSide,
+                        pair: TradePair,
+                        side: TradeSide,
                         feeRate: Double,
                         amountBaseAsset: Double,
                         limit: Double) {
   def tradeDesc: String = {
-    val orderDesc = tradeSide match {
-      case TradeSide.Buy => s"${tradePair.baseAsset.officialSymbol}<-${tradePair.quoteAsset.officialSymbol}"
-      case TradeSide.Sell => s"${tradePair.baseAsset.officialSymbol}->${tradePair.quoteAsset.officialSymbol}"
+    val orderDesc = side match {
+      case TradeSide.Buy => s"${pair.baseAsset.officialSymbol}<-${pair.quoteAsset.officialSymbol}"
+      case TradeSide.Sell => s"${pair.baseAsset.officialSymbol}->${pair.quoteAsset.officialSymbol}"
     }
-    s"($exchange: ${formatDecimal(amountBaseAsset, tradePair.baseAsset.defaultFractionDigits)} " +
-      s"$orderDesc ${formatDecimal(amountBaseAsset * limit, tradePair.quoteAsset.defaultFractionDigits)} " +
-      s"limit ${formatDecimal(limit, tradePair.quoteAsset.defaultFractionDigits)})"
+    s"($exchange: ${formatDecimal(amountBaseAsset, pair.baseAsset.defaultFractionDigits)} " +
+      s"$orderDesc ${formatDecimal(amountBaseAsset * limit, pair.quoteAsset.defaultFractionDigits)} " +
+      s"limit ${formatDecimal(limit, pair.quoteAsset.defaultFractionDigits)})"
   }
 
   def shortDesc: String = s"OrderRequest$tradeDesc"
 
 
-  override def toString: String = s"OrderRequest($id, orderBundleId:$orderBundleId, $exchange, $tradePair, $tradeSide, $feeRate, " +
+  override def toString: String = s"OrderRequest($id, orderBundleId:$orderBundleId, $exchange, $pair, $side, $feeRate, " +
     s"amountBaseAsset:${formatDecimal(amountBaseAsset)}, limit:${formatDecimal(limit)})"
 
   // absolute (positive) amount minus fees
-  def calcOutgoingLiquidity: LocalCryptoValue = tradeSide match {
-    case TradeSide.Buy => LocalCryptoValue(exchange, tradePair.quoteAsset, limit * amountBaseAsset)
-    case TradeSide.Sell => LocalCryptoValue(exchange, tradePair.baseAsset, amountBaseAsset * (1.0 + feeRate))
+  def calcOutgoingLiquidity: LocalCryptoValue = side match {
+    case TradeSide.Buy => LocalCryptoValue(exchange, pair.quoteAsset, limit * amountBaseAsset)
+    case TradeSide.Sell => LocalCryptoValue(exchange, pair.baseAsset, amountBaseAsset * (1.0 + feeRate))
   }
 
   // absolute (positive) amount minus fees
-  def calcIncomingLiquidity: LocalCryptoValue = tradeSide match {
-    case TradeSide.Buy => LocalCryptoValue(exchange, tradePair.baseAsset, amountBaseAsset * (1.0 - feeRate))
-    case TradeSide.Sell => LocalCryptoValue(exchange, tradePair.quoteAsset, limit * amountBaseAsset)
+  def calcIncomingLiquidity: LocalCryptoValue = side match {
+    case TradeSide.Buy => LocalCryptoValue(exchange, pair.baseAsset, amountBaseAsset * (1.0 - feeRate))
+    case TradeSide.Sell => LocalCryptoValue(exchange, pair.quoteAsset, limit * amountBaseAsset)
   }
 }
 
@@ -330,7 +330,7 @@ case class OrderRequestBundle(id: UUID,
                               bill: OrderBill) {
   def tradeDesc: String = s"""[${orderRequests.map(_.tradeDesc).mkString(" & ")}]"""
 
-  def involvedReserveAssets: Set[Asset] = orderRequests.flatMap(e => Seq(e.tradePair.baseAsset, e.tradePair.quoteAsset)).toSet
+  def involvedReserveAssets: Set[Asset] = orderRequests.flatMap(e => Seq(e.pair.baseAsset, e.pair.quoteAsset)).toSet
 
   override def toString: String = s"OrderRequestBundle($id, $tradePattern, creationTime:$creationTime, orders:$orderRequests, $bill)"
 }

@@ -44,20 +44,20 @@ class TradeSimulator(globalConfig: GlobalConfig,
   }
 
   def newLimitOrder(externalOrderId: String, creationTime: Instant, o: OrderRequest): OrderUpdate =
-    OrderUpdate(externalOrderId, o.exchange, o.tradePair, o.tradeSide, Some(OrderType.LIMIT), Some(o.limit), None, Some(o.amountBaseAsset), Some(creationTime), Some(OrderStatus.NEW), None, None, Some(o.limit), creationTime)
+    OrderUpdate(externalOrderId, o.exchange, o.pair, o.side, Some(OrderType.LIMIT), Some(o.limit), None, Some(o.amountBaseAsset), Some(creationTime), Some(OrderStatus.NEW), None, None, Some(o.limit), creationTime)
 
   def limitOrderPartiallyFilled(externalOrderId: String, creationTime: Instant, o: OrderRequest): OrderUpdate =
-    OrderUpdate(externalOrderId, o.exchange, o.tradePair, o.tradeSide, Some(OrderType.LIMIT), Some(o.limit), None, Some(o.amountBaseAsset), Some(creationTime), Some(OrderStatus.PARTIALLY_FILLED), Some(o.amountBaseAsset / 2.0), None, Some(o.limit), Instant.now)
+    OrderUpdate(externalOrderId, o.exchange, o.pair, o.side, Some(OrderType.LIMIT), Some(o.limit), None, Some(o.amountBaseAsset), Some(creationTime), Some(OrderStatus.PARTIALLY_FILLED), Some(o.amountBaseAsset / 2.0), None, Some(o.limit), Instant.now)
 
   def limitOrderFilled(externalOrderId: String, creationTime: Instant, o: OrderRequest): OrderUpdate =
-    OrderUpdate(externalOrderId, o.exchange, o.tradePair, o.tradeSide, Some(OrderType.LIMIT), Some(o.limit), None, Some(o.amountBaseAsset), Some(creationTime), Some(OrderStatus.FILLED), Some(o.amountBaseAsset), None, Some(o.limit), Instant.now)
+    OrderUpdate(externalOrderId, o.exchange, o.pair, o.side, Some(OrderType.LIMIT), Some(o.limit), None, Some(o.amountBaseAsset), Some(creationTime), Some(OrderStatus.FILLED), Some(o.amountBaseAsset), None, Some(o.limit), Instant.now)
 
   def walletBalanceUpdate(delta: LocalCryptoValue): WalletBalanceUpdate = WalletBalanceUpdate(delta.asset, delta.amount)
 
   def orderLimitCloseToTickerSync(o: OrderRequest, maxDiffRate: Double): Boolean = {
     implicit val timeout: Timeout = globalConfig.internalCommunicationTimeout
     val tickerPrice = Await.result(
-      (exchange ? GetPriceEstimate(o.tradePair)).mapTo[Double],
+      (exchange ? GetPriceEstimate(o.pair)).mapTo[Double],
       timeout.duration.plus(500.millis)
     )
     val diffRate = (1.0 - tickerPrice / o.limit).abs
@@ -96,7 +96,7 @@ class TradeSimulator(globalConfig: GlobalConfig,
     executionContext.execute(() => simulateOrderLifetime(externalOrderId, o))
 
     Future.successful(
-      NewOrderAck(exchangeConfig.name, o.tradePair, externalOrderId, o.id)
+      NewOrderAck(exchangeConfig.name, o.pair, externalOrderId, o.id)
     )
   }
 

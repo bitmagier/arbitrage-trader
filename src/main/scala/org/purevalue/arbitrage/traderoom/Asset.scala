@@ -1,6 +1,6 @@
 package org.purevalue.arbitrage.traderoom
 
-import org.purevalue.arbitrage.traderoom.Asset.Bitcoin
+import org.purevalue.arbitrage.traderoom.Asset.BTC
 import org.purevalue.arbitrage.traderoom.exchange.Ticker
 import org.purevalue.arbitrage.util.Util.formatDecimal
 
@@ -27,7 +27,7 @@ class Asset(val officialSymbol: String,
 
   def canConvertTo(targetAsset: Asset, conversionRateExists: TradePair => Boolean): Boolean = {
     canConvertDirectlyTo(targetAsset, conversionRateExists) ||
-      canConvertIndirectly(targetAsset, Bitcoin, conversionRateExists)
+      canConvertIndirectly(targetAsset, BTC, conversionRateExists)
   }
 
   def canConvertTo(targetAsset: Asset, ticker: Map[TradePair, Ticker]): Boolean = {
@@ -45,7 +45,7 @@ class Asset(val officialSymbol: String,
 
   override def hashCode: Int = officialSymbol.hashCode
 
-  override def toString: String = s"""$officialSymbol (${name.getOrElse("n/a")})"""
+  override def toString: String = officialSymbol
 }
 
 object Asset {
@@ -61,13 +61,13 @@ object Asset {
   )
 
   // often used assets
-  lazy val Bitcoin: Asset = Asset("BTC")
-  lazy val Euro: Asset = Asset("EUR")
-  lazy val USDollar: Asset = Asset("USD")
-  lazy val AssetUSDT: Asset = Asset("USDT")
-  lazy val AssetUSDC: Asset = Asset("USDC")
+  lazy val BTC: Asset = Asset("BTC")
+  lazy val EUR: Asset = Asset("EUR")
+  lazy val USD: Asset = Asset("USD")
+  lazy val USDT: Asset = Asset("USDT")
+  lazy val USDC: Asset = Asset("USDC")
 
-  lazy val UsdEquivalentCoins: Set[Asset] = Set(AssetUSDT, AssetUSDC)
+  lazy val UsdEquivalentCoins: Set[Asset] = Set(USDT, USDC)
 
   // this is the reference to know exactly about which asset (or coin) we are talking (no matter at which exchange)
   private var allAssets: Map[String, Asset] = Map()
@@ -81,7 +81,7 @@ object Asset {
   def register(officialSymbol: String, name: Option[String], _isFiat: Option[Boolean], defaultFractionDigits: Int = 5, sourceWeight: Int = 0): Unit = {
     val isFiat: Boolean = KnownFiatAssets.contains(officialSymbol) || _isFiat.contains(true)
 
-    def mergeName(a: Option[String], b:Option[String]): Option[String] = Seq(a,b).flatten.headOption
+    def mergeName(a: Option[String], b: Option[String]): Option[String] = Seq(a, b).flatten.headOption
 
     synchronized {
       allAssets =
@@ -173,10 +173,10 @@ case class CryptoValue(asset: Asset, amount: Double) {
           findConversionRate(TradePair(targetAsset, this.asset)) match { // try reverse ticker
             case Some(rate) => CryptoValue(targetAsset, amount / rate)
             case None => // try conversion via BTC as last option
-              if ((this.asset != Bitcoin && targetAsset != Bitcoin)
-                && (findConversionRate(TradePair(this.asset, Bitcoin)).isDefined || findConversionRate(TradePair(Bitcoin, this.asset)).isDefined)
-                && (findConversionRate(TradePair(targetAsset, Bitcoin)).isDefined || findConversionRate(TradePair(Bitcoin, targetAsset)).isDefined)) {
-                this.convertTo(Bitcoin, findConversionRate).convertTo(targetAsset, findConversionRate)
+              if ((this.asset != BTC && targetAsset != BTC)
+                && (findConversionRate(TradePair(this.asset, BTC)).isDefined || findConversionRate(TradePair(BTC, this.asset)).isDefined)
+                && (findConversionRate(TradePair(targetAsset, BTC)).isDefined || findConversionRate(TradePair(BTC, targetAsset)).isDefined)) {
+                this.convertTo(BTC, findConversionRate).convertTo(targetAsset, findConversionRate)
               } else {
                 throw new RuntimeException(s"No option available to convert $asset -> $targetAsset")
               }

@@ -386,7 +386,7 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
   def newLimitOrder(o: OrderRequest): Future[NewOrderAck] = {
 
     def newLimitOrder(o: OrderRequest, serverTime: Double): Future[NewOrderAck] = {
-      val coinbaseTradepair = coinbaseTradePairsByTradePair(o.tradePair)
+      val coinbaseTradepair = coinbaseTradePairsByTradePair(o.pair)
 
       val size: String = formatDecimalWithFixPrecision(
         Math.max(coinbaseTradepair.baseMinSize,
@@ -397,9 +397,9 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
 
       val requestBody: String = NewOrderRequestJson(
         o.id.toString,
-        coinbaseTradePairsByTradePair(o.tradePair).id,
+        coinbaseTradePairsByTradePair(o.pair).id,
         CoinbaseOrder.toString(OrderType.LIMIT),
-        CoinbaseOrder.toString(o.tradeSide),
+        CoinbaseOrder.toString(o.side),
         size,
         price).toJson.compactPrint
 

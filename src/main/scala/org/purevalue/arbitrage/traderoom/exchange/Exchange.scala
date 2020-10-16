@@ -12,7 +12,7 @@ import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.traderoom.TradeRoom.{GetActiveLiquidityTxs, GetReferenceTicker, JoinTradeRoom, LiquidityTx, OrderRef, TradeRoomJoined}
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
-import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancerRun.WorkingContext
+import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer.WorkingContext
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{GetState, LiquidityLockClearance, LiquidityRequest}
 import org.purevalue.arbitrage.traderoom.exchange.PioneerOrderRunner.{PioneerOrderFailed, PioneerOrderSucceeded}
 import org.purevalue.arbitrage.util.{Emoji, InitSequence, InitStep, RestartIntentionException, WaitingFor}
@@ -317,8 +317,8 @@ case class Exchange(exchangeName: String,
   // @formatter:on
 
   def checkValidity(o: OrderRequest): Unit = {
-    if (exchangeConfig.doNotTouchTheseAssets.contains(o.tradePair.baseAsset)
-      || exchangeConfig.doNotTouchTheseAssets.contains(o.tradePair.quoteAsset))
+    if (exchangeConfig.doNotTouchTheseAssets.contains(o.pair.baseAsset)
+      || exchangeConfig.doNotTouchTheseAssets.contains(o.pair.quoteAsset))
       throw new IllegalArgumentException("Order with DO-NOT-TOUCH asset")
   }
 
@@ -436,7 +436,7 @@ case class Exchange(exchangeName: String,
         }
 
       case o: OrderUpdate =>
-        val ref = OrderRef(exchangeConfig.name, o.tradePair, o.externalOrderId)
+        val ref = OrderRef(exchangeConfig.name, o.pair, o.externalOrderId)
         if (accountData.activeOrders.contains(ref)) {
           accountData.activeOrders(ref).applyUpdate(o)
         } else {
@@ -561,7 +561,7 @@ case class Exchange(exchangeName: String,
 
     case DataHouseKeeping()              => dataHouseKeeping()
     case LiquidityHouseKeeping()         => liquidityHouseKeeping()
-    case OldLiquidityBalancerRun.Finished() => liquidityHouseKeepingRunning = false
+    case LiquidityBalancerRun.Finished() => liquidityHouseKeepingRunning = false
     case s: TradeRoom.Stop               => onStop(s)
     case Status.Failure(cause)           => log.error("received failure", cause); self ! PoisonPill
   }

@@ -489,7 +489,7 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
   def newLimitOrder(o: OrderRequest): Future[NewOrderAck] = {
     if (o.amountBaseAsset < 0.0) throw new WrongAssumption("our order amount is always positive")
 
-    val binanceTradePair = binanceTradePairsByTradePair(o.tradePair)
+    val binanceTradePair = binanceTradePairsByTradePair(o.pair)
     val price: Double = alignToStepSizeNearest(o.limit, binanceTradePair.tickSize)
     val quantity: Double = alignToStepSizeCeil(o.amountBaseAsset, binanceTradePair.lotSize.stepSize) match {
       case q: Double if price * q < binanceTradePair.minNotional =>
@@ -507,7 +507,7 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
 
     val requestBody: String =
       s"symbol=${binanceTradePair.symbol}" +
-        s"&side=${BinanceOrder.toString(o.tradeSide)}" +
+        s"&side=${BinanceOrder.toString(o.side)}" +
         s"&type=${BinanceOrder.toString(OrderType.LIMIT)}" +
         s"&timeInForce=GTC" +
         s"&quantity=${formatDecimalWithFixPrecision(quantity, binanceTradePair.baseAssetPrecision)}" +
