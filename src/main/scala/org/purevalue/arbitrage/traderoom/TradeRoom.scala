@@ -16,7 +16,7 @@ import org.purevalue.arbitrage.traderoom.TradeRoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityRequest}
 import org.purevalue.arbitrage.traderoom.exchange.{FullDataSnapshot, LiquidityBalancerStats, OrderBook, Ticker, TickerSnapshot, Wallet}
-import org.purevalue.arbitrage.util.Emoji
+import org.purevalue.arbitrage.util.{Emoji, WrongAssumption}
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.slf4j.LoggerFactory
 
@@ -440,6 +440,7 @@ class TradeRoom(val config: Config,
 
   def cleanupPossiblyFinishedLiquidityTxOrder(tx: LiquidityTx): Unit = {
     activeOrder(tx.orderRef).foreach {
+      case None => throw new WrongAssumption("order must exist")
       case Some(order) =>
         if (order.orderStatus == OrderStatus.FILLED) {
           log.info(s"${Emoji.Robot}  Liquidity tx ${tx.orderRequest.tradeDesc} FILLED")
@@ -467,7 +468,6 @@ class TradeRoom(val config: Config,
     activeLiquidityTx.get(t.ref) match {
       case Some(liquidityTx) => cleanupPossiblyFinishedLiquidityTxOrder(liquidityTx)
       case None =>
-
         if (t.resendCounter < maxTries) {
           // wait 200ms and try again, before giving up - sometimes the real order-filled-update is faster than our registering of the acknowledge
           Future {
@@ -476,6 +476,7 @@ class TradeRoom(val config: Config,
           }
         } else {
           activeOrder(t.ref).foreach {
+            case None => // order & liquidityTx gone -> nothing there to pay heed to
             case Some(order) =>
               log.warn(s"Got order-update (${t.ref.exchange}: ${t.ref.externalOrderId}) but cannot find active order bundle or liquidity tx for it." +
                 s" Corresponding order is: $order")
