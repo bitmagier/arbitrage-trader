@@ -419,17 +419,21 @@ case class Exchange(exchangeName: String,
             (a, Balance(b.asset, b.amountAvailable + w.amountDelta, b.amountLocked))
           case (a: Asset, b: Balance) => (a, b)
         }.filterNot(e => e._2.amountAvailable == 0.0 && e._2.amountLocked == 0.0)
+          .filterNot(e => exchangeConfig.assetBlocklist.contains(e._1))
         accountData.wallet = accountData.wallet.withBalance(balance)
         self ! WalletUpdateTrigger()
 
       case w: WalletAssetUpdate =>
         val balance = (accountData.wallet.balance ++ w.balance)
           .filterNot(e => e._2.amountAvailable == 0.0 && e._2.amountLocked == 0.0)
+          .filterNot(e => exchangeConfig.assetBlocklist.contains(e._1))
         accountData.wallet = accountData.wallet.withBalance(balance)
         self ! WalletUpdateTrigger()
 
       case w: CompleteWalletUpdate =>
-        val balance = w.balance.filterNot(e => e._2.amountAvailable == 0.0 && e._2.amountLocked == 0.0)
+        val balance = w.balance
+          .filterNot(e => e._2.amountAvailable == 0.0 && e._2.amountLocked == 0.0)
+          .filterNot(e => exchangeConfig.assetBlocklist.contains(e._1))
         if (balance != accountData.wallet.balance) { // we get snapshots delivered here, so updates are needed only, when something changed
           accountData.wallet = accountData.wallet.withBalance(balance)
           self ! WalletUpdateTrigger()
