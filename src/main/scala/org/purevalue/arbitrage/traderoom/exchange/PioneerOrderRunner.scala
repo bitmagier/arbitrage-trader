@@ -157,10 +157,11 @@ class PioneerOrderRunner(config: Config,
     if (Instant.now.isAfter(deadline)) {
       throw new RuntimeException("Timeout while waiting for pioneer order to complete")
     }
-    implicit val timeout: Timeout = config.global.internalCommunicationTimeout
-    (exchange ? GetActiveOrders()).mapTo[Map[OrderRef, Order]].onComplete {
-      case Success(activeOrders) => activeOrders.get(o.ref) match {
 
+    implicit val timeout: Timeout = config.global.internalCommunicationTimeout
+    (exchange ? GetActiveOrders()).mapTo[Map[OrderRef, Order]].foreach { activeOrders =>
+
+      activeOrders.get(o.ref) match {
         case Some(order) if order.orderStatus.isFinal =>
           validationMethod(o.request, order)
           log.info(s"[$exchangeName]  pioneer order ${o.request.shortDesc} successfully validated")
@@ -189,30 +190,27 @@ class PioneerOrderRunner(config: Config,
   def watchBalance(expectedBalance: Iterable[CryptoValue], arrival: WaitingFor): Unit = {
     val SignificantBalanceDeviationInUSD: Double = 0.50
 
-    var diff: Map[Asset, Double] = expectedBalance.map(e => e.asset -> e.amount).toMap
+    var balanceDiff: Map[Asset, Double] = expectedBalance.map(e => e.asset -> e.amount).toMap
 
-    walletLiquidCryptoValues().onComplete {
-      case Success(liquidCryptoValues) =>
-        for (walletCryptoValue <- liquidCryptoValues) {
-          val diffAmount = diff.getOrElse(walletCryptoValue.asset, 0.0) - walletCryptoValue.amount
-          diff = diff + (walletCryptoValue.asset -> diffAmount)
-        }
+    walletLiquidCryptoValues().foreach { liquidCryptoValues =>
+      for (walletCryptoValue <- liquidCryptoValues) {
+        val diffAmount = balanceDiff.getOrElse(walletCryptoValue.asset, 0.0) - walletCryptoValue.amount
+        balanceDiff = balanceDiff + (walletCryptoValue.asset -> diffAmount)
+      }
 
-        implicit val timeout: Timeout = config.global.internalCommunicationTimeout
-        val diffInUSD: Future[Iterable[CryptoValue]] = Future.sequence(
-          diff
-            .map(e => CryptoValue(e._1, e._2))
-            .map(e => convert(e, exchangeConfig.usdEquivalentCoin))
-        )
-        diffInUSD.onComplete {
-          case Success(diff) =>
-            if (!diff.exists(_.amount > SignificantBalanceDeviationInUSD)) {
-              log.debug(s"[$exchangeName] expected wallet balance arrived")
-              arrival.arrived()
-            } else {
-              log.trace(s"diff between expected minus actual balance is $diff")
-            }
+      implicit val timeout: Timeout = config.global.internalCommunicationTimeout
+      Future.sequence(
+        balanceDiff
+          .map(e => CryptoValue(e._1, e._2))
+          .map(e => convert(e, exchangeConfig.usdEquivalentCoin))
+      ).foreach { balanceDiffInUSD =>
+        if (!balanceDiffInUSD.exists(_.amount > SignificantBalanceDeviationInUSD)) {
+          log.debug(s"[$exchangeName] expected wallet balance arrived")
+          arrival.arrived()
+        } else {
+          log.trace(s"diff between expected minus actual balance is $balanceDiffInUSD")
         }
+      }
     }
   }
 
