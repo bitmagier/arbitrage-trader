@@ -183,8 +183,7 @@ class TradeRoom(val config: Config,
 
   def tryToPlaceLiquidityTransformationOrder(request: OrderRequest): Future[Option[OrderRef]] = {
     if (shutdownInitiated) return Future.successful(None)
-    if (doNotTouchAssets(request.exchange).intersect(request.pair.involvedAssets).nonEmpty)
-      return Future.failed(new IllegalArgumentException)
+    if (doNotTouchAssets(request.exchange).intersect(request.pair.involvedAssets).nonEmpty) return Future.failed(new IllegalArgumentException)
 
     // this should not occur - but here is a last guard
     if (activeLiquidityTx.keys.exists(ref => ref.exchange == request.exchange && ref.tradePair == request.pair)) {

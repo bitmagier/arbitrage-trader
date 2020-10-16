@@ -65,10 +65,8 @@ class LiquidityBalancerRun(val config: Config,
 
   def unfinishedOrders(refs: Iterable[OrderRef]): Future[Iterable[OrderRef]] = {
     implicit val timeout: Timeout = config.global.internalCommunicationTimeout
-    (tradeRoom ? GetFinishedLiquidityTxs()).mapTo[List[FinishedLiquidityTx]]
-      .map(l =>
-        refs.filter(e =>
-          !l.exists(_.finishedOrder.ref == e)))
+    (tradeRoom ? GetFinishedLiquidityTxs()).mapTo[Map[OrderRef, FinishedLiquidityTx]]
+      .map(l => refs.filter(e => !l.contains(e)))
   }
 
   def waitUntilLiquidityOrdersFinished(orderRefs: Iterable[TradeRoom.OrderRef]): Unit = {

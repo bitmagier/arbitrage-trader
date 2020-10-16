@@ -99,6 +99,7 @@ class LiquidityBalancer(val config: Config,
   def calcPureSupplyOverhead: Map[Asset, Int] = {
     wc.balanceSnapshot
       .filterNot(_._1.isFiat)
+      .filterNot(e => exchangeConfig.doNotTouchTheseAssets.contains(e._1))
       .map {
         case (asset, balance) =>
           val demand: Double = wc.liquidityDemand.values.find(_.asset == asset).map(_.amount).getOrElse(0.0)
