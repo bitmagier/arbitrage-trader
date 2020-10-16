@@ -71,14 +71,14 @@ case class OrderBundleSafetyGuardConfig(maximumReasonableWinPerOrderBundleUSD: D
                                         maxOrderLimitTickerVariance: Double,
                                         maxTickerAge: Duration,
                                         minTotalGainInUSD: Double,
-                                        txLimitAwayFromEdgeLimit: Double)
+                                        setTxLimitAwayFromEdgeLimit: Double)
 object OrderBundleSafetyGuardConfig {
   def apply(c: com.typesafe.config.Config): OrderBundleSafetyGuardConfig = OrderBundleSafetyGuardConfig(
     c.getDouble("max-reasonable-win-per-order-bundle-usd"),
     c.getDouble("max-order-limit-ticker-variance"),
     c.getDuration("max-ticker-age"),
     c.getDouble("min-total-gain-in-usd"),
-    c.getDouble("tx-limit-away-from-edge-limit")
+    c.getDouble("set-tx-limit-away-from-edge-limit")
   )
 }
 case class TradeRoomConfig(tradeSimulation: Boolean,

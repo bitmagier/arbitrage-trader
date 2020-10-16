@@ -110,7 +110,7 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
             TradePair(assetToProvide, r),
             TradeSide.Buy, // TODO [later, maybe] try other way around too - also in LiquidityManager
             amountToProvide,
-            config.txLimitAwayFromEdgeLimit,
+            config.setTxLimitAwayFromEdgeLimit,
             tc.tickers(exchange),
             tc.referenceTicker,
             tc.orderBooks(exchange)
@@ -126,12 +126,15 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
     }
 
     val unableToProvideConversionForCoin: Option[LocalCryptoValue] = {
-      (toProvide ++ toConvertBack).find(v => findBestReserveAssetToProvide(v.exchange, v.asset, v.amount, uninvolvedReserveAssetsPerExchange(v.exchange)).isEmpty)
+      (toProvide ++ toConvertBack).find(v =>
+        findBestReserveAssetToProvide(v.exchange, v.asset, v.amount, uninvolvedReserveAssetsPerExchange(v.exchange)).isEmpty)
     }
     if (unableToProvideConversionForCoin.isDefined) {
-      val msg = s"${Emoji.EyeRoll}  Sorry, no suitable reserve asset found to support reserve liquidity conversion from/to ${unableToProvideConversionForCoin.get.asset} on ${unableToProvideConversionForCoin.get.exchange}."
+      val msg = s"${Emoji.EyeRoll}  Sorry, no suitable reserve asset found to support reserve liquidity conversion " +
+        s"from/to ${unableToProvideConversionForCoin.get.asset} on ${unableToProvideConversionForCoin.get.exchange}."
       if (!warningAlreadyWritten.contains(msg)) {
-        log.warn(s"${Emoji.EyeRoll}  Sorry, no suitable reserve asset found to support reserve liquidity conversion from/to ${unableToProvideConversionForCoin.get.asset} on ${unableToProvideConversionForCoin.get.exchange}.")
+        log.warn(s"${Emoji.EyeRoll}  Sorry, no suitable reserve asset found to support reserve liquidity conversion " +
+          s"from/to ${unableToProvideConversionForCoin.get.asset} on ${unableToProvideConversionForCoin.get.exchange}.")
         log.debug(s"^^^ Regarding $t")
         warningAlreadyWritten = warningAlreadyWritten + msg
       }
