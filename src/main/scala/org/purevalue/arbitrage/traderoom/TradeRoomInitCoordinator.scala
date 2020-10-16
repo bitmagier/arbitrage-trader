@@ -65,23 +65,33 @@ class TradeRoomInitCoordinator(val config: Config,
     }
   }
 
-  // we want to trade only trade pairs
-  // - [1] which are NOT Fiat money
+  // we want to keep only trade pairs
+  // - [1] which are NOT connected to Fiat money
   // - [2] that are available on at least two exchanges
-  // - [3] plus trade pairs, where one side is a part of [2] and the other side is a local reserve asset or USD equivalent coin
+  // - [3] plus trade pairs, where one side is a part of [2] and the other side is a local reserve asset
+  // - [4] plus all crypto-coin to USD equivalent coin pairs (for liquidity calculations & conversions)
   def determineUsableTradepairs(): Unit = {
     val allGlobalTradePairs = allTradePairs.values.flatten.toSet
     val globalArbitragePairs = allGlobalTradePairs.filter(e => allTradePairs.count(_._2.contains(e)) > 1)
 
     val arbitrageAssets = globalArbitragePairs.flatMap(_.involvedAssets)
 
-    def condition3(exchange: String, tp: TradePair): Boolean = {
-      (arbitrageAssets.contains(tp.baseAsset) && (tp.quoteAsset == config.exchanges(exchange).usdEquivalentCoin || config.exchanges(exchange).reserveAssets.contains(tp.quoteAsset))) ||
-        (arbitrageAssets.contains(tp.quoteAsset) && tp.baseAsset == config.exchanges(exchange).usdEquivalentCoin || config.exchanges(exchange).reserveAssets.contains(tp.baseAsset))
+    def condition3(exchange: String, pair: TradePair): Boolean = {
+      (arbitrageAssets.contains(pair.baseAsset) && (pair.quoteAsset == config.exchanges(exchange).usdEquivalentCoin || config.exchanges(exchange).reserveAssets.contains(pair.quoteAsset))) ||
+        (arbitrageAssets.contains(pair.quoteAsset) && pair.baseAsset == config.exchanges(exchange).usdEquivalentCoin || config.exchanges(exchange).reserveAssets.contains(pair.baseAsset))
+    }
+
+    def condition4(exchange:String, pair:TradePair): Boolean = {
+      !pair.baseAsset.isFiat && pair.quoteAsset == config.exchanges(exchange).usdEquivalentCoin
     }
 
     usableTradePairs = allTradePairs
-      .map(e => e._1 -> e._2.filter(x => globalArbitragePairs.contains(x) || condition3(e._1, x)))
+      .map(e => e._1 ->
+        e._2.filter(x =>
+          globalArbitragePairs.contains(x)
+            || condition3(e._1, x)
+            || condition4(e._1, x)
+        ))
 
     for (exchange <- exchanges.keySet) {
       log.info(s"[$exchange] unusable trade pairs: ${(allTradePairs(exchange) -- usableTradePairs(exchange)).toSeq.sortBy(_.toString)}")
