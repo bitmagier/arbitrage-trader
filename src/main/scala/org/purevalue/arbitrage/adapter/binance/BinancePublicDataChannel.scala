@@ -230,8 +230,8 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
   }
 
   override def preStart() {
+    log.info("starting binance public data channel")
     try {
-      log.trace(s"BinancePublicDataChannel initializing...")
       initBinanceTradePairBySymbol()
       self ! Connect()
     } catch {

@@ -408,8 +408,8 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
   }
 
   override def preStart() {
+    log.info("starting bitfinex public data channel")
     try {
-      log.debug(s"BitfinexPublicDataChannel initializing...")
       initBitfinexTradePairBySymbol()
       self ! Connect()
     } catch {

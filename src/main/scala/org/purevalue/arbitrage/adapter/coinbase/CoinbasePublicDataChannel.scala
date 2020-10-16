@@ -217,8 +217,8 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
   }
 
   override def preStart() {
+    log.info("starting coinbase public data channel")
     try {
-      log.trace(s"CoinbasePublicDataChannel initializing...")
       initCoinbaseTradePairBySymbol()
       self ! Connect()
     } catch {

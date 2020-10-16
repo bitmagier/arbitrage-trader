@@ -631,6 +631,7 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
   }
 
   override def preStart(): Unit = {
+    log.info("starting binance account data channel")
     try {
       createListenKey()
       pullBinanceTradePairs()

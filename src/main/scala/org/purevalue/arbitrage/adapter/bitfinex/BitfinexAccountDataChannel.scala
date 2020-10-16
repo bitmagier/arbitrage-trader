@@ -565,6 +565,7 @@ private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
   }
 
   override def preStart(): Unit = {
+    log.info("starting bitfinex account data channel")
     try {
       pullBitfinexTradePairs()
       pullBitfinexAssets()

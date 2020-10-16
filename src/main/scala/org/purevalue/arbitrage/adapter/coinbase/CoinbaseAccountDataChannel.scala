@@ -478,6 +478,7 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
   }
 
   override def preStart(): Unit = {
+    log.info("starting coinbase account data channel")
     try {
       pullCoinbaseTradePairs()
       self ! Connect()

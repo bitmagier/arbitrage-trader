@@ -82,6 +82,10 @@ class TradeRoomInitCoordinator(val config: Config,
 
     usableTradePairs = allTradePairs
       .map(e => e._1 -> e._2.filter(x => globalArbitragePairs.contains(x) || condition3(e._1, x)))
+
+    for (exchange <- exchanges.keySet) {
+      log.info(s"[$exchange] unusable trade pairs: ${(allTradePairs(exchange) -- usableTradePairs(exchange)).toSeq.sortBy(_.toString)}")
+    }
   }
 
   def pushUsableTradePairs(): Unit = {
