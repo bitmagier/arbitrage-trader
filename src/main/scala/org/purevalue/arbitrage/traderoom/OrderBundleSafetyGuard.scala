@@ -188,11 +188,9 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
 
   // reject OrderBundles, when there is another active order of the same exchange+tradepair still active
   private def sameTradePairOrdersStillActive(bundle: OrderRequestBundle)(implicit tc: TradeContext): Boolean = {
-    val activeExchangeOrderPairs: Set[(String, TradePair)] =
-      tc.activeOrderBundles.values
-        .flatMap(_.orderRefs.map(o =>
-          (o.exchange, o.tradePair))).toSet
-    if (bundle.orderRequests.exists(o => activeExchangeOrderPairs.contains((o.exchange, o.pair)))) {
+    val activeExchangeOrderPairs: Iterable[(String, TradePair)] =
+      tc.activeOrderBundleOrders.map(o => (o.exchange, o.tradePair))
+    if (bundle.orderRequests.exists(o => activeExchangeOrderPairs.exists(e => e._1 == o.exchange && e._2 == o.pair))) {
       if (log.isDebugEnabled())
         log.debug(s"rejecting new $bundle because another order of same exchange+tradepair is still active. Active trade pairs: $activeExchangeOrderPairs")
       else
