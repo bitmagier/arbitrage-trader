@@ -73,7 +73,6 @@ private[bitfinex] class BitfinexPublicDataInquirer(globalConfig: GlobalConfig,
 
     if (log.isTraceEnabled) log.trace(s"pub:map:currency:label: $currencyNames")
 
-    bitfinexAssets
     val rawBitfinexCurrencies: Set[String] = Await.result(
       httpGetJson[List[List[String]], JsValue](s"$BaseRestEndpointPublic/v2/conf/pub:list:currency"),
       globalConfig.httpTimeout.plus(500.millis)) match {
