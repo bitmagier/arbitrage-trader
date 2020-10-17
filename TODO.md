@@ -1,12 +1,7 @@
-#IN PROGRESS
-- coinbase adapter
 
 #TODO
 
-
-
-
-- init list of assets from binance tradepairs
+- drop trade pairs on exchange, which have low liquidity
 
 - steering-man actor: taking care, that we keep going into the profit zone
   - provides/analyzes overall statistics
@@ -16,8 +11,6 @@
 - temporary TradePair down detection + action
 - temporary Exchange maintenance/down detection + action 
 - shudown app completely in case of serious exceptions
-
-
 
 #NOTES
 Test strategy: 

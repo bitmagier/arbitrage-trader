@@ -93,7 +93,7 @@ private[bitfinex] class BitfinexPublicDataInquirer(globalConfig: GlobalConfig,
         case Left(response) => response.head
         case Right(errorResponse) => throw new RuntimeException(s"query exchange pairs failed: $errorResponse")
       }
-    if (log.isTraceEnabled) log.trace(s"tradepairs: $rawTradePairs")
+    if (log.isTraceEnabled) log.trace(s"pub:list:pair:exchange: $rawTradePairs")
 
     bitfinexTradePairs = rawTradePairs
       .filter(_.length == 6)
@@ -107,7 +107,7 @@ private[bitfinex] class BitfinexPublicDataInquirer(globalConfig: GlobalConfig,
       .map(e => BitfinexTradePair(Asset(e._1), Asset(e._2), s"t${e._3}"))
       .filterNot(e => exchangeConfig.assetBlocklist.contains(e.baseAsset) || exchangeConfig.assetBlocklist.contains(e.quoteAsset))
       .toSet
-    if (log.isTraceEnabled) log.trace(s"bitfinexTradePairs: $bitfinexTradePairs")
+    if (log.isTraceEnabled) log.trace(s"bitfinex trade pairs: $bitfinexTradePairs")
   }
 
   override def preStart(): Unit = {
@@ -123,7 +123,6 @@ private[bitfinex] class BitfinexPublicDataInquirer(globalConfig: GlobalConfig,
     case GetAllTradePairs() =>
       sender() ! tradePairs
 
-    // Messages from BitfinexTPDataChannel
     case GetBitfinexTradePairs() =>
       sender() ! bitfinexTradePairs
 
