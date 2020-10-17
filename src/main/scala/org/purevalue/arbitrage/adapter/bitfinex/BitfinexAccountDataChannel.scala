@@ -300,7 +300,7 @@ private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
   implicit val system: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = system.dispatcher
 
-  var bitfinexAssets: Set[BitfinexSymbol] = _
+  var bitfinexAssets: Set[BitfinexAsset] = _
   var bitfinexTradePairs: Set[BitfinexTradePair] = _
   var bitfinexTradePairByApiSymbol: Map[String, BitfinexTradePair] = _
   var bitfinexTradePairByTradePair: Map[TradePair, BitfinexTradePair] = _
@@ -472,7 +472,7 @@ private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
   def pullBitfinexAssets(): Unit = {
     implicit val timeout: Timeout = globalConfig.internalCommunicationTimeoutDuringInit
     bitfinexAssets = Await.result(
-      (exchangePublicDataInquirer ? GetBitfinexAssets()).mapTo[Set[BitfinexSymbol]],
+      (exchangePublicDataInquirer ? GetBitfinexAssets()).mapTo[Set[BitfinexAsset]],
       timeout.duration.plus(500.millis)
     )
   }

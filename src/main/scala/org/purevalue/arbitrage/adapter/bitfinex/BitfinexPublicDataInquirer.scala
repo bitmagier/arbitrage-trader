@@ -12,7 +12,7 @@ import spray.json._
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor}
 
-private[bitfinex] case class BitfinexSymbol(asset: Asset, apiSymbol: String)
+private[bitfinex] case class BitfinexAsset(asset: Asset, apiSymbol: String)
 private[bitfinex] case class BitfinexTradePair(baseAsset: Asset, quoteAsset: Asset, apiSymbol: String) {
   def toTradePair: TradePair = TradePair(baseAsset, quoteAsset)
 }
@@ -38,7 +38,7 @@ private[bitfinex] class BitfinexPublicDataInquirer(globalConfig: GlobalConfig,
 
   val BaseRestEndpointPublic = "https://api-pub.bitfinex.com"
 
-  var bitfinexAssets: Set[BitfinexSymbol] = _
+  var bitfinexAssets: Set[BitfinexAsset] = _
   var bitfinexTradePairs: Set[BitfinexTradePair] = _
 
   def tradePairs: Set[TradePair] = bitfinexTradePairs.map(_.toTradePair)
@@ -59,8 +59,8 @@ private[bitfinex] class BitfinexPublicDataInquirer(globalConfig: GlobalConfig,
 
     if (log.isTraceEnabled) log.trace(s"currency mappings received: $apiSymbolToOfficialCurrencySymbolMapping")
 
-    // currency->name
-    val currencies: Map[String, String] =
+    // currency->verbose name
+    val currencyNames: Map[String, String] =
       Await.result(
         httpGetJson[List[List[Tuple2[String, String]]], JsValue](s"$BaseRestEndpointPublic/v2/conf/pub:map:currency:label"),
         globalConfig.httpTimeout.plus(500.millis)) match {
@@ -71,20 +71,28 @@ private[bitfinex] class BitfinexPublicDataInquirer(globalConfig: GlobalConfig,
         case Right(errorResponse) => throw new RuntimeException(s"query currency labels failed: $errorResponse")
       }
 
-    if (log.isTraceEnabled) log.trace(s"currencies received: $currencies")
+    if (log.isTraceEnabled) log.trace(s"pub:map:currency:label: $currencyNames")
 
-    val rawBitfinexAssets = currencies // apiSymbol, name
-      .map(e => (e._1, apiSymbolToOfficialCurrencySymbolMapping.getOrElse(e._1, e._1))) // apiSymbol, officialSymbol
-
-    rawBitfinexAssets.foreach { e =>
-      Asset.register(e._2, None, None)
+    bitfinexAssets
+    val rawBitfinexCurrencies: Set[String] = Await.result(
+      httpGetJson[List[List[String]], JsValue](s"$BaseRestEndpointPublic/v2/conf/pub:list:currency"),
+      globalConfig.httpTimeout.plus(500.millis)) match {
+      case Left(response) => response.head.toSet
+      case Right(errorResponse) => throw new RuntimeException(s"query currencies failed: $errorResponse")
     }
 
-    bitfinexAssets = rawBitfinexAssets
-      .map(e => BitfinexSymbol(Asset(e._2), e._1))
-      .toSet
+    rawBitfinexCurrencies.foreach { e =>
+      val officialSymbol = apiSymbolToOfficialCurrencySymbolMapping.getOrElse(e, e)
+      val name: Option[String] = currencyNames.get(e)
+      Asset.register(officialSymbol, name, None)
+    }
 
-    if (log.isTraceEnabled) log.trace(s"bitfinexAssets: $bitfinexAssets")
+    bitfinexAssets = rawBitfinexCurrencies.map { e =>
+      val officialSymbol = apiSymbolToOfficialCurrencySymbolMapping.getOrElse(e, e)
+      BitfinexAsset(Asset(officialSymbol), e)
+    }
+
+    if (log.isTraceEnabled) log.trace(s"bitfinex assets: $bitfinexAssets")
 
     val rawTradePairs: List[String] =
       Await.result(
