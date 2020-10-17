@@ -358,7 +358,7 @@ case class Exchange(exchangeName: String,
       log.warn(s"ignoring update [timeout] $e")
     } else {
       log.debug(s"scheduling retry of $e")
-      Future.apply({
+      Future( concurrent.blocking {
         Thread.sleep(20)
         self ! IncomingPublicData(Seq(e))
       })
@@ -402,7 +402,7 @@ case class Exchange(exchangeName: String,
       log.debug(s"ignoring update [timeout] $e")
     } else {
       log.debug(s"scheduling retry of $e")
-      Future.apply({
+      Future( concurrent.blocking {
         Thread.sleep(20)
         self ! IncomingAccountData(Seq(e))
       })
