@@ -33,8 +33,8 @@ class RootGuardian(val config: Config) extends Actor {
 */
   override val supervisorStrategy: AllForOneStrategy = {
     AllForOneStrategy(maxNrOfRetries = 5, withinTimeRange = 20.minutes, loggingEnabled = true) {
-      case e: RestartIntentionException => log.info(s"restart intended: ${e.getMessage}"); Restart
-      case e: Throwable => log.warn(s"Stopping actor system, because:", e); Stop
+      case e: RestartIntentionException => Restart
+      case e: Throwable => Stop
     }
   }
 
