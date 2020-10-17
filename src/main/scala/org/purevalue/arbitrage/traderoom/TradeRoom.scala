@@ -71,7 +71,6 @@ object TradeRoom {
   case class TriggerTrader()
   case class Stop(timeout: Duration)
   case class NewLiquidityTransformationOrder(orderRequest: OrderRequest)
-  case class GetActiveLiquidityTxs()
   case class GetFinishedLiquidityTxs()
   //  case class FindFinishedLiquidityTx(f: FinishedLiquidityTx => Boolean)
   case class JoinTradeRoom(tradeRoom: ActorRef)
@@ -590,8 +589,7 @@ class TradeRoom(val config: Config,
     case c: CancelOrderResult                          => onCancelOrderResult(c)
 
     case GetReferenceTicker()                          => referenceTicker.pipeTo(sender())
-    case GetActiveLiquidityTxs()                       => sender() ! activeLiquidityTx
-    case GetFinishedLiquidityTxs()                     => sender() ! finishedLiquidityTxs
+    case GetFinishedLiquidityTxs()                     => sender() ! finishedLiquidityTxs.keySet
 
     case LogStats()                                    => logStats()
     case HouseKeeping()                                => houseKeeping()

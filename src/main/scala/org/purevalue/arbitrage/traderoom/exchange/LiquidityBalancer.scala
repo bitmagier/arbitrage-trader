@@ -42,8 +42,7 @@ object LiquidityBalancer {
                             orderBook: Map[TradePair, OrderBook],
                             balanceSnapshot: Map[Asset, Balance],
                             liquidityDemand: Map[String, UniqueDemand],
-                            liquidityLocks: Map[UUID, LiquidityLock],
-                            activeLiquidityTx: Map[OrderRef, LiquidityTx])
+                            liquidityLocks: Map[UUID, LiquidityLock])
 
   case class LiquidityTransfer(pair: TradePair, side: TradeSide, buckets: Int, quantity: Double, limit: Double, exchangeRateRating: Double) {
     def supplyAsset: Asset = if (side == Buy) pair.quoteAsset else pair.baseAsset

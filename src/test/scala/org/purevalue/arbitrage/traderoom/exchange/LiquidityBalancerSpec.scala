@@ -58,7 +58,7 @@ class LiquidityBalancerSpec extends AnyWordSpecLike
     LINK -> 500.0
   ).map(e => e._1 -> Balance(e._1, e._2, 0.0))
 
-  val wc = WorkingContext(ExchangeTicker, ExchangeTicker, Map(), BalanceSnapshot, Map(), Map(), Map())
+  val wc = WorkingContext(ExchangeTicker, ExchangeTicker, Map(), BalanceSnapshot, Map(), Map())
   val defaultLiquidityBalancer: LiquidityBalancer = new LiquidityBalancer(Cfg, Cfg.exchanges(ExchangeName), TradePairs, wc)
 
   "LiquidityBalancer" must {

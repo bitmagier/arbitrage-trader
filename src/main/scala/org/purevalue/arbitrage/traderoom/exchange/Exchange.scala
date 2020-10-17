@@ -9,7 +9,7 @@ import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, PoisonPill, Props,
 import akka.pattern.{ask, pipe}
 import akka.util.Timeout
 import org.purevalue.arbitrage._
-import org.purevalue.arbitrage.traderoom.TradeRoom.{GetActiveLiquidityTxs, GetReferenceTicker, JoinTradeRoom, LiquidityTx, OrderRef, TradeRoomJoined}
+import org.purevalue.arbitrage.traderoom.TradeRoom.{GetReferenceTicker, JoinTradeRoom, OrderRef, TradeRoomJoined}
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer.WorkingContext
@@ -485,14 +485,12 @@ case class Exchange(exchangeName: String,
 
     val f1 = (liquidityManager ? GetState()).mapTo[LiquidityManager.State]
     val f2 = (tradeRoom.get ? GetReferenceTicker()).mapTo[TickerSnapshot]
-    val f3 = (tradeRoom.get ? GetActiveLiquidityTxs()).mapTo[Map[OrderRef, LiquidityTx]]
     (for {
       lmState <- f1
       referenceTicker <- f2
-      activeLiquidityTxs <- f3
-    } yield (lmState, referenceTicker.ticker, activeLiquidityTxs)).onComplete {
+    } yield (lmState, referenceTicker.ticker)).onComplete {
 
-      case Success((lmState, referenceTicker, activeLiquidityTxs)) =>
+      case Success((lmState, referenceTicker)) =>
         val wc =
           WorkingContext(
             publicData.ticker,
@@ -500,8 +498,7 @@ case class Exchange(exchangeName: String,
             publicData.orderBook,
             accountData.wallet.balance.map(e => e._1 -> e._2),
             lmState.liquidityDemand,
-            lmState.liquidityLocks,
-            activeLiquidityTxs)
+            lmState.liquidityLocks)
 
         liquidityBalancerRunTempActor = context.actorOf(LiquidityBalancerRun.props(config, exchangeConfig, usableTradePairs, self, tradeRoom.get, wc),
           s"${exchangeConfig.name}-liquidity-balancer-run")
