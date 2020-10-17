@@ -164,14 +164,17 @@ class LiquidityBalancer(val config: Config,
     }
 
     /**
-     * @return (remainingDemandBuckets:Int, remainingSupply:Map[Asset,Int], transfer:Option[LiquidityBucketTransfer])
+     * @return <pre>
+     * (remainingDemandBuckets:Int,
+     *  remainingSupply:Map[Asset,Int],
+     *  transfer:Option[LiquidityBucketTransfer])</pre>
      */
     def findTransfer(demandAsset: Asset,
                      demandBuckets: Int,
                      supply: Map[Asset, Int]):
     (Int, Map[Asset, Int], Option[LiquidityTransfer]) = {
 
-      if (demandBuckets == 0) throw new IllegalArgumentException
+      if (demandBuckets == 0) return (demandBuckets, supply, None)
 
       val transferOptions =
         supply
