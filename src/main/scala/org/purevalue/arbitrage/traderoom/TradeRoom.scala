@@ -590,7 +590,7 @@ class TradeRoom(val config: Config,
     case c: CancelOrderResult                          => onCancelOrderResult(c)
 
     case GetReferenceTicker()                          => referenceTicker.pipeTo(sender())
-    case GetFinishedLiquidityTxs()                     => sender() ! finishedLiquidityTxs.keySet
+    case GetFinishedLiquidityTxs()                     => sender() ! finishedLiquidityTxs.keySet.toSet
 
     case LogStats()                                    => logStats()
     case HouseKeeping()                                => houseKeeping()
