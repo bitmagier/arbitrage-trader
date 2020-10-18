@@ -514,9 +514,11 @@ case class Exchange(exchangeName: String,
   }
 
   def removeOrphanOrder(ref: OrderRef): Unit = {
-    val order = accountData.activeOrders(ref)
+    val order = accountData.activeOrders.get(ref)
     accountData.activeOrders = accountData.activeOrders - ref
-    log.info(s"[$exchangeName] cleaned up orphan finished order $order")
+    if (order.isDefined) {
+      log.info(s"[$exchangeName] cleaned up orphan finished order ${order.get}")
+    }
   }
 
   def determineRealisticLimit(r: DetermineRealisticLimit): Future[Double] = {

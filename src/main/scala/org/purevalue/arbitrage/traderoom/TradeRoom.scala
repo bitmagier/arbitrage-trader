@@ -72,7 +72,6 @@ object TradeRoom {
   case class Stop(timeout: Duration)
   case class NewLiquidityTransformationOrder(orderRequest: OrderRequest)
   case class GetFinishedLiquidityTxs()
-  //  case class FindFinishedLiquidityTx(f: FinishedLiquidityTx => Boolean)
   case class JoinTradeRoom(tradeRoom: ActorRef)
   case class TradeRoomJoined(exchange: String)
 
@@ -113,7 +112,7 @@ class TradeRoom(val config: Config,
   private val activeOrderBundles: collection.concurrent.Map[UUID, OrderBundle] = TrieMap()
   private val activeLiquidityTx: collection.concurrent.Map[OrderRef, LiquidityTx] = TrieMap()
   @volatile private var finishedOrderBundles: List[FinishedOrderBundle] = List()
-  @volatile private var finishedLiquidityTxs: Map[OrderRef, FinishedLiquidityTx] = Map()
+  private val finishedLiquidityTxs: collection.concurrent.Map[OrderRef, FinishedLiquidityTx] = TrieMap()
 
   private var shutdownInitiated: Boolean = false
 
@@ -373,7 +372,9 @@ class TradeRoom(val config: Config,
         val usdEquivalentCoin: Asset = config.exchanges(config.tradeRoom.referenceTickerExchange).usdEquivalentCoin
         val bill: OrderBill = OrderBill.calc(orders, referenceTicker, usdEquivalentCoin, config.exchanges.map(e => (e._1, e._2.feeRate)))
         val finishedOrderBundle = FinishedOrderBundle(bundle, orders, finishTime, bill)
-        finishedOrderBundles = finishedOrderBundle :: finishedOrderBundles
+        synchronized {
+          finishedOrderBundles = finishedOrderBundle :: finishedOrderBundles
+        }
         activeOrderBundles.remove(orderBundleId)
         bundle.orderRefs.foreach {
           e => exchanges(e.exchange) ! RemoveActiveOrder(e)
@@ -408,7 +409,7 @@ class TradeRoom(val config: Config,
         val usdEquivalentCoin: Asset = config.exchanges(order.exchange).usdEquivalentCoin
         val bill: OrderBill = OrderBill.calc(Seq(order), referenceTicker, usdEquivalentCoin, feeRates)
         val finishedLiquidityTx = FinishedLiquidityTx(tx, order, order.lastUpdateTime, bill)
-        finishedLiquidityTxs = finishedLiquidityTxs.updated(finishedLiquidityTx.liquidityTx.orderRef, finishedLiquidityTx)
+        finishedLiquidityTxs.update(finishedLiquidityTx.liquidityTx.orderRef, finishedLiquidityTx)
         activeLiquidityTx.remove(tx.orderRef)
         exchanges(tx.orderRef.exchange) ! RemoveActiveOrder(tx.orderRef)
         exchanges(tx.lockedLiquidity.exchange) ! LiquidityLockClearance(tx.lockedLiquidity.liquidityRequestId)
