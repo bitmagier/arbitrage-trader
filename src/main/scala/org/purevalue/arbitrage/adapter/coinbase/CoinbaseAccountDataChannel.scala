@@ -4,7 +4,7 @@ import java.time.Instant
 import java.util.UUID
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{HttpMethods, HttpResponse, StatusCodes}
@@ -20,7 +20,7 @@ import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.{Balance, CompleteWalletUpdate, ExchangeAccountStreamData}
 import org.purevalue.arbitrage.util.Util.{alignToStepSizeCeil, alignToStepSizeNearest, formatDecimalWithFixPrecision}
-import org.purevalue.arbitrage.util.{HttpUtil, ConnectionLostException}
+import org.purevalue.arbitrage.util.{ConnectionLostException, HttpUtil}
 import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig, Main}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsonParser, RootJsonFormat, enrichAny}
@@ -498,7 +498,6 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
     case NewLimitOrder(o)                        => newLimitOrder(o).pipeTo(sender())
     case CancelOrder(ref)                        => cancelOrder(ref).pipeTo(sender())
     case DeliverAccounts()                       => deliverAccounts()
-    case Status.Failure(e)                       => log.error("failure", e)
   }
   // @formatter:on
 }

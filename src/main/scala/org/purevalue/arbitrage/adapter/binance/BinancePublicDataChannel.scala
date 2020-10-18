@@ -1,7 +1,7 @@
 package org.purevalue.arbitrage.adapter.binance
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{StatusCodes, Uri}
@@ -15,7 +15,7 @@ import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.IncomingPublicData
 import org.purevalue.arbitrage.traderoom.exchange.{ExchangePublicStreamData, Ticker}
 import org.purevalue.arbitrage.util.HttpUtil.httpGetJson
-import org.purevalue.arbitrage.util.{Emoji, ConnectionLostException}
+import org.purevalue.arbitrage.util.{ConnectionLostException, Emoji}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
@@ -248,7 +248,6 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
   override def receive: Receive = {
     case Connect()             => connect()
     case OnStreamsRunning()    => onStreamsRunning()
-    case Status.Failure(cause) => log.error("received failure", cause)
   }
   // @formatter:on
 }

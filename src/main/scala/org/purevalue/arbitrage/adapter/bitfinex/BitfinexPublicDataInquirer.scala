@@ -1,6 +1,6 @@
 package org.purevalue.arbitrage.adapter.bitfinex
 
-import akka.actor.{Actor, ActorSystem, Props, Status}
+import akka.actor.{Actor, ActorSystem, Props}
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.{GetBitfinexAssets, GetBitfinexTradePairs}
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.GetAllTradePairs
@@ -139,8 +139,5 @@ private[bitfinex] class BitfinexPublicDataInquirer(globalConfig: GlobalConfig,
 
     case GetBitfinexAssets() =>
       sender() ! bitfinexAssets
-
-    case Status.Failure(cause) =>
-      log.error("received failure", cause)
   }
 }

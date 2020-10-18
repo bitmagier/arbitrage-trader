@@ -5,7 +5,7 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, PoisonPill, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, PoisonPill, Props}
 import akka.pattern.{ask, pipe}
 import akka.util.Timeout
 import org.purevalue.arbitrage._
@@ -312,7 +312,6 @@ case class Exchange(exchangeName: String,
     case Done                                     => // ignoring Done from cascaded JoinTradeRoom
     case SwitchToInitializedMode()                => switchToInitializedMode()
     case s: TradeRoom.Stop                        => onStop(s)
-    case Status.Failure(cause)                    => log.error("received failure", cause)
   }
   // @formatter:on
 
@@ -568,7 +567,6 @@ case class Exchange(exchangeName: String,
     case LiquidityHouseKeeping()         => liquidityHouseKeeping()
     case LiquidityBalancerRun.Finished() => liquidityHouseKeepingRunning = false
     case s: TradeRoom.Stop               => onStop(s)
-    case Status.Failure(cause)           => log.error("received failure", cause); self ! PoisonPill
   }
   // @formatter:off
 }

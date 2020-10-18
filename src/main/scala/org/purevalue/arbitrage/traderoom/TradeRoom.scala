@@ -6,7 +6,7 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, PoisonPill, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, PoisonPill, Props}
 import akka.pattern.{ask, pipe}
 import akka.util.Timeout
 import org.purevalue.arbitrage._
@@ -16,8 +16,8 @@ import org.purevalue.arbitrage.traderoom.TradeRoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityRequest}
 import org.purevalue.arbitrage.traderoom.exchange.{FullDataSnapshot, LiquidityBalancerStats, OrderBook, Ticker, TickerSnapshot, Wallet}
-import org.purevalue.arbitrage.util.{Emoji, WrongAssumption}
 import org.purevalue.arbitrage.util.Util.formatDecimal
+import org.purevalue.arbitrage.util.{Emoji, WrongAssumption}
 import org.slf4j.LoggerFactory
 
 import scala.collection.concurrent.TrieMap
@@ -596,7 +596,6 @@ class TradeRoom(val config: Config,
     case HouseKeeping()                                => houseKeeping()
     case TriggerTrader()                               => collectTradeContext().pipeTo(fooTrader.get)
     case Stop(timeout)                                 => shutdown(timeout)
-    case Status.Failure(cause)                         => log.error("received failure", cause)
   }
   // @formatter:on
 

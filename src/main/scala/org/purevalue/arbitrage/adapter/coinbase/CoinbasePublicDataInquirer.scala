@@ -1,6 +1,6 @@
 package org.purevalue.arbitrage.adapter.coinbase
 
-import akka.actor.{Actor, ActorSystem, Props, Status}
+import akka.actor.{Actor, ActorSystem, Props}
 import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataInquirer.{CoinbaseBaseRestEndpoint, GetCoinbaseTradePairs}
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.GetAllTradePairs
 import org.purevalue.arbitrage.traderoom.{Asset, TradePair}
@@ -127,7 +127,6 @@ private[coinbase] class CoinbasePublicDataInquirer(globalConfig: GlobalConfig,
     // @formatter:off
     case GetAllTradePairs()      => sender() ! tradePairs // from exchange
     case GetCoinbaseTradePairs() => sender() ! coinbaseTradePairs // from BinancePublicDataChannel
-    case Status.Failure(cause)   => log.error("received failure", cause)
     // @formatter:on
   }
 }

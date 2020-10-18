@@ -1,7 +1,7 @@
 package org.purevalue.arbitrage.adapter.coinbase
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.StatusCodes
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
@@ -231,11 +231,9 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
     if (ws != null && !ws._2.isCompleted) ws._2.success(None)
   }
 
-  // @formatter:off
   override def receive: Receive = {
     case Connect()             => connect()
-    case Status.Failure(cause) => log.error("received failure", cause)
-  } // @formatter:on
+  }
 
 }
 

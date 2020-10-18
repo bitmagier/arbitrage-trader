@@ -1,6 +1,6 @@
 package org.purevalue.arbitrage.adapter.binance
 
-import akka.actor.{Actor, ActorSystem, Props, Status}
+import akka.actor.{Actor, ActorSystem, Props}
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.GetAllTradePairs
@@ -163,7 +163,6 @@ private[binance] class BinancePublicDataInquirer(globalConfig: GlobalConfig,
     // @formatter:off
     case GetAllTradePairs()     => sender() ! tradePairs // from exchange
     case GetBinanceTradePairs() => sender() ! binanceTradePairs // from BinancePublicDataChannel
-    case Status.Failure(cause)  => log.error("received failure", cause)
     // @formatter:on
   }
 }

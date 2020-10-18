@@ -1,9 +1,9 @@
 package org.purevalue.arbitrage
 
-import akka.actor.SupervisorStrategy.{Escalate, Restart, Stop}
-import akka.actor.{Actor, ActorRef, ActorSystem, AllForOneStrategy, OneForOneStrategy, Props, Status}
+import akka.actor.SupervisorStrategy.{Escalate, Restart}
+import akka.actor.{Actor, ActorRef, ActorSystem, AllForOneStrategy, Props}
 import org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator
-import org.purevalue.arbitrage.util.{ConnectionLostException, ExchangeDataOutdated}
+import org.purevalue.arbitrage.util.ExchangeDataOutdated
 import org.slf4j.{Logger, LoggerFactory}
 
 import scala.concurrent.duration.DurationInt
@@ -40,10 +40,7 @@ class UserRootGuardian(val config: Config) extends Actor {
   }
 
   override def receive: Receive = {
-    // @formatter:off
     case TradeRoomInitCoordinator.InitializedTradeRoom(tradeRoom) => this.tradeRoom = tradeRoom
-    case Status.Failure(cause)                                    => log.error("received failure", cause)
-    // @formatter:on
   }
 
   //  // TODO coordinated shutdown

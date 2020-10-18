@@ -4,7 +4,7 @@ import java.time.Instant
 import java.util.UUID
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{HttpMethods, StatusCodes, Uri}
@@ -651,7 +651,6 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
     case SendPing()                              => pingUserStream()
     case NewLimitOrder(o)                        => newLimitOrder(o).pipeTo(sender())
     case CancelOrder(ref)                        => cancelOrder(ref.tradePair, ref.externalOrderId.toLong).pipeTo(sender())
-    case Status.Failure(e)                       => log.error("failure", e)
   }
   // @formatter:oon
 }

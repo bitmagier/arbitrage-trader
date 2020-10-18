@@ -3,7 +3,7 @@ package org.purevalue.arbitrage.trader
 import java.time.{Duration, Instant}
 import java.util.UUID
 
-import akka.actor.{Actor, ActorRef, ActorSystem, Props, Status}
+import akka.actor.{Actor, ActorRef, ActorSystem, Props}
 import com.typesafe.config.Config
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.traderoom._
@@ -196,8 +196,6 @@ class FooTrader(traderConfig: Config, tradeRoom: ActorRef) extends Actor {
         shotsDelivered += 1
         tradeRoom ! b
       }
-
-    case Status.Failure(cause) => log.error("received failure", cause)
   }
 
   log.info("FooTrader started")

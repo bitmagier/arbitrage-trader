@@ -1,7 +1,7 @@
 package org.purevalue.arbitrage.traderoom
 
 import akka.actor.SupervisorStrategy.{Escalate, Restart}
-import akka.actor.{Actor, ActorRef, AllForOneStrategy, OneForOneStrategy, Props}
+import akka.actor.{Actor, ActorRef, OneForOneStrategy, Props}
 import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage.Config

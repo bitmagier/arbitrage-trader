@@ -55,7 +55,7 @@ case class OrderSetPlacer(exchanges: Map[String, ActorRef]) extends Actor {
       }
 
     case Status.Failure(e) =>
-      log.warn(s"MultipleOrderPlacer received a failure: ${e.getMessage}")
+      log.warn(s"OrderSetPlacer received a failure: ${e.getMessage}")
       numFailures += 1
   }
 }

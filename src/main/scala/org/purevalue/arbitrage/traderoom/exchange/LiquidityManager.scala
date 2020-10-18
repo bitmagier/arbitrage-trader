@@ -3,7 +3,6 @@ package org.purevalue.arbitrage.traderoom.exchange
 import java.time.Instant
 import java.util.UUID
 
-import akka.actor.Status.Failure
 import akka.actor.{Actor, ActorRef, PoisonPill, Props}
 import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.traderoom._
@@ -215,7 +214,6 @@ class LiquidityManager(val config: Config,
     case LiquidityLockClearance(id)   => clearLock(id)
     case GetState()                   => houseKeeping(); sender() ! State(liquidityDemand, liquidityLocks)
     case TradeRoom.Stop(_)            => stop()
-    case Failure(e)                   => log.error("received failure", e)
     // @formatter:off
   }
 }

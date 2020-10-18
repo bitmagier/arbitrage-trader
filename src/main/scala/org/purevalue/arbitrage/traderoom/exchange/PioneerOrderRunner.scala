@@ -382,7 +382,7 @@ class PioneerOrderRunner(config: Config,
 
   override def receive: Receive = {
     case Watch() => watchNextEvent()
-    case Failure(e) =>
+    case Failure(e) => // TODO
       log.error(s"PioneerOrderRunner failed", e)
       exchange ! PioneerOrderFailed(e)
       stop()

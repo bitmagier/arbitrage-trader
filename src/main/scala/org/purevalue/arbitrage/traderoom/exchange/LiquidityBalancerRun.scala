@@ -5,7 +5,7 @@ import java.time.Instant
 import akka.actor.{Actor, ActorRef, ActorSystem, PoisonPill, Props}
 import akka.pattern.ask
 import akka.util.Timeout
-import org.purevalue.arbitrage.traderoom.TradeRoom.{FinishedLiquidityTx, GetFinishedLiquidityTxs, NewLiquidityTransformationOrder, OrderRef}
+import org.purevalue.arbitrage.traderoom.TradeRoom.{GetFinishedLiquidityTxs, NewLiquidityTransformationOrder, OrderRef}
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer.WorkingContext
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancerRun.{Finished, Run}
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.OrderBookTooFlatException

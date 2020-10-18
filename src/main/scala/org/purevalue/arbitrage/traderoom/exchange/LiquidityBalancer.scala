@@ -2,7 +2,7 @@ package org.purevalue.arbitrage.traderoom.exchange
 
 import java.util.UUID
 
-import org.purevalue.arbitrage.traderoom.TradeRoom.{LiquidityTx, NewLiquidityTransformationOrder, OrderRef}
+import org.purevalue.arbitrage.traderoom.TradeRoom.NewLiquidityTransformationOrder
 import org.purevalue.arbitrage.traderoom.TradeSide.{Buy, Sell}
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer.{LiquidityTransfer, WorkingContext}
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLock, UniqueDemand}
