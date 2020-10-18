@@ -106,7 +106,7 @@ private[binance] class BinancePublicDataInquirer(globalConfig: GlobalConfig,
 
   def tradePairs: Set[TradePair] = binanceTradePairs.map(_.toTradePair)
 
-  override def preStart(): Unit = {
+  def init(): Unit = {
     import BinanceJsonProtocol._
 
     try {
@@ -150,10 +150,14 @@ private[binance] class BinancePublicDataInquirer(globalConfig: GlobalConfig,
 
       log.debug("received ExchangeInfo")
     } catch {
-      case e: Exception => log.error("preStart failed", e)
+      case e: Exception => log.error("init failed", e)
     }
   }
 
+
+  override def preStart(): Unit = {
+    init()
+  }
 
   override def receive: Receive = {
     // @formatter:off

@@ -1,19 +1,19 @@
 package org.purevalue.arbitrage
 
-import akka.actor.SupervisorStrategy.{Restart, Stop}
-import akka.actor.{Actor, ActorRef, ActorSystem, AllForOneStrategy, Props, Status}
+import akka.actor.SupervisorStrategy.{Escalate, Restart, Stop}
+import akka.actor.{Actor, ActorRef, ActorSystem, AllForOneStrategy, OneForOneStrategy, Props, Status}
 import org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator
-import org.purevalue.arbitrage.util.RestartIntentionException
+import org.purevalue.arbitrage.util.{ConnectionLostException, ExchangeDataOutdated}
 import org.slf4j.{Logger, LoggerFactory}
 
 import scala.concurrent.duration.DurationInt
 
 
-object RootGuardian {
-  def props(config: Config): Props = Props(new RootGuardian(config))
+object UserRootGuardian {
+  def props(config: Config): Props = Props(new UserRootGuardian(config))
 }
-class RootGuardian(val config: Config) extends Actor {
-  private val log: Logger = LoggerFactory.getLogger(classOf[RootGuardian])
+class UserRootGuardian(val config: Config) extends Actor {
+  private val log: Logger = LoggerFactory.getLogger(classOf[UserRootGuardian])
 
   val tradeRoomInitCoordinator: ActorRef = context.actorOf(TradeRoomInitCoordinator.props(config, self), "TradeRoomInitCoordinator")
   var tradeRoom: ActorRef = _
@@ -32,10 +32,11 @@ class RootGuardian(val config: Config) extends Actor {
   - resume the actor
 */
   override val supervisorStrategy: AllForOneStrategy = {
-    AllForOneStrategy(maxNrOfRetries = 5, withinTimeRange = 20.minutes, loggingEnabled = true) {
-      case e: RestartIntentionException => Restart
-      case e: Throwable => Stop
-    }
+    AllForOneStrategy(maxNrOfRetries = 5, withinTimeRange = 2.minutes, loggingEnabled = true) {
+      // @formatter:off
+      case _: ExchangeDataOutdated => Restart
+      case _: Exception            => Escalate
+    } // @formatter:on
   }
 
   override def receive: Receive = {
@@ -61,5 +62,5 @@ object Main extends App {
 
   def config(): Config = _config
 
-  private val rootGuardian = actorSystem.actorOf(RootGuardian.props(config()), "RootGuardian")
+  private val userRootGuardian = actorSystem.actorOf(UserRootGuardian.props(config()), "RootGuardian")
 }

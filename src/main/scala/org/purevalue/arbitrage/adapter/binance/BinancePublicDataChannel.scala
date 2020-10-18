@@ -15,7 +15,7 @@ import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.IncomingPublicData
 import org.purevalue.arbitrage.traderoom.exchange.{ExchangePublicStreamData, Ticker}
 import org.purevalue.arbitrage.util.HttpUtil.httpGetJson
-import org.purevalue.arbitrage.util.{Emoji, RestartIntentionException}
+import org.purevalue.arbitrage.util.{Emoji, ConnectionLostException}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
@@ -63,10 +63,10 @@ object BinancePublicDataChannel {
 
   def props(globalConfig: GlobalConfig,
             exchangeConfig: ExchangeConfig,
-            tradePairs: Set[TradePair],
+            relevantTradePairs: Set[TradePair],
             exchange: ActorRef,
             binancePublicDataInquirer: ActorRef): Props =
-    Props(new BinancePublicDataChannel(globalConfig, exchangeConfig, tradePairs, exchange, binancePublicDataInquirer))
+    Props(new BinancePublicDataChannel(globalConfig, exchangeConfig, relevantTradePairs, exchange, binancePublicDataInquirer))
 }
 /**
  * Binance TradePair-based data channel
@@ -74,7 +74,7 @@ object BinancePublicDataChannel {
  */
 private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
                                                 exchangeConfig: ExchangeConfig,
-                                                tradePairs: Set[TradePair],
+                                                relevantTradePairs: Set[TradePair],
                                                 exchange: ActorRef,
                                                 binancePublicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BinancePublicDataChannel])
@@ -193,7 +193,7 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
     ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow)
     ws._2.future.onComplete { e =>
       log.info(s"connection closed: ${e.get}")
-      throw new RestartIntentionException(s"binance public connection lost") // trigger restart
+      throw new ConnectionLostException(s"binance public connection lost") // trigger restart
     }
     connected = createConnected
   }
@@ -216,7 +216,7 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
     binanceTradePairBySymbol = Await.result(
       (binancePublicDataInquirer ? GetBinanceTradePairs()).mapTo[Set[BinanceTradePair]],
       timeout.duration.plus(500.millis))
-      .filter(e => tradePairs.contains(e.toTradePair))
+      .filter(e => relevantTradePairs.contains(e.toTradePair))
       .map(e => (e.symbol, e))
       .toMap
   }
@@ -225,18 +225,23 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
     deliverBookTickerState()
   }
 
-  override def postStop(): Unit = {
-    if (ws != null && !ws._2.isCompleted) ws._2.success(None)
-  }
 
-  override def preStart() {
-    log.info("starting binance public data channel")
+  def init() {
+    log.info("initializing binance public data channel")
     try {
       initBinanceTradePairBySymbol()
       self ! Connect()
     } catch {
-      case e: Exception => log.error("preStart failed", e)
+      case e: Exception => log.error("init failed", e)
     }
+  }
+
+  override def preStart() {
+    init()
+  }
+
+  override def postStop(): Unit = {
+    if (ws != null && !ws._2.isCompleted) ws._2.success(None)
   }
 
   // @formatter:off

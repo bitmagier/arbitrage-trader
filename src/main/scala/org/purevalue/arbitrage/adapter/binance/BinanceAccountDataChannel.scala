@@ -20,7 +20,7 @@ import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.{Balance, ExchangeAccountStreamData, WalletAssetUpdate, WalletBalanceUpdate}
 import org.purevalue.arbitrage.util.Util.{alignToStepSizeCeil, alignToStepSizeNearest, formatDecimal, formatDecimalWithFixPrecision}
-import org.purevalue.arbitrage.util.{BadCalculationError, RestartIntentionException, WrongAssumption}
+import org.purevalue.arbitrage.util.{BadCalculationError, ConnectionLostException, WrongAssumption}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
@@ -618,29 +618,31 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
     ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow)
     ws._2.future.onComplete { e =>
       log.info(s"connection closed: ${e.get}")
-      throw new RestartIntentionException(s"binance account connection lost") // trigger restart
+      throw new ConnectionLostException(s"binance account connection lost")
     }
     connected = createConnected
   }
 
+  def init(): Unit = {
+    log.info("initializing binance account data channel")
+    try {
+      createListenKey()
+      pullBinanceTradePairs()
+      self ! Connect()
+    } catch {
+      case e: Exception => log.error("init failed", e)
+    }
+  }
+
+  override def preStart(): Unit = {
+    init()
+  }
 
   override def postStop(): Unit = {
     // TODO DELETE /api/v3/userDataStream?listenKey=
     // https://github.com/binance-exchange/binance-official-api-docs/blob/master/user-data-stream.md
     if (ws != null && !ws._2.isCompleted) ws._2.success(None)
   }
-
-  override def preStart(): Unit = {
-    log.info("starting binance account data channel")
-    try {
-      createListenKey()
-      pullBinanceTradePairs()
-      self ! Connect()
-    } catch {
-      case e: Exception => log.error("preStart failed", e)
-    }
-  }
-
 
   // @formatter:off
   override def receive: Receive = {

@@ -109,14 +109,18 @@ private[coinbase] class CoinbasePublicDataInquirer(globalConfig: GlobalConfig,
     tradePairs = coinbaseTradePairs.map(_.toTradePair)
   }
 
-  override def preStart(): Unit = {
+  def init(): Unit = {
     try {
       registerAssets()
       pullTradePairs()
     } catch {
-      case e: Throwable => log.error("CoinbasePublicDataInquirer preStart failed", e)
+      case e: Throwable => log.error("init failed", e)
       // TODO coordinated shudown
     }
+  }
+
+  override def preStart(): Unit = {
+    init()
   }
 
   override def receive: Receive = {

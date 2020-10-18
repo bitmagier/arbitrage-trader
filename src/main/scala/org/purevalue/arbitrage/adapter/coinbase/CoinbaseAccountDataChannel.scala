@@ -20,7 +20,7 @@ import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.{Balance, CompleteWalletUpdate, ExchangeAccountStreamData}
 import org.purevalue.arbitrage.util.Util.{alignToStepSizeCeil, alignToStepSizeNearest, formatDecimalWithFixPrecision}
-import org.purevalue.arbitrage.util.{HttpUtil, RestartIntentionException}
+import org.purevalue.arbitrage.util.{HttpUtil, ConnectionLostException}
 import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig, Main}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsonParser, RootJsonFormat, enrichAny}
@@ -373,7 +373,7 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
     ws = Http().singleWebSocketRequest(WebSocketRequest(CoinbaseWebSocketEndpoint), wsFlow())
     ws._2.future.onComplete { e =>
       log.info(s"connection closed: ${e.get}")
-      throw new RestartIntentionException(s"coinbase account connection lost") // trigger restart
+      throw new ConnectionLostException(s"coinbase account connection lost") // trigger restart
     }
     connected = createConnected
   }
@@ -473,18 +473,22 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
       .pipeTo(exchange)
   }
 
-  override def postStop(): Unit = {
-    if (ws != null && !ws._2.isCompleted) ws._2.success(None)
-  }
-
-  override def preStart(): Unit = {
-    log.info("starting coinbase account data channel")
+  def init(): Unit = {
+    log.info("initializing coinbase account data channel")
     try {
       pullCoinbaseTradePairs()
       self ! Connect()
     } catch {
-      case e: Exception => log.error("preStart failed", e)
+      case e: Exception => log.error("init failed", e)
     }
+  }
+
+  override def preStart(): Unit = {
+    init()
+  }
+
+  override def postStop(): Unit = {
+    if (ws != null && !ws._2.isCompleted) ws._2.success(None)
   }
 
   // @formatter:off

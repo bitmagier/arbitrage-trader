@@ -15,7 +15,7 @@ import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer.WorkingContext
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{GetState, LiquidityLockClearance, LiquidityRequest}
 import org.purevalue.arbitrage.traderoom.exchange.PioneerOrderRunner.{PioneerOrderFailed, PioneerOrderSucceeded}
-import org.purevalue.arbitrage.util.{Emoji, InitSequence, InitStep, RestartIntentionException, WaitingFor}
+import org.purevalue.arbitrage.util.{Emoji, ExchangeDataOutdated, InitSequence, InitStep, WaitingFor}
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
@@ -469,7 +469,7 @@ case class Exchange(exchangeName: String,
   def stalePublicDataWatch(): Unit = {
     val lastSeen: Instant = (publicData.heartbeatTS.toSeq ++ publicData.tickerTS.toSeq ++ publicData.orderBookTS.toSeq).max
     if (Duration.between(lastSeen, Instant.now).compareTo(config.tradeRoom.restarWhenDataStreamIsOlderThan) > 0) {
-      throw new RestartIntentionException(s"${Emoji.Robot}  Killing Exchange actor ($exchangeName) because of outdated data")
+      throw new ExchangeDataOutdated(s"$exchangeName data is outdated")
     }
   }
 
@@ -561,6 +561,8 @@ case class Exchange(exchangeName: String,
     case GetPriceEstimate(tradePair)     => sender() ! publicData.ticker(tradePair).priceEstimate
     case m:DetermineRealisticLimit       => determineRealisticLimit(m).pipeTo(sender())
     case ConvertValue(value, target)     => sender() ! value.convertTo(target, publicData.ticker)
+
+    case AccountDataChannelInitialized() => log.info(s"[$exchangeName] account data channel re-initialized")
 
     case DataHouseKeeping()              => dataHouseKeeping()
     case LiquidityHouseKeeping()         => liquidityHouseKeeping()

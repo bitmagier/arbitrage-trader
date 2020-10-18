@@ -117,12 +117,16 @@ private[bitfinex] class BitfinexPublicDataInquirer(globalConfig: GlobalConfig,
     if (log.isTraceEnabled) log.trace(s"bitfinex trade pairs: $bitfinexTradePairs")
   }
 
-  override def preStart(): Unit = {
+  def init(): Unit = {
     try {
       initTradePairs()
     } catch {
-      case e: Exception => log.error("preStart failed", e)
+      case e: Exception => log.error("init failed", e)
     }
+  }
+
+  override def preStart(): Unit = {
+    init()
   }
 
   override def receive: Receive = {

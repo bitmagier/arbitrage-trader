@@ -16,7 +16,7 @@ import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.GetBi
 import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.IncomingPublicData
 import org.purevalue.arbitrage.traderoom.exchange._
-import org.purevalue.arbitrage.util.{Emoji, RestartIntentionException}
+import org.purevalue.arbitrage.util.{Emoji, ConnectionLostException}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
@@ -170,10 +170,10 @@ object BitfinexPublicDataChannel {
 
   def props(globalConfig: GlobalConfig,
             exchangeConfig: ExchangeConfig,
-            tradePairs: Set[TradePair],
+            relevantTradePairs: Set[TradePair],
             exchange: ActorRef,
             publicDataInquirer: ActorRef): Props =
-    Props(new BitfinexPublicDataChannel(globalConfig, exchangeConfig, tradePairs, exchange, publicDataInquirer))
+    Props(new BitfinexPublicDataChannel(globalConfig, exchangeConfig, relevantTradePairs, exchange, publicDataInquirer))
 }
 
 /**
@@ -182,7 +182,7 @@ object BitfinexPublicDataChannel {
  */
 private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
                                                   exchangeConfig: ExchangeConfig,
-                                                  tradePairs: Set[TradePair],
+                                                  relevantTradePairs: Set[TradePair],
                                                   exchange: ActorRef,
                                                   publicDataInquirer: ActorRef) extends Actor {
   private val log = LoggerFactory.getLogger(classOf[BitfinexPublicDataChannel])
@@ -364,7 +364,7 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
     wsList = List()
     connectedList = List()
     var connectionId: Int = 0
-    tradePairs.grouped(MaximumNumberOfChannelsPerConnection).foreach { partition =>
+    relevantTradePairs.grouped(MaximumNumberOfChannelsPerConnection).foreach { partition =>
       log.debug(s"""starting WebSocket stream partition for Tickers ${partition.mkString(",")}""")
       val subscribeMessages: List[SubscribeRequestJson] = partition.map(e => subscribeTickerMessage(e)).toList
       connectionId += 1
@@ -374,14 +374,14 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
       connectedList = createConnected(ws._1) :: connectedList
     }
 
-    tradePairs.grouped(MaximumNumberOfChannelsPerConnection).foreach { partition =>
+    relevantTradePairs.grouped(MaximumNumberOfChannelsPerConnection).foreach { partition =>
       log.debug(s"""starting WebSocket stream partition for OrderBooks ${partition.mkString(",")}""")
       val subscribeMessages: List[SubscribeRequestJson] = partition.map(e => subscribeOrderBookMessage(e)).toList
       connectionId += 1
       val ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow(connectionId, subscribeMessages))
       ws._2.future.onComplete { e =>
         log.info(s"connection closed: ${e.get}")
-        throw new RestartIntentionException(s"bitfinex public connection lost") // trigger restart
+        throw new ConnectionLostException(s"bitfinex public connection lost") // trigger restart
       }
       wsList = ws :: wsList
       connectedList = createConnected(ws._1) :: connectedList
@@ -394,9 +394,23 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
     bitfinexTradePairByApiSymbol = Await.result(
       (publicDataInquirer ? GetBitfinexTradePairs()).mapTo[Set[BitfinexTradePair]],
       timeout.duration.plus(500.millis))
-      .filter(e => tradePairs.contains(e.toTradePair))
+      .filter(e => relevantTradePairs.contains(e.toTradePair))
       .map(e => (e.apiSymbol, e))
       .toMap
+  }
+
+  def init(): Unit = {
+    log.info("initializing bitfinex public data channel")
+    try {
+      initBitfinexTradePairBySymbol()
+      self ! Connect()
+    } catch {
+      case e: Exception => log.error("init failed", e)
+    }
+  }
+
+  override def preStart() {
+    init()
   }
 
   override def postStop(): Unit = {
@@ -405,16 +419,6 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
       .foreach { c =>
         c._2.success(None) // close open connections
       }
-  }
-
-  override def preStart() {
-    log.info("starting bitfinex public data channel")
-    try {
-      initBitfinexTradePairBySymbol()
-      self ! Connect()
-    } catch {
-      case e: Exception => log.error("preStart failed", e)
-    }
   }
 
   // @formatter:off

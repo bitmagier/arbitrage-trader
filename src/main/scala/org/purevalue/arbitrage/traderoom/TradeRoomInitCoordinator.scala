@@ -1,7 +1,7 @@
 package org.purevalue.arbitrage.traderoom
 
-import akka.actor.SupervisorStrategy.Escalate
-import akka.actor.{Actor, ActorRef, AllForOneStrategy, Props}
+import akka.actor.SupervisorStrategy.{Escalate, Restart}
+import akka.actor.{Actor, ActorRef, AllForOneStrategy, OneForOneStrategy, Props}
 import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage.Config
@@ -11,6 +11,7 @@ import org.purevalue.arbitrage.adapter.coinbase.{CoinbaseAccountDataChannel, Coi
 import org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator.InitializedTradeRoom
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.{Exchange, ExchangeAccountDataChannelInit, ExchangePublicDataChannelInit, ExchangePublicDataInquirerInit}
+import org.purevalue.arbitrage.util.ConnectionLostException
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.Await
@@ -82,7 +83,7 @@ class TradeRoomInitCoordinator(val config: Config,
         (arbitrageAssets.contains(pair.quoteAsset) && pair.baseAsset == config.exchanges(exchange).usdEquivalentCoin || config.exchanges(exchange).reserveAssets.contains(pair.baseAsset))
     }
 
-    def condition4(exchange:String, pair:TradePair): Boolean = {
+    def condition4(exchange: String, pair: TradePair): Boolean = {
       !pair.baseAsset.isFiat && pair.quoteAsset == config.exchanges(exchange).usdEquivalentCoin
     }
 
@@ -147,9 +148,12 @@ class TradeRoomInitCoordinator(val config: Config,
     }
   }
 
-  override val supervisorStrategy: AllForOneStrategy = {
-    AllForOneStrategy() {
-      case _: Throwable => Escalate
+  override val supervisorStrategy: OneForOneStrategy = {
+    OneForOneStrategy() {
+      // @formatter:off
+      case _: ConnectionLostException => Restart
+      case _: Exception               => Escalate
+      // @formatter:on
     }
   }
 
