@@ -243,47 +243,6 @@ private[binance] case class NewOrderResponseAckJson(symbol: String,
   def toNewOrderAck(exchange: String, symbolToTradePair: String => TradePair): NewOrderAck =
     NewOrderAck(exchange, symbolToTradePair(symbol), orderId.toString, UUID.fromString(clientOrderId))
 }
-//case class NewOrderResponseFillJson(price: String, qty: String, commission: String, commissionAsset: String)
-//case class NewOrderResponseFullJson(symbol: String,
-//                                    orderId: Long,
-//                                    orderListId: Long,
-//                                    clientOrderId: String,
-//                                    transactTime: Long,
-//                                    price: String,
-//                                    origQty: String,
-//                                    executedQty: String,
-//                                    cummulativeQuoteQty: String,
-//                                    status: String,
-//                                    timeInForce: String,
-//                                    `type`: String,
-//                                    side: String,
-//                                    fills: Vector[NewOrderResponseFillJson]
-//                                   ) extends IncomingBinanceAccountJson {
-//
-//  def priceAverage(qtyPricePairs: Seq[Tuple2[Double, Double]]): Double =
-//    qtyPricePairs.map(e => e._1 * e._2).sum / qtyPricePairs.map(_._1).sum
-//
-//  def toOrderUpdate(exchangeName: String, resolveTradePair: String => TradePair): OrderUpdate = {
-//    val ts = Instant.ofEpochMilli(transactTime)
-//    OrderUpdate(
-//      orderId.toString,
-//      exchangeName,
-//      resolveTradePair(symbol),
-//      BinanceOrder.toTradeSide(side),
-//      BinanceOrder.toOrderType(`type`),
-//      price.toDouble,
-//      None,
-//      Some(origQty.toDouble),
-//      Some(ts),
-//      Some(BinanceOrder.toOrderStatus(status)),
-//      fills.map(_.qty.toDouble).sum,
-//      Some(priceAverage(fills.map(e => (e.qty.toDouble, e.price.toDouble)))), // Seq(qty, price)
-//      ts)
-//  }
-//
-//  def toNewOrderAck(exchange: String, symbolToTradePair: String => TradePair, ourOrderId: UUID): NewOrderAck =
-//    NewOrderAck(exchange, symbolToTradePair(symbol), orderId.toString, ourOrderId)
-//}
 
 private[binance] case class CancelOrderResponseJson(symbol: String,
                                                     origClientOrderId: String,
@@ -330,8 +289,6 @@ private[binance] object BinanceAccountDataJsonProtocoll extends DefaultJsonProto
   implicit val orderExecutionReportJson: RootJsonFormat[OrderExecutionReportJson] = jsonFormat22(OrderExecutionReportJson)
   implicit val openOrderJson: RootJsonFormat[OpenOrderJson] = jsonFormat14(OpenOrderJson)
   implicit val newOrderResponseAckJson: RootJsonFormat[NewOrderResponseAckJson] = jsonFormat5(NewOrderResponseAckJson)
-  //  implicit val newOrderResponseFillJson: RootJsonFormat[NewOrderResponseFillJson] = jsonFormat4(NewOrderResponseFillJson)
-  //  implicit val newOrderResponseResultJson: RootJsonFormat[NewOrderResponseFullJson] = jsonFormat14(NewOrderResponseFullJson)
   implicit val cancelOrderResponseJson: RootJsonFormat[CancelOrderResponseJson] = jsonFormat13(CancelOrderResponseJson)
   implicit val errorResponseJson: RootJsonFormat[ErrorResponseJson] = jsonFormat2(ErrorResponseJson)
 }
@@ -343,14 +300,14 @@ object BinanceAccountDataChannel {
   private case class QueryAccountInformation()
   private case class OnStreamsRunning()
 
-  def props(globalConfig: GlobalConfig,
+  def props(config: Config,
             exchangeConfig: ExchangeConfig,
             exchange: ActorRef,
             publicDataInquirer: ActorRef): Props =
-    Props(new BinanceAccountDataChannel(globalConfig, exchangeConfig, exchange, publicDataInquirer))
+    Props(new BinanceAccountDataChannel(config, exchangeConfig, exchange, publicDataInquirer))
 }
 
-private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
+private[binance] class BinanceAccountDataChannel(config: Config,
                                                  exchangeConfig: ExchangeConfig,
                                                  exchange: ActorRef,
                                                  exchangePublicDataInquirer: ActorRef) extends Actor {
@@ -394,7 +351,6 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
     case a: AccountInformationJson      => a.toWalletAssetUpdate // deprecated
     case a: OutboundAccountPositionJson => a.toWalletAssetUpdate
     case b: BalanceUpdateJson           => b.toWalletBalanceUpdate
-    // case o: NewOrderResponseFullJson    => o.toOrderUpdate(exchangeConfig.exchangeName, symbol => binanceTradePairsBySymbol(symbol).toTradePair) // expecting, that we have all relevant trade pairs
     case o: OrderExecutionReportJson    => o.toOrderUpdate(exchangeConfig.name, symbol => binanceTradePairsBySymbol(symbol).toTradePair)
     case o: OpenOrderJson               => o.toOrderUpdate(exchangeConfig.name, symbol => binanceTradePairsBySymbol(symbol).toTradePair)
     case o: CancelOrderResponseJson     => o.toOrderUpdate(exchangeConfig.name, symbol => binanceTradePairsBySymbol(symbol).toTradePair)
@@ -420,7 +376,7 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
   def decodeMessage(message: Message): Future[Seq[IncomingBinanceAccountJson]] = message match {
     case msg: TextMessage =>
       try {
-        msg.toStrict(globalConfig.httpTimeout)
+        msg.toStrict(config.global.httpTimeout)
           .map(_.getStrictText)
           .map(s => JsonParser(s).asJsObject())
           .map {
@@ -559,7 +515,7 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
     import BinanceAccountDataJsonProtocoll._
     listenKey = Await.result(
       httpRequestJsonBinanceAccount[ListenKeyJson, JsValue](HttpMethods.POST, s"$BinanceBaseRestEndpoint/api/v3/userDataStream", None, exchangeConfig.secrets, sign = false),
-      globalConfig.httpTimeout.plus(500.millis)) match {
+      config.global.httpTimeout.plus(500.millis)) match {
       case Left(response) => response.listenKey
       case Right(errorResponse) => throw new RuntimeException(s"createListenKey failed: $errorResponse")
     }
@@ -567,7 +523,7 @@ private[binance] class BinanceAccountDataChannel(globalConfig: GlobalConfig,
   }
 
   def pullBinanceTradePairs(): Unit = {
-    implicit val timeout: Timeout = globalConfig.internalCommunicationTimeoutDuringInit
+    implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
     val binanceTradePairs: Set[BinanceTradePair] = Await.result(
       (exchangePublicDataInquirer ? GetBinanceTradePairs()).mapTo[Set[BinanceTradePair]],
       timeout.duration.plus(500.millis))

@@ -21,7 +21,7 @@ import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.{Balance, CompleteWalletUpdate, ExchangeAccountStreamData}
 import org.purevalue.arbitrage.util.Util.{alignToStepSizeCeil, alignToStepSizeNearest, formatDecimalWithFixPrecision}
 import org.purevalue.arbitrage.util.{ConnectionLostException, HttpUtil}
-import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig, Main}
+import org.purevalue.arbitrage.{Config, ExchangeConfig, Main}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsonParser, RootJsonFormat, enrichAny}
 
@@ -242,12 +242,12 @@ object CoinbaseAccountDataChannel {
   private case class Connect()
   private case class OnStreamsRunning()
 
-  def props(globalConfig: GlobalConfig,
+  def props(config: Config,
             exchangeConfig: ExchangeConfig,
             exchange: ActorRef,
-            exchangePublicDataInquirer: ActorRef): Props = Props(new CoinbaseAccountDataChannel(globalConfig, exchangeConfig, exchange, exchangePublicDataInquirer))
+            exchangePublicDataInquirer: ActorRef): Props = Props(new CoinbaseAccountDataChannel(config, exchangeConfig, exchange, exchangePublicDataInquirer))
 }
-private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
+private[coinbase] class CoinbaseAccountDataChannel(config: Config,
                                                    exchangeConfig: ExchangeConfig,
                                                    exchange: ActorRef,
                                                    exchangePublicDataInquirer: ActorRef) extends Actor {
@@ -256,7 +256,7 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
-  val DeliverAccountsSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(1.second, 1500.millis, self, DeliverAccounts())
+  var deliverAccountsSchedule: Option[Cancellable] = None
 
   val UserChannelName: String = "user"
 
@@ -266,7 +266,7 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
   import CoinbaseAccountJsonProtocol._
 
   def pullCoinbaseTradePairs(): Unit = {
-    implicit val timeout: Timeout = globalConfig.internalCommunicationTimeoutDuringInit
+    implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
     val coinbaseTradePairs: Set[CoinbaseTradePair] = Await.result(
       (exchangePublicDataInquirer ? GetCoinbaseTradePairs()).mapTo[Set[CoinbaseTradePair]],
       timeout.duration.plus(500.millis))
@@ -302,7 +302,7 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
 
   def decodeMessage(message: Message): Future[Seq[IncomingCoinbaseAccountJson]] = message match {
     case msg: TextMessage =>
-      msg.toStrict(globalConfig.httpTimeout)
+      msg.toStrict(config.global.httpTimeout)
         .map(_.getStrictText)
         .map(s => JsonParser(s).asJsObject() match {
           case j: JsObject if j.fields.contains("type") =>
@@ -324,7 +324,7 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
     HttpUtil.httpGet(s"$CoinbaseBaseRestEndpoint/time") flatMap {
       case HttpResponse(code, headers, entity, protocol) =>
         (code,
-          entity.toStrict(globalConfig.httpTimeout)
+          entity.toStrict(config.global.httpTimeout)
             .map(_.data.utf8String)) match {
           case (code, entity) if code.isSuccess() => entity.map(parseServerTime)
           case (code, entity) => throw new RuntimeException(s"coinbase: GET /time failed with: $code, $entity")
@@ -338,7 +338,7 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
         val s: Signature = CoinbaseHttpUtil.createSignature(HttpMethods.GET, s"$CoinbaseBaseRestEndpoint/users/self/verify", None, exchangeConfig.secrets, serverTime)
         SubscribeRequestWithAuthJson("subscribe", coinbaseTradePairsByProductId.keys.toSeq, Seq(UserChannelName), s.cbAccessKey, s.cbAccessSign, s.cbAccessTimestamp, s.cbAccessPassphrase)
       },
-      globalConfig.httpTimeout.plus(1.second))
+      config.global.httpTimeout.plus(1.second))
   }
 
   def wsFlow(): Flow[Message, Message, Promise[Option[Message]]] = {
@@ -478,6 +478,11 @@ private[coinbase] class CoinbaseAccountDataChannel(globalConfig: GlobalConfig,
     try {
       pullCoinbaseTradePairs()
       self ! Connect()
+      if (config.tradeRoom.tradeSimulation) {
+        self ! DeliverAccounts()
+      } else {
+        deliverAccountsSchedule = Some(actorSystem.scheduler.scheduleAtFixedRate(1.second, 1500.millis, self, DeliverAccounts()))
+      }
     } catch {
       case e: Exception => log.error("init failed", e)
     }

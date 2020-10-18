@@ -282,13 +282,13 @@ object BitfinexAccountDataChannel {
   private case class Connect()
   private case class OnStreamsRunning()
 
-  def props(globalConfig: GlobalConfig,
+  def props(config: Config,
             exchangeConfig: ExchangeConfig,
             exchange: ActorRef,
             publicDataInquirer: ActorRef): Props =
-    Props(new BitfinexAccountDataChannel(globalConfig, exchangeConfig, exchange, publicDataInquirer))
+    Props(new BitfinexAccountDataChannel(config: Config, exchangeConfig, exchange, publicDataInquirer))
 }
-private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
+private[bitfinex] class BitfinexAccountDataChannel(config: Config,
                                                    exchangeConfig: ExchangeConfig,
                                                    exchange: ActorRef,
                                                    exchangePublicDataInquirer: ActorRef) extends Actor {
@@ -409,7 +409,7 @@ private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
 
   def decodeMessage(message: Message): Future[Seq[IncomingBitfinexAccountJson]] = message match {
     case msg: TextMessage =>
-      msg.toStrict(globalConfig.httpTimeout)
+      msg.toStrict(config.global.httpTimeout)
         .map(_.getStrictText)
         .map {
           case s: String if s.startsWith("{") => decodeJsonObject(s); Nil
@@ -460,7 +460,7 @@ private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
     }
 
   def pullBitfinexTradePairs(): Unit = {
-    implicit val timeout: Timeout = globalConfig.internalCommunicationTimeoutDuringInit
+    implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
     bitfinexTradePairs = Await.result(
       (exchangePublicDataInquirer ? GetBitfinexTradePairs()).mapTo[Set[BitfinexTradePair]],
       timeout.duration.plus(500.millis)
@@ -470,7 +470,7 @@ private[bitfinex] class BitfinexAccountDataChannel(globalConfig: GlobalConfig,
   }
 
   def pullBitfinexAssets(): Unit = {
-    implicit val timeout: Timeout = globalConfig.internalCommunicationTimeoutDuringInit
+    implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
     bitfinexAssets = Await.result(
       (exchangePublicDataInquirer ? GetBitfinexAssets()).mapTo[Set[BitfinexAsset]],
       timeout.duration.plus(500.millis)

@@ -5,12 +5,12 @@ import java.time.{Duration, Instant}
 import akka.actor.{ActorRef, Props}
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.OrderBookTooFlatException
 import org.purevalue.arbitrage.util.Util.formatDecimal
-import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig}
+import org.purevalue.arbitrage.{Config, ExchangeConfig, GlobalConfig}
 
 package object exchange {
   type ExchangePublicDataInquirerInit = Function2[GlobalConfig, ExchangeConfig, Props]
   type ExchangePublicDataChannelInit = Function5[GlobalConfig, ExchangeConfig, Set[TradePair], ActorRef, ActorRef, Props]
-  type ExchangeAccountDataChannelInit = Function4[GlobalConfig, ExchangeConfig, ActorRef, ActorRef, Props]
+  type ExchangeAccountDataChannelInit = Function4[Config, ExchangeConfig, ActorRef, ActorRef, Props]
 
   trait ExchangePublicStreamData extends Retryable
 

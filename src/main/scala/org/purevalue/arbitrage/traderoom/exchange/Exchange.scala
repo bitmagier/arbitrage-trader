@@ -191,7 +191,7 @@ case class Exchange(exchangeName: String,
     if (exchangeConfig.secrets.apiKey.isEmpty || exchangeConfig.secrets.apiSecretKey.isEmpty) {
       throw new RuntimeException(s"Can not start AccountDataManager for exchange $exchangeName because API-Key is not set")
     } else {
-      accountDataChannel = context.actorOf(initStuff.exchangeAccountDataChannelProps(config.global, exchangeConfig, self, publicDataInquirer),
+      accountDataChannel = context.actorOf(initStuff.exchangeAccountDataChannelProps(config, exchangeConfig, self, publicDataInquirer),
         s"${exchangeConfig.name}.AccountDataChannel")
 
       if (tradeSimulationMode) {
