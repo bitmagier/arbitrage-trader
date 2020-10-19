@@ -223,6 +223,7 @@ class LiquidityBalancer(val config: Config,
         }
     }
 
+    if (log.isDebugEnabled) log.debug(s"[${exchangeConfig.name}] fillDemand(unsatisfiedDemand:$unsatisfiedDemand, supplyOverhead:$supplyOverhead)")
 
     findNextTransfer(unsatisfiedDemand, supplyOverhead) match {
       case (_, _, None) => Nil
