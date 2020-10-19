@@ -148,7 +148,7 @@ class LiquidityBalancer(val config: Config,
    *
    * @return total number of (possible) transactions (in buckets) to satisfy the demand
    */
-  def fillDemand(purpose:String,
+  def fillDemand(purpose: String,
                  unsatisfiedDemand: List[(Asset, Int)],
                  supplyOverhead: Map[Asset, Int]): List[LiquidityTransfer] = {
     /**
@@ -165,9 +165,9 @@ class LiquidityBalancer(val config: Config,
 
     /**
      * @return <pre>
-     * (remainingDemandBuckets:Int,
-     *  remainingSupply:Map[Asset,Int],
-     *  transfer:Option[LiquidityBucketTransfer])</pre>
+     *         (remainingDemandBuckets:Int,
+     *         remainingSupply:Map[Asset,Int],
+     *         transfer:Option[LiquidityBucketTransfer])</pre>
      */
     def findTransfer(demandAsset: Asset,
                      demandBuckets: Int,
@@ -318,15 +318,17 @@ class LiquidityBalancer(val config: Config,
       val fillDemandTransfers: Iterable[LiquidityTransfer] = fillDemand("liquidity-demand", unsatisfiedDemand, supplyOverhead)
 
       // fill-up secondary reserve assets in order
-      val minimumKeepReserveAssetBuckets: Int = toBucketsRound(exchangeConfig.usdEquivalentCoin, config.liquidityManager.minimumKeepReserveLiquidityPerAssetInUSD)
+      val minimumKeepReserveAssetBuckets: Int =
+        toBucketsRound(exchangeConfig.usdEquivalentCoin, config.liquidityManager.minimumKeepReserveLiquidityPerAssetInUSD)
       val afterDemandsFilledSupplyOverhead: Map[Asset, Int] =
         calcFinalSupplyOverhead(
           calcRemainingSupply(supplyOverhead, fillDemandTransfers),
           minimumKeepReserveAssetBuckets
-        ).filterNot(_._1 == exchangeConfig.primaryReserveAsset) // primary reserve asset is the default sink, so there is no supply overhead here anymore
+        )
 
       val secondaryReserveFillUpDemand: List[(Asset, Int)] = calcSecondaryReserveFillUpDemand(fillDemandTransfers, minimumKeepReserveAssetBuckets)
-      val secondaryReserveFillUpTransfers: Iterable[LiquidityTransfer] = fillDemand("secondary reserve fill-up", secondaryReserveFillUpDemand, afterDemandsFilledSupplyOverhead)
+      val secondaryReserveFillUpTransfers: Iterable[LiquidityTransfer] =
+        fillDemand("secondary reserve fill-up", secondaryReserveFillUpDemand, afterDemandsFilledSupplyOverhead)
 
       // transfer remaining supply overhead to primary reserve asset
       val primaryReserveInflowTransfers: Iterable[LiquidityTransfer] =
@@ -338,7 +340,7 @@ class LiquidityBalancer(val config: Config,
         squash(fillDemandTransfers ++ secondaryReserveFillUpTransfers ++ primaryReserveInflowTransfers)
       )
     } catch {
-      case e:Exception =>
+      case e: Exception =>
         log.error(s"[${exchangeConfig.name}] liquidity balancer failed.\nAvailable trade pairs: ${tradePairs.toSeq.sortBy(_.toString)}.", e)
         Nil
     }

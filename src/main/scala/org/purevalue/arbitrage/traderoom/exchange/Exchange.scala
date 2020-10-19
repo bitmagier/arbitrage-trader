@@ -216,7 +216,7 @@ case class Exchange(exchangeName: String,
   def switchToInitializedMode(): Unit = {
     context.become(initializedModeReceive)
     dataHouseKeepingSchedule = actorSystem.scheduler.scheduleAtFixedRate(20.seconds, 1.minute, self, DataHouseKeeping())
-    liquidityHouseKeepingSchedule = actorSystem.scheduler.scheduleWithFixedDelay(2.minutes, 30.seconds, self, LiquidityHouseKeeping())
+    liquidityHouseKeepingSchedule = actorSystem.scheduler.scheduleWithFixedDelay(90.seconds, 30.seconds, self, LiquidityHouseKeeping())
     log.info(s"${Emoji.Excited}  [$exchangeName] completely initialized and running")
     tradeRoom.get ! TradeRoomJoined(exchangeName)
   }
