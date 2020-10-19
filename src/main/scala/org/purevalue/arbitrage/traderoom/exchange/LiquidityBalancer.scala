@@ -148,7 +148,8 @@ class LiquidityBalancer(val config: Config,
    *
    * @return total number of (possible) transactions (in buckets) to satisfy the demand
    */
-  def fillDemand(unsatisfiedDemand: List[(Asset, Int)],
+  def fillDemand(purpose:String,
+                 unsatisfiedDemand: List[(Asset, Int)],
                  supplyOverhead: Map[Asset, Int]): List[LiquidityTransfer] = {
     /**
      * @return a number indicating the asset's preference level regarding option [4]
@@ -223,11 +224,11 @@ class LiquidityBalancer(val config: Config,
         }
     }
 
-    if (log.isDebugEnabled) log.debug(s"[${exchangeConfig.name}] fillDemand(unsatisfiedDemand:$unsatisfiedDemand, supplyOverhead:$supplyOverhead)")
+    if (log.isDebugEnabled) log.debug(s"[${exchangeConfig.name}] [$purpose] fillDemand(unsatisfiedDemand:$unsatisfiedDemand, supplyOverhead:$supplyOverhead)")
 
     findNextTransfer(unsatisfiedDemand, supplyOverhead) match {
       case (_, _, None) => Nil
-      case (remainingDemand, remainingSupply, Some(transfer)) => transfer :: fillDemand(remainingDemand, remainingSupply)
+      case (remainingDemand, remainingSupply, Some(transfer)) => transfer :: fillDemand(purpose, remainingDemand, remainingSupply)
     }
   }
 
@@ -314,7 +315,7 @@ class LiquidityBalancer(val config: Config,
       // satisfy noticed liquidity demand
       val unsatisfiedDemand: List[(Asset, Int)] = calcUnsatisfiedDemand.toList.sortBy(_._2)
       val supplyOverhead: Map[Asset, Int] = calcPureSupplyOverhead
-      val fillDemandTransfers: Iterable[LiquidityTransfer] = fillDemand(unsatisfiedDemand, supplyOverhead)
+      val fillDemandTransfers: Iterable[LiquidityTransfer] = fillDemand("liquidity-demand", unsatisfiedDemand, supplyOverhead)
 
       // fill-up secondary reserve assets in order
       val minimumKeepReserveAssetBuckets: Int = toBucketsRound(exchangeConfig.usdEquivalentCoin, config.liquidityManager.minimumKeepReserveLiquidityPerAssetInUSD)
@@ -325,7 +326,7 @@ class LiquidityBalancer(val config: Config,
         ).filterNot(_._1 == exchangeConfig.primaryReserveAsset) // primary reserve asset is the default sink, so there is no supply overhead here anymore
 
       val secondaryReserveFillUpDemand: List[(Asset, Int)] = calcSecondaryReserveFillUpDemand(fillDemandTransfers, minimumKeepReserveAssetBuckets)
-      val secondaryReserveFillUpTransfers: Iterable[LiquidityTransfer] = fillDemand(secondaryReserveFillUpDemand, afterDemandsFilledSupplyOverhead)
+      val secondaryReserveFillUpTransfers: Iterable[LiquidityTransfer] = fillDemand("secondary reserve fill-up", secondaryReserveFillUpDemand, afterDemandsFilledSupplyOverhead)
 
       // transfer remaining supply overhead to primary reserve asset
       val primaryReserveInflowTransfers: Iterable[LiquidityTransfer] =
