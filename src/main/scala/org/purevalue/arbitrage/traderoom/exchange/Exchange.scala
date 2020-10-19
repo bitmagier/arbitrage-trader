@@ -13,7 +13,7 @@ import org.purevalue.arbitrage.traderoom.TradeRoom.{GetReferenceTicker, JoinTrad
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer.WorkingContext
-import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{GetState, LiquidityLockClearance, LiquidityRequest}
+import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{GetState, LiquidityLockClearance, LiquidityLockRequest}
 import org.purevalue.arbitrage.traderoom.exchange.PioneerOrderRunner.{PioneerOrderFailed, PioneerOrderSucceeded}
 import org.purevalue.arbitrage.util.{Emoji, ExchangeDataOutdated, InitSequence, InitStep, WaitingFor}
 
@@ -543,7 +543,7 @@ case class Exchange(exchangeName: String,
 
     case o: NewLimitOrder                => onNewLimitOrder(o)
     case c: CancelOrder                  => onCancelOrder(c)
-    case l: LiquidityRequest             => liquidityManager.forward(l)
+    case l: LiquidityLockRequest         => liquidityManager.forward(l)
     case c: LiquidityLockClearance       => liquidityManager.forward(c)
     case RemoveActiveOrder(ref)          => accountData.activeOrders = accountData.activeOrders - ref
     case RemoveOrphanOrder(ref)          => removeOrphanOrder(ref)

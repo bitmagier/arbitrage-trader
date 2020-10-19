@@ -65,12 +65,13 @@ object LiquidityManager {
 
   case class GetState()
 
-  case class LiquidityRequest(id: UUID,
-                              createTime: Instant,
-                              exchange: String,
-                              tradePattern: String,
-                              coins: Seq[CryptoValue],
-                              dontUseTheseReserveAssets: Set[Asset])
+  case class LiquidityLockRequest(id: UUID,
+                                  createTime: Instant,
+                                  exchange: String,
+                                  tradePattern: String,
+                                  coins: Seq[CryptoValue],
+                                  isForLiquidityTx: Boolean,
+                                  dontUseTheseReserveAssets: Set[Asset])
   case class LiquidityLock(exchange: String,
                            liquidityRequestId: UUID,
                            coins: Seq[CryptoValue],
@@ -117,7 +118,7 @@ class LiquidityManager(val config: Config,
   }
 
   private object LiquidityDemand {
-    def apply(r: LiquidityRequest): LiquidityDemand =
+    def apply(r: LiquidityLockRequest): LiquidityDemand =
       LiquidityDemand(r.exchange, r.tradePattern, r.coins, r.dontUseTheseReserveAssets)
   }
 
@@ -167,7 +168,7 @@ class LiquidityManager(val config: Config,
   }
 
   // Accept, if free (not locked) coins are available.
-  def lockLiquidity(r: LiquidityRequest): Option[LiquidityLock] = {
+  def lockLiquidity(r: LiquidityLockRequest): Option[LiquidityLock] = {
     if (r.coins.exists(e => exchangeConfig.doNotTouchTheseAssets.contains(e.asset))) throw new IllegalArgumentException
     if (r.coins.exists(_.asset.isFiat)) throw new IllegalArgumentException
 
@@ -186,17 +187,19 @@ class LiquidityManager(val config: Config,
     }
   }
 
-  def checkValidity(r: LiquidityRequest): Unit = {
+  def checkValidity(r: LiquidityLockRequest): Unit = {
     if (r.exchange != exchangeConfig.name) throw new IllegalArgumentException
     if (r.coins.exists(c => exchangeConfig.doNotTouchTheseAssets.contains(c.asset))) throw new IllegalArgumentException("liquidity request for a DO-NOT-TOUCH asset")
   }
 
-  def liquidityRequest(r: LiquidityRequest): Unit = {
+  def liquidityLockRequest(r: LiquidityLockRequest): Unit = {
     if (shutdownInitiated) sender ! None
     else {
       houseKeeping()
       checkValidity(r)
-      noticeDemand(LiquidityDemand(r)) // notice/refresh the demand, when 'someone' wants to lock liquidity
+      if (!r.isForLiquidityTx) {
+        noticeDemand(LiquidityDemand(r)) // notice/refresh the demand, when 'someone' wants to lock liquidity for trading
+      }
       sender() ! lockLiquidity(r)
     }
   }
@@ -208,7 +211,7 @@ class LiquidityManager(val config: Config,
 
   override def receive: Receive = {
     // @formatter:off
-    case r: LiquidityRequest          => liquidityRequest(r)
+    case r: LiquidityLockRequest      => liquidityLockRequest(r)
     case LiquidityLockClearance(id)   => clearLock(id)
     case GetState()                   => houseKeeping(); sender() ! State(liquidityDemand, liquidityLocks)
     case TradeRoom.Stop(_)            => stop()

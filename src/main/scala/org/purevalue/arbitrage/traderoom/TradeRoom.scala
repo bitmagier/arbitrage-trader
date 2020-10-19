@@ -14,7 +14,7 @@ import org.purevalue.arbitrage.trader.FooTrader
 import org.purevalue.arbitrage.traderoom.OrderSetPlacer.NewOrderSet
 import org.purevalue.arbitrage.traderoom.TradeRoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
-import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityRequest}
+import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityLockRequest}
 import org.purevalue.arbitrage.traderoom.exchange.{FullDataSnapshot, LiquidityBalancerStats, OrderBook, Ticker, TickerSnapshot, Wallet}
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.util.{Emoji, WrongAssumption}
@@ -147,12 +147,13 @@ class TradeRoom(val config: Config,
         .groupBy(_.exchange)
         .map { x =>
           (exchanges(x._1) ?
-            LiquidityRequest(
+            LiquidityLockRequest(
               UUID.randomUUID(),
               Instant.now(),
               x._1,
               tradePattern,
               x._2.map(c => CryptoValue(c.asset, c.amount)),
+              isForLiquidityTx = false,
               dontUseTheseReserveAssets))
             .mapTo[Option[LiquidityLock]]
         }
@@ -191,12 +192,13 @@ class TradeRoom(val config: Config,
 
     val tradePattern = s"${request.exchange}-liquidityTx"
     val liquidityRequest =
-      LiquidityRequest(
+      LiquidityLockRequest(
         UUID.randomUUID(),
         Instant.now,
         request.exchange,
         tradePattern,
         Seq(request.calcOutgoingLiquidity.cryptoValue),
+        isForLiquidityTx = true,
         Set())
 
     implicit val timeout: Timeout = config.global.httpTimeout.plus(config.global.internalCommunicationTimeout.duration)
