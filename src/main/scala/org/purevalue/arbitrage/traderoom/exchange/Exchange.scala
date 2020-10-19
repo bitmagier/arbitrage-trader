@@ -5,7 +5,7 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, PoisonPill, Props}
+import akka.actor.{Actor, ActorLogging, ActorRef, ActorSystem, Cancellable, PoisonPill, Props}
 import akka.pattern.{ask, pipe}
 import akka.util.Timeout
 import org.purevalue.arbitrage._
@@ -16,7 +16,6 @@ import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer.WorkingConte
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{GetState, LiquidityLockClearance, LiquidityRequest}
 import org.purevalue.arbitrage.traderoom.exchange.PioneerOrderRunner.{PioneerOrderFailed, PioneerOrderSucceeded}
 import org.purevalue.arbitrage.util.{Emoji, ExchangeDataOutdated, InitSequence, InitStep, WaitingFor}
-import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.concurrent.{Await, ExecutionContextExecutor, Future}
@@ -84,7 +83,7 @@ object Exchange {
 case class Exchange(exchangeName: String,
                     config: Config,
                     exchangeConfig: ExchangeConfig,
-                    initStuff: ExchangeInitStuff) extends Actor {
+                    initStuff: ExchangeInitStuff) extends Actor with ActorLogging {
 
   private case class ExchangePublicData(var ticker: Map[TradePair, Ticker],
                                         var orderBook: Map[TradePair, OrderBook],
@@ -96,7 +95,6 @@ case class Exchange(exchangeName: String,
                                          var activeOrders: Map[OrderRef, Order])
 
 
-  private val log = LoggerFactory.getLogger(classOf[Exchange])
   private implicit val actorSystem: ActorSystem = Main.actorSystem
   private implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
@@ -354,7 +352,7 @@ case class Exchange(exchangeName: String,
   def guardedRetry(e: ExchangePublicStreamData): Unit = {
     if (e.applyDeadline.isEmpty) e.applyDeadline = Some(Instant.now.plus(e.MaxApplyDelay))
     if (Instant.now.isAfter(e.applyDeadline.get)) {
-      log.warn(s"ignoring update [timeout] $e")
+      log.warning(s"ignoring update [timeout] $e")
     } else {
       log.debug(s"scheduling retry of $e")
       Future( concurrent.blocking {
@@ -409,7 +407,7 @@ case class Exchange(exchangeName: String,
   }
 
   private def applyAccountData(data: ExchangeAccountStreamData): Unit = {
-    if (log.isTraceEnabled) log.trace(s"applying incoming $data")
+    if (log.isDebugEnabled) log.debug(s"applying incoming $data")
 
     data match {
       case w: WalletBalanceUpdate =>
@@ -458,7 +456,7 @@ case class Exchange(exchangeName: String,
 
   def applySimulatedAccountData(dataset: ExchangeAccountStreamData): Unit = {
     if (!config.tradeRoom.tradeSimulation) throw new RuntimeException
-    log.trace(s"Applying simulation data ...")
+    log.debug(s"Applying simulation data ...")
     applyAccountData(dataset)
   }
 

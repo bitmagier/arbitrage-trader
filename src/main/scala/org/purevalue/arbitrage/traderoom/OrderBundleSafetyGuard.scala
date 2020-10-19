@@ -2,12 +2,13 @@ package org.purevalue.arbitrage.traderoom
 
 import java.time.{Duration, Instant}
 
+import akka.event.Logging
+import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.OrderBookTooFlatException
 import org.purevalue.arbitrage.traderoom.exchange.localExchangeRateRating
 import org.purevalue.arbitrage.util.Emoji
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.{ExchangeConfig, OrderBundleSafetyGuardConfig}
-import org.slf4j.LoggerFactory
 
 sealed trait SafetyGuardDecision
 case object Okay extends SafetyGuardDecision
@@ -20,7 +21,7 @@ case object TotalTransactionUneconomic extends SafetyGuardDecision
 
 class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
                              val exchangesConfig: Map[String, ExchangeConfig]) {
-  private val log = LoggerFactory.getLogger(classOf[OrderBundleSafetyGuard])
+  private val log = Logging(actorSystem.eventStream, getClass)
   private var warningAlreadyWritten: Set[String] = Set()
   private var stats: Map[SafetyGuardDecision, Int] = Map()
 
@@ -33,7 +34,7 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
       val diff = ((order.limit - bestOfferPrice) / bestOfferPrice).abs
       val valid = diff < config.maxOrderLimitTickerVariance
       if (!valid) {
-        log.warn(s"${Emoji.Disagree}  Got OrderBundle with $order where the order-limit is too far away (rate=${formatDecimal(diff, 2)}) from ticker value " +
+        log.warning(s"${Emoji.Disagree}  Got OrderBundle with $order where the order-limit is too far away (rate=${formatDecimal(diff, 2)}) from ticker value " +
           s"(max variance=${formatDecimal(config.maxOrderLimitTickerVariance)})")
         log.debug(s"$order, $ticker")
       }
@@ -48,7 +49,7 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
     val age = Duration.between(lastSeen, Instant.now)
     val r = age.compareTo(config.maxTickerAge) < 0
     if (!r) {
-      log.warn(s"${Emoji.NoSupport}  Sorry, can't let that order through, because we have an aged orderBook or ticker (${age.toSeconds} s) for ${o.exchange} here.")
+      log.warning(s"${Emoji.NoSupport}  Sorry, can't let that order through, because we have an aged orderBook or ticker (${age.toSeconds} s) for ${o.exchange} here.")
       log.debug(s"${Emoji.NoSupport}  $o")
     }
     r
@@ -117,7 +118,7 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
           )
           reserveAssetRatings = reserveAssetRatings + (r -> rating)
         } catch {
-          case e: OrderBookTooFlatException => log.trace(s"order book too flat: ${e.tradePair} ${e.side}") // so cannot use that reserve asset
+          case e: OrderBookTooFlatException => log.debug(s"order book too flat: ${e.tradePair} ${e.side}") // so cannot use that reserve asset
         }
       }
 
@@ -133,7 +134,7 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
       val msg = s"${Emoji.EyeRoll}  Sorry, no suitable reserve asset found to support reserve liquidity conversion " +
         s"from/to ${unableToProvideConversionForCoin.get.asset} on ${unableToProvideConversionForCoin.get.exchange}."
       if (!warningAlreadyWritten.contains(msg)) {
-        log.warn(s"${Emoji.EyeRoll}  Sorry, no suitable reserve asset found to support reserve liquidity conversion " +
+        log.warning(s"${Emoji.EyeRoll}  Sorry, no suitable reserve asset found to support reserve liquidity conversion " +
           s"from/to ${unableToProvideConversionForCoin.get.asset} on ${unableToProvideConversionForCoin.get.exchange}.")
         log.debug(s"^^^ Regarding $t")
         warningAlreadyWritten = warningAlreadyWritten + msg
@@ -191,7 +192,7 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
     val activeExchangeOrderPairs: Iterable[(String, TradePair)] =
       tc.activeOrderBundleOrders.map(o => (o.exchange, o.tradePair))
     if (bundle.orderRequests.exists(o => activeExchangeOrderPairs.exists(e => e._1 == o.exchange && e._2 == o.pair))) {
-      if (log.isDebugEnabled())
+      if (log.isDebugEnabled)
         log.debug(s"rejecting new $bundle because another order of same exchange+tradepair is still active. Active trade pairs: $activeExchangeOrderPairs")
       else
         log.info(s"${Emoji.Disagree} rejecting new order bundle because same exchange+tradepair is still active")
@@ -204,13 +205,13 @@ class OrderBundleSafetyGuard(val config: OrderBundleSafetyGuardConfig,
     def unsafe(d: SafetyGuardDecision): (Boolean, SafetyGuardDecision, Option[Double]) = (false, d, None)
 
     if (bundle.bill.sumUSDAtCalcTime <= 0) {
-      log.warn(s"${Emoji.Disagree}  Got OrderBundle with negative balance: ${bundle.bill.sumUSDAtCalcTime}. I will not execute that one!")
+      log.warning(s"${Emoji.Disagree}  Got OrderBundle with negative balance: ${bundle.bill.sumUSDAtCalcTime}. I will not execute that one!")
       log.debug(s"$bundle")
       unsafe(NegativeBalance)
     } else if (!bundle.orderRequests.forall(dataUpToDate)) {
       unsafe(TickerOutdated)
     } else if (bundle.bill.sumUSDAtCalcTime >= config.maximumReasonableWinPerOrderBundleUSD) {
-      log.warn(s"${Emoji.Disagree}  Got OrderBundle with unbelievable high estimated win of ${formatDecimal(bundle.bill.sumUSDAtCalcTime)} USD. I will rather not execute that one - seem to be a bug!")
+      log.warning(s"${Emoji.Disagree}  Got OrderBundle with unbelievable high estimated win of ${formatDecimal(bundle.bill.sumUSDAtCalcTime)} USD. I will rather not execute that one - seem to be a bug!")
       log.debug(s"${Emoji.Disagree}  $bundle")
       unsafe(TooFantasticWin)
     } else if (!bundle.orderRequests.forall(orderLimitCloseToTicker))

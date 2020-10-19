@@ -1,9 +1,8 @@
 package org.purevalue.arbitrage.traderoom
 
-import akka.actor.{Actor, ActorRef, PoisonPill, Props, Status}
+import akka.actor.{Actor, ActorLogging, ActorRef, PoisonPill, Props, Status}
 import org.purevalue.arbitrage.traderoom.OrderSetPlacer.NewOrderSet
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.{CancelOrder, CancelOrderResult, NewLimitOrder, NewOrderAck}
-import org.slf4j.LoggerFactory
 
 /**
  * Places all orders in parallel.
@@ -14,8 +13,7 @@ object OrderSetPlacer {
 
   def props(exchanges: Map[String, ActorRef]): Props = Props(new OrderSetPlacer(exchanges))
 }
-case class OrderSetPlacer(exchanges: Map[String, ActorRef]) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[OrderSetPlacer])
+case class OrderSetPlacer(exchanges: Map[String, ActorRef]) extends Actor with ActorLogging {
   private var numRequests: Int = _
   private var numFailures: Int = 0
   private var answers: List[NewOrderAck] = List()
@@ -49,13 +47,13 @@ case class OrderSetPlacer(exchanges: Map[String, ActorRef]) extends Actor {
 
     case c: CancelOrderResult =>
       expectedCancelOrderResults -= 1
-      if (c.success) log.info(s"$c") else log.warn(s"$c")
+      if (c.success) log.info(s"$c") else log.warning(s"$c")
       if (expectedCancelOrderResults == 0) { // nothing more to do here
         self ! PoisonPill
       }
 
     case Status.Failure(e) =>
-      log.warn(s"OrderSetPlacer received a failure: ${e.getMessage}")
+      log.warning(s"OrderSetPlacer received a failure: ${e.getMessage}")
       numFailures += 1
   }
 }

@@ -4,7 +4,7 @@ import java.time.Instant
 import java.util.UUID
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props}
+import akka.actor.{Actor, ActorLogging, ActorRef, ActorSystem, Cancellable, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{HttpMethods, HttpResponse, StatusCodes}
@@ -22,7 +22,6 @@ import org.purevalue.arbitrage.traderoom.exchange.{Balance, CompleteWalletUpdate
 import org.purevalue.arbitrage.util.Util.{alignToStepSizeCeil, alignToStepSizeNearest, formatDecimalWithFixPrecision}
 import org.purevalue.arbitrage.util.{ConnectionLostException, HttpUtil}
 import org.purevalue.arbitrage.{Config, ExchangeConfig, Main}
-import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsonParser, RootJsonFormat, enrichAny}
 
 import scala.concurrent.duration.DurationInt
@@ -250,8 +249,7 @@ object CoinbaseAccountDataChannel {
 private[coinbase] class CoinbaseAccountDataChannel(config: Config,
                                                    exchangeConfig: ExchangeConfig,
                                                    exchange: ActorRef,
-                                                   exchangePublicDataInquirer: ActorRef) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[CoinbaseAccountDataChannel])
+                                                   exchangePublicDataInquirer: ActorRef) extends Actor with ActorLogging {
 
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
@@ -286,7 +284,7 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
   def decodeJsObject(messageType: String, j: JsObject): Seq[IncomingCoinbaseAccountJson] = {
     messageType match {
       case "subscriptions" =>
-        if (log.isTraceEnabled) log.trace(j.compactPrint)
+        if (log.isDebugEnabled) log.debug(j.compactPrint)
         self ! OnStreamsRunning()
         Nil
       case "received"      => Seq(j.convertTo[CoinbaseOrderReceivedJson])
@@ -296,7 +294,7 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
       case "match"         => Nil // ignore: A trade occurred between two orders.
       case "activate"      => Nil // ignore: An activate message is sent when a stop order is placed.
       case "error"         => throw new RuntimeException(j.prettyPrint)
-      case other           => log.warn(s"received unhandled message type: $j"); Nil
+      case other           => log.warning(s"received unhandled message type: $j"); Nil
     }
   } // // @formatter:on
 
@@ -309,11 +307,11 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
             import DefaultJsonProtocol._
             decodeJsObject(j.fields("type").convertTo[String], j)
           case j: JsObject =>
-            log.warn(s"Unknown json object received: $j")
+            log.warning(s"Unknown json object received: $j")
             Nil
         })
     case _ =>
-      log.warn(s"Received non TextMessage")
+      log.warning(s"Received non TextMessage")
       Future.successful(Nil)
   }
 
@@ -436,7 +434,7 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
       ) map {
         case (statusCode, j) if statusCode.isSuccess() => CancelOrderResult(exchangeConfig.name, ref.tradePair, productId, success = true, orderUnknown = false, Some(s"HTTP-$statusCode $j"))
         case (statusCode, j) =>
-          log.warn(s"DELETE $uri failed with: $statusCode, $j")
+          log.warning(s"DELETE $uri failed with: $statusCode, $j")
           CancelOrderResult(exchangeConfig.name, ref.tradePair, productId, success = false, orderUnknown = true, Some(s"HTTP-$statusCode $j")) // TODO decode error message to check if reason = Order unknown. For now we always say orderUnknown=true here
       }
     }
@@ -460,7 +458,7 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
                 .toMap
             ))
           case Right(error) =>
-            log.warn(s"coinbase: queryAccounts() failed: $error")
+            log.warning(s"coinbase: queryAccounts() failed: $error")
             Nil
         }
         .map(e => IncomingAccountData(e))

@@ -1,7 +1,7 @@
 package org.purevalue.arbitrage.adapter.binance
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, Props}
+import akka.actor.{Actor, ActorLogging, ActorRef, ActorSystem, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{StatusCodes, Uri}
@@ -16,7 +16,6 @@ import org.purevalue.arbitrage.traderoom.exchange.Exchange.IncomingPublicData
 import org.purevalue.arbitrage.traderoom.exchange.{ExchangePublicStreamData, Ticker}
 import org.purevalue.arbitrage.util.HttpUtil.httpGetJson
 import org.purevalue.arbitrage.util.{ConnectionLostException, Emoji}
-import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
 import scala.collection.Set
@@ -76,8 +75,7 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
                                                 exchangeConfig: ExchangeConfig,
                                                 relevantTradePairs: Set[TradePair],
                                                 exchange: ActorRef,
-                                                binancePublicDataInquirer: ActorRef) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[BinancePublicDataChannel])
+                                                binancePublicDataInquirer: ActorRef) extends Actor with ActorLogging {
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
@@ -121,11 +119,11 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
         j.fields("data").convertTo[RawBookTickerStreamJson] match {
           case t if binanceTradePairBySymbol.contains(t.s) => Seq(t)
           case other =>
-            if (log.isTraceEnabled) log.trace(s"ignoring data message, because its not in our symbol list: $other")
+            if (log.isDebugEnabled) log.debug(s"ignoring data message, because its not in our symbol list: $other")
             Nil
         }
       case name: String =>
-        log.warn(s"${Emoji.Confused}  Unhandled data stream '$name' received: $j")
+        log.warning(s"${Emoji.Confused}  Unhandled data stream '$name' received: $j")
         Nil
     }
   }
@@ -141,11 +139,11 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
           case j: JsObject if j.fields.contains("stream") =>
             decodeDataMessage(j)
           case j: JsObject =>
-            log.warn(s"Unknown json object received: $j")
+            log.warning(s"Unknown json object received: $j")
             Nil
         })
     case _ =>
-      log.warn(s"Received non TextMessage")
+      log.warning(s"Received non TextMessage")
       Future.successful(Nil)
   }
 

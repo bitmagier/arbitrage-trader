@@ -4,7 +4,7 @@ import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
 
-import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, PoisonPill, Props}
+import akka.actor.{Actor, ActorLogging, ActorRef, ActorSystem, Cancellable, PoisonPill, Props}
 import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage.traderoom.TradeRoom._
@@ -14,7 +14,6 @@ import org.purevalue.arbitrage.traderoom.exchange.PioneerOrderRunner.{PioneerOrd
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.util.{InitSequence, InitStep, Util, WaitingFor}
 import org.purevalue.arbitrage.{Config, ExchangeConfig, Main}
-import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor, Future}
@@ -36,8 +35,7 @@ object PioneerOrderRunner {
 }
 class PioneerOrderRunner(config: Config,
                          exchangeConfig: ExchangeConfig,
-                         exchange: ActorRef) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[PioneerOrderRunner])
+                         exchange: ActorRef) extends Actor with ActorLogging {
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
@@ -169,7 +167,7 @@ class PioneerOrderRunner(config: Config,
           exchange ! RemoveActiveOrder(o.ref)
 
         case Some(order) =>
-          log.trace(s"[$exchangeName] pioneer order in progress: $order")
+          log.debug(s"[$exchangeName] pioneer order in progress: $order")
           validationMethod(o.request, order)
 
         case None => // nop
@@ -208,7 +206,7 @@ class PioneerOrderRunner(config: Config,
           log.debug(s"[$exchangeName] expected wallet balance arrived")
           arrival.arrived()
         } else {
-          log.trace(s"diff between expected minus actual balance is $balanceDiffInUSD")
+          log.debug(s"diff between expected minus actual balance is $balanceDiffInUSD")
         }
       }
     }
@@ -228,7 +226,7 @@ class PioneerOrderRunner(config: Config,
       else if (pioneerOrder3.get().isDefined && !order3Validated.isArrived)
         watchOrder(pioneerOrder3.get().get, (r, o) => validateCanceledPioneerOrder(r, o), order3Validated)
       else
-        log.trace(s"nothing to watch: orders: [\n${pioneerOrder1.get()}, \n${pioneerOrder2.get()}, \n${pioneerOrder3.get()}] \n" +
+        log.debug(s"nothing to watch: orders: [\n${pioneerOrder1.get()}, \n${pioneerOrder2.get()}, \n${pioneerOrder3.get()}] \n" +
           s"validated: [${order1Validated.isArrived}, ${order2Validated.isArrived}, ${order3Validated.isArrived}]")
     } catch {
       case e: Throwable =>

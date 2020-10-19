@@ -3,12 +3,11 @@ package org.purevalue.arbitrage.trader
 import java.time.{Duration, Instant}
 import java.util.UUID
 
-import akka.actor.{Actor, ActorRef, ActorSystem, Props}
+import akka.actor.{Actor, ActorLogging, ActorRef, ActorSystem, Props}
 import com.typesafe.config.Config
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.OrderLimitChooser
-import org.slf4j.LoggerFactory
 
 import scala.concurrent.ExecutionContextExecutor
 
@@ -19,8 +18,7 @@ object FooTrader {
 /**
  * A basic trader to evolve the concept
  */
-class FooTrader(traderConfig: Config, tradeRoom: ActorRef) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[FooTrader])
+class FooTrader(traderConfig: Config, tradeRoom: ActorRef) extends Actor with ActorLogging {
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 

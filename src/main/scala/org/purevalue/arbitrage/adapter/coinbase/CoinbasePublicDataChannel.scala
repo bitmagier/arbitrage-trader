@@ -1,7 +1,7 @@
 package org.purevalue.arbitrage.adapter.coinbase
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, Props}
+import akka.actor.{Actor, ActorLogging, ActorRef, ActorSystem, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.StatusCodes
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
@@ -15,7 +15,6 @@ import org.purevalue.arbitrage.traderoom.exchange.Exchange.IncomingPublicData
 import org.purevalue.arbitrage.traderoom.exchange.{Ask, Bid, ExchangePublicStreamData, OrderBook, OrderBookUpdate, Ticker}
 import org.purevalue.arbitrage.util.ConnectionLostException
 import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig, Main}
-import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsonParser, RootJsonFormat, enrichAny}
 
 import scala.concurrent.duration.DurationInt
@@ -101,8 +100,7 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
                                                   exchangeConfig: ExchangeConfig,
                                                   relevantTradePairs: Set[TradePair],
                                                   exchange: ActorRef,
-                                                  coinbasePublicDataInquirer: ActorRef) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[CoinbasePublicDataChannel])
+                                                  coinbasePublicDataInquirer: ActorRef) extends Actor with ActorLogging {
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
@@ -125,14 +123,14 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
 
   // @formatter:off
   def decodeJsObject(messageType: String, j: JsObject): Seq[IncomingPublicCoinbaseJson] = {
-    if (log.isTraceEnabled) log.trace(s"received: $j")
+    if (log.isDebugEnabled) log.debug(s"received: $j")
     messageType match {
       case "subscriptions"   => log.debug(s"$j"); Nil
       case TickerChannelName => Seq(j.convertTo[TickerJson])
       case "snapshot"        => Seq(j.convertTo[OrderBookSnapshotJson])
       case "l2update"        => Seq(j.convertTo[OrderBookUpdateJson])
       case "error"           => throw new RuntimeException(j.prettyPrint)
-      case other             => log.warn("received unhandled messageType: $j"); Nil
+      case other             => log.warning("received unhandled messageType: $j"); Nil
     }
   } // @formatter:on
 
@@ -144,11 +142,11 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
           case j: JsObject if j.fields.contains("type") =>
             decodeJsObject(j.fields("type").convertTo[String], j)
           case j: JsObject =>
-            log.warn(s"Unknown json object received: $j")
+            log.warning(s"Unknown json object received: $j")
             Nil
         })
     case _ =>
-      log.warn(s"Received non TextMessage")
+      log.warning(s"Received non TextMessage")
       Future.successful(Nil)
   }
 

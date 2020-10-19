@@ -2,7 +2,7 @@ package org.purevalue.arbitrage.traderoom.exchange
 
 import java.time.Instant
 
-import akka.actor.{Actor, ActorRef, ActorSystem, PoisonPill, Props}
+import akka.actor.{Actor, ActorLogging, ActorRef, ActorSystem, PoisonPill, Props}
 import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage.traderoom.TradeRoom.{GetFinishedLiquidityTxs, NewLiquidityTransformationOrder, OrderRef}
@@ -11,7 +11,6 @@ import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancerRun.{Finished
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.OrderBookTooFlatException
 import org.purevalue.arbitrage.traderoom.{TradePair, TradeRoom}
 import org.purevalue.arbitrage.{Config, ExchangeConfig, Main}
-import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor, Future}
@@ -39,9 +38,8 @@ class LiquidityBalancerRun(val config: Config,
                            val tradePairs: Set[TradePair],
                            val parent: ActorRef,
                            val tradeRoom: ActorRef,
-                           val wc: WorkingContext) extends Actor {
+                           val wc: WorkingContext) extends Actor with ActorLogging {
 
-  private val log = LoggerFactory.getLogger(classOf[LiquidityBalancerRun])
   private implicit val actorSystem: ActorSystem = Main.actorSystem
   private implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
@@ -99,7 +97,7 @@ class LiquidityBalancerRun(val config: Config,
       ).onComplete {
         // @formatter:off
         case Success(orderRefs)                    => waitUntilLiquidityOrdersFinished(orderRefs)
-        case Failure(e: OrderBookTooFlatException) => log.warn(s"[to be improved] [${exchangeConfig.name}] Cannot perform liquidity housekeeping because the order book of trade pair ${e.tradePair} was too flat")
+        case Failure(e: OrderBookTooFlatException) => log.warning(s"[to be improved] [${exchangeConfig.name}] Cannot perform liquidity housekeeping because the order book of trade pair ${e.tradePair} was too flat")
         case Failure(e)                            => log.error(s"[${exchangeConfig.name}] liquidity houskeeping failed", e)
         // @formatter:on
       }

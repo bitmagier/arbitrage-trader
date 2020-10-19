@@ -3,13 +3,15 @@ package org.purevalue.arbitrage.adapter.bitfinex
 import java.time.Instant
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, Props}
+import akka.actor.{Actor, ActorLogging, ActorRef, ActorSystem, Props}
+import akka.event.Logging
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{StatusCodes, Uri}
 import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
+import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataChannel.Connect
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.GetBitfinexTradePairs
@@ -17,7 +19,6 @@ import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.IncomingPublicData
 import org.purevalue.arbitrage.traderoom.exchange._
 import org.purevalue.arbitrage.util.{ConnectionLostException, Emoji}
-import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
 import scala.collection.concurrent.TrieMap
@@ -82,10 +83,9 @@ private[bitfinex] case class RawOrderBookSnapshotJson(channelId: Int, values: Li
 private[bitfinex] object RawOrderBookSnapshotJson {
   def apply(v: Tuple2[Int, List[RawOrderBookEntryJson]]): RawOrderBookSnapshotJson = RawOrderBookSnapshotJson(v._1, v._2)
 }
-
-private[bitfinex] case class RawOrderBookUpdateJson(channelId: Int, value: RawOrderBookEntryJson) extends IncomingPublicBitfinexJson { // [channelId, [price, count, amount]]
-  private val log = LoggerFactory.getLogger(classOf[RawOrderBookUpdateJson])
-
+// [channelId, [price, count, amount]]
+private[bitfinex] case class RawOrderBookUpdateJson(channelId: Int, value: RawOrderBookEntryJson) extends IncomingPublicBitfinexJson {
+  private val log = Logging(actorSystem.eventStream, getClass)
   /*
     Algorithm to create and keep a book instance updated
 
@@ -105,7 +105,7 @@ private[bitfinex] case class RawOrderBookUpdateJson(channelId: Int, value: RawOr
       else if (value.amount < 0)
         OrderBookUpdate(exchange, tradePair, List(), List(Ask(value.price, -value.amount)))
       else {
-        log.warn(s"undefined update case: $this")
+        log.warning(s"undefined update case: $this")
         OrderBookUpdate(exchange, tradePair, List(), List())
       }
     } else if (value.count == 0) {
@@ -114,11 +114,11 @@ private[bitfinex] case class RawOrderBookUpdateJson(channelId: Int, value: RawOr
       else if (value.amount == -1.0d)
         OrderBookUpdate(exchange, tradePair, List(), List(Ask(value.price, 0.0d))) // quantity == 0.0 means remove price level in our OrderBook
       else {
-        log.warn(s"undefined update case: $this")
+        log.warning(s"undefined update case: $this")
         OrderBookUpdate(exchange, tradePair, List(), List())
       }
     } else {
-      log.warn(s"undefined update case: $this")
+      log.warning(s"undefined update case: $this")
       OrderBookUpdate(exchange, tradePair, List(), List())
     }
   }
@@ -184,8 +184,7 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
                                                   exchangeConfig: ExchangeConfig,
                                                   relevantTradePairs: Set[TradePair],
                                                   exchange: ActorRef,
-                                                  publicDataInquirer: ActorRef) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[BitfinexPublicDataChannel])
+                                                  publicDataInquirer: ActorRef) extends Actor with ActorLogging {
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
@@ -222,7 +221,7 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
 
   def handleEvent(connectionId: Int, event: String, j: JsObject): Unit = event match {
     case "subscribed" =>
-      if (log.isTraceEnabled) log.trace(s"received SubscribeResponse message: $j")
+      if (log.isDebugEnabled) log.debug(s"received SubscribeResponse message: $j")
       val channel = j.fields("channel").convertTo[String]
       val channelId = j.fields("chanId").convertTo[Int]
 
@@ -250,7 +249,7 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
       }
       log.error(s"received error ($errorName) message: $j")
     case "info" => log.debug(s"received info message: $j")
-    case _ => log.warn(s"received unidentified message: $j")
+    case _ => log.warning(s"received unidentified message: $j")
   }
 
   def decodeJsonObject(s: String): IncomingPublicBitfinexJson = JsonMessage(JsonParser(s).asJsObject)
@@ -305,20 +304,20 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
           handleEvent(connectionId, j.fields("event").convertTo[String], j)
           Nil
         case j: JsonMessage =>
-          log.warn(s"Unhandled JsonMessage received: $j")
+          log.warning(s"Unhandled JsonMessage received: $j")
           Nil
         case _: UnknownChannelDataMessage =>
           Nil
         case m: IncomingPublicBitfinexJson =>
-          if (log.isTraceEnabled) log.trace(s"received: $m")
+          if (log.isDebugEnabled) log.debug(s"received: $m")
           Seq(m)
         case other =>
-          log.warn(s"${Emoji.Confused}  Unhandled object $other")
+          log.warning(s"${Emoji.Confused}  Unhandled object $other")
           Nil
       }
 
     case msg: Message =>
-      log.warn(s"Unexpected kind of message received: $msg")
+      log.warning(s"Unexpected kind of message received: $msg")
       Future.successful(Nil)
   }
 

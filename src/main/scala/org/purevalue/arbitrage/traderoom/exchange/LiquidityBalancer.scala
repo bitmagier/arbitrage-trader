@@ -2,6 +2,8 @@ package org.purevalue.arbitrage.traderoom.exchange
 
 import java.util.UUID
 
+import akka.event.Logging
+import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.traderoom.TradeRoom.NewLiquidityTransformationOrder
 import org.purevalue.arbitrage.traderoom.TradeSide.{Buy, Sell}
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer.{LiquidityTransfer, WorkingContext}
@@ -9,7 +11,6 @@ import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLoc
 import org.purevalue.arbitrage.traderoom.{Asset, CryptoValue, OrderRequest, TradePair, TradeSide}
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.{Config, ExchangeConfig}
-import org.slf4j.LoggerFactory
 
 import scala.annotation.tailrec
 
@@ -20,7 +21,7 @@ case class NoGoodManufacturingOptionAvailable(exchange: String, demandAsset: Ass
 case class LiquidityRebalanceCurrentlyLossy(exchange: String, source: Asset, destination: Asset) extends LBStatisticEvent
 
 object LiquidityBalancerStats {
-  private val log = LoggerFactory.getLogger(LiquidityBalancerStats.getClass)
+  private val log = Logging(actorSystem.eventStream, getClass)
   private var stats: Map[LBStatisticEvent, Int] = Map()
 
   def inc(e: LBStatisticEvent): Unit = {
@@ -54,8 +55,7 @@ class LiquidityBalancer(val config: Config,
                         val exchangeConfig: ExchangeConfig,
                         val tradePairs: Set[TradePair],
                         val wc: WorkingContext) {
-
-  private val log = LoggerFactory.getLogger(classOf[LiquidityBalancer])
+  private val log = Logging(actorSystem.eventStream, getClass)
 
   // tx granularity = asset's bucket size
   def bucketSize(asset: Asset): Double =

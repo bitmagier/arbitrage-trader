@@ -3,7 +3,7 @@ package org.purevalue.arbitrage.traderoom.exchange
 import java.time.Instant
 import java.util.UUID
 
-import akka.actor.{Actor, ActorRef, Props}
+import akka.actor.{Actor, ActorLogging, ActorRef, Props}
 import akka.pattern.{ask, pipe}
 import akka.util.Timeout
 import org.purevalue.arbitrage.Main.actorSystem
@@ -23,7 +23,7 @@ object TradeSimulator {
 }
 class TradeSimulator(globalConfig: GlobalConfig,
                      exchangeConfig: ExchangeConfig,
-                     exchange: ActorRef) extends Actor {
+                     exchange: ActorRef) extends Actor with ActorLogging {
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
   val activeOrders: collection.concurrent.Map[String, Order] = TrieMap() // external-order-id -> Order

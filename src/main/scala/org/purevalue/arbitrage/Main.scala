@@ -4,7 +4,6 @@ import akka.actor.SupervisorStrategy.{Escalate, Restart}
 import akka.actor.{Actor, ActorRef, ActorSystem, AllForOneStrategy, Props}
 import org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator
 import org.purevalue.arbitrage.util.ExchangeDataOutdated
-import org.slf4j.{Logger, LoggerFactory}
 
 import scala.concurrent.duration.DurationInt
 
@@ -13,8 +12,6 @@ object UserRootGuardian {
   def props(config: Config): Props = Props(new UserRootGuardian(config))
 }
 class UserRootGuardian(val config: Config) extends Actor {
-  private val log: Logger = LoggerFactory.getLogger(classOf[UserRootGuardian])
-
   val tradeRoomInitCoordinator: ActorRef = context.actorOf(TradeRoomInitCoordinator.props(config, self), "TradeRoomInitCoordinator")
   var tradeRoom: ActorRef = _
 

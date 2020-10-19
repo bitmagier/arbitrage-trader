@@ -3,20 +3,21 @@ package org.purevalue.arbitrage.adapter.binance
 import java.time.Instant
 
 import akka.actor.ActorSystem
+import akka.event.Logging
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model._
 import akka.http.scaladsl.model.headers.RawHeader
 import akka.stream.Materializer
+import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.util.HttpUtil.hmacSha256Signature
 import org.purevalue.arbitrage.util.Util.convertBytesToLowerCaseHex
 import org.purevalue.arbitrage.{GlobalConfig, Main, SecretsConfig}
-import org.slf4j.LoggerFactory
 import spray.json.{JsValue, JsonParser, JsonReader}
 
 import scala.concurrent.{ExecutionContext, Future}
 
 private[binance] object BinanceHttpUtil {
-  private val log = LoggerFactory.getLogger(BinanceHttpUtil.getClass)
+  private val log = Logging(actorSystem.eventStream, getClass)
   private val globalConfig: GlobalConfig = Main.config().global
 
   def httpRequestBinanceHmacSha256(method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig, sign: Boolean)
@@ -53,7 +54,7 @@ private[binance] object BinanceHttpUtil {
       .flatMap {
         response: HttpResponse =>
           response.entity.toStrict(globalConfig.httpTimeout).map { r =>
-            if (!response.status.isSuccess()) log.warn(s"$response")
+            if (!response.status.isSuccess()) log.warning(s"$response")
             r.contentType match {
               case ContentTypes.`application/json` => (response.status, JsonParser(r.data.utf8String))
               case _ => throw new RuntimeException(s"Non-Json message received:\n${r.data.utf8String}")

@@ -1,6 +1,6 @@
 package org.purevalue.arbitrage.adapter.binance
 
-import akka.actor.{Actor, ActorSystem, Props}
+import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.GetAllTradePairs
@@ -8,7 +8,6 @@ import org.purevalue.arbitrage.traderoom.exchange.{Ask, Bid}
 import org.purevalue.arbitrage.traderoom.{Asset, TradePair}
 import org.purevalue.arbitrage.util.HttpUtil.httpGetJson
 import org.purevalue.arbitrage.util.Util.stepSizeToFractionDigits
-import org.slf4j.LoggerFactory
 import spray.json._
 
 import scala.concurrent.duration.DurationInt
@@ -96,8 +95,7 @@ object BinancePublicDataInquirer {
  * Binance exchange - account data channel
  */
 private[binance] class BinancePublicDataInquirer(globalConfig: GlobalConfig,
-                                                 exchangeConfig: ExchangeConfig) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[BinancePublicDataInquirer])
+                                                 exchangeConfig: ExchangeConfig) extends Actor with ActorLogging {
   implicit val system: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = system.dispatcher
 
@@ -148,7 +146,7 @@ private[binance] class BinancePublicDataInquirer(globalConfig: GlobalConfig,
         .filterNot(e => exchangeConfig.assetBlocklist.contains(e.baseAsset) || exchangeConfig.assetBlocklist.contains(e.quoteAsset))
         .toSet
 
-      log.debug("received ExchangeInfo")
+      if (log.isDebugEnabled) log.debug("received ExchangeInfo")
     } catch {
       case e: Exception => log.error("init failed", e)
     }

@@ -3,21 +3,22 @@ package org.purevalue.arbitrage.adapter.bitfinex
 import java.time.Instant
 
 import akka.actor.ActorSystem
+import akka.event.Logging
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model._
 import akka.http.scaladsl.model.headers.RawHeader
 import akka.stream.Materializer
+import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.util.HttpUtil.hmacSha384Signature
 import org.purevalue.arbitrage.util.Util.convertBytesToLowerCaseHex
 import org.purevalue.arbitrage.util.WrongAssumption
 import org.purevalue.arbitrage.{GlobalConfig, Main, SecretsConfig}
-import org.slf4j.LoggerFactory
 import spray.json.{JsValue, JsonParser, JsonReader}
 
 import scala.concurrent.{ExecutionContext, Future}
 
 private[bitfinex] object BitfinexHttpUtil {
-  private val log = LoggerFactory.getLogger(BitfinexHttpUtil.getClass)
+  private val log = Logging(actorSystem.eventStream, getClass)
   private val globalConfig: GlobalConfig = Main.config().global
   private var lastBitfinexNonce: Option[Long] = None
 
@@ -62,7 +63,7 @@ private[bitfinex] object BitfinexHttpUtil {
     httpRequestBitfinexHmacSha384(method, uri, requestBody, apiKeys)
       .flatMap {
         response: HttpResponse =>
-          if (!response.status.isSuccess()) log.warn(s"$response")
+          if (!response.status.isSuccess()) log.warning(s"$response")
           response.entity.toStrict(globalConfig.httpTimeout).map { r =>
             r.contentType match {
               case ContentTypes.`application/json` => (response.status, JsonParser(r.data.utf8String))

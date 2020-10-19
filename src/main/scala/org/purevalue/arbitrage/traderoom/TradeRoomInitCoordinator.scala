@@ -1,7 +1,7 @@
 package org.purevalue.arbitrage.traderoom
 
 import akka.actor.SupervisorStrategy.{Escalate, Restart}
-import akka.actor.{Actor, ActorRef, OneForOneStrategy, Props}
+import akka.actor.{Actor, ActorLogging, ActorRef, OneForOneStrategy, Props}
 import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage.Config
@@ -12,7 +12,6 @@ import org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator.InitializedTra
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.{Exchange, ExchangeAccountDataChannelInit, ExchangePublicDataChannelInit, ExchangePublicDataInquirerInit}
 import org.purevalue.arbitrage.util.ConnectionLostException
-import org.slf4j.LoggerFactory
 
 import scala.concurrent.Await
 import scala.concurrent.duration.DurationInt
@@ -28,9 +27,7 @@ object TradeRoomInitCoordinator {
             parent: ActorRef): Props = Props(new TradeRoomInitCoordinator(config, parent))
 }
 class TradeRoomInitCoordinator(val config: Config,
-                               val parent: ActorRef) extends Actor {
-
-  private val log = LoggerFactory.getLogger(classOf[TradeRoomInitCoordinator])
+                               val parent: ActorRef) extends Actor with ActorLogging {
 
   // @formatter:off
   var allTradePairs:      Map[String, Set[TradePair]] = Map()

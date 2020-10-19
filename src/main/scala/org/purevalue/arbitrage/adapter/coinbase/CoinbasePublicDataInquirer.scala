@@ -1,6 +1,6 @@
 package org.purevalue.arbitrage.adapter.coinbase
 
-import akka.actor.{Actor, ActorSystem, Props}
+import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataInquirer.{CoinbaseBaseRestEndpoint, GetCoinbaseTradePairs}
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.GetAllTradePairs
 import org.purevalue.arbitrage.traderoom.{Asset, TradePair}
@@ -8,7 +8,6 @@ import org.purevalue.arbitrage.util.HttpUtil
 import org.purevalue.arbitrage.util.HttpUtil.httpGetJson
 import org.purevalue.arbitrage.util.Util.stepSizeToFractionDigits
 import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig, Main}
-import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, RootJsonFormat}
 
 import scala.concurrent.duration.DurationInt
@@ -67,8 +66,7 @@ object CoinbasePublicDataInquirer {
             exchangeConfig: ExchangeConfig): Props = Props(new CoinbasePublicDataInquirer(globalConfig, exchangeConfig))
 }
 private[coinbase] class CoinbasePublicDataInquirer(globalConfig: GlobalConfig,
-                                                   exchangeConfig: ExchangeConfig) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[CoinbasePublicDataInquirer])
+                                                   exchangeConfig: ExchangeConfig) extends Actor with ActorLogging {
   implicit val actorSystem: ActorSystem = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
@@ -97,7 +95,7 @@ private[coinbase] class CoinbasePublicDataInquirer(globalConfig: GlobalConfig,
           s"$CoinbaseBaseRestEndpoint/products"
         ) map {
           case Left(products: Vector[ProductJson]) =>
-            if (log.isTraceEnabled) log.trace(s"""${products.mkString("\n")}""")
+            if (log.isDebugEnabled) log.debug(s"""${products.mkString("\n")}""")
             products
               .filter(e => e.status == "online" && !e.trading_disabled && !e.cancel_only && !e.post_only)
               .map(_.toCoinbaseTradePair)

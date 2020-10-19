@@ -3,7 +3,7 @@ package org.purevalue.arbitrage.adapter.bitfinex
 import java.time.Instant
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, Props}
+import akka.actor.{Actor, ActorLogging, ActorRef, ActorSystem, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{HttpMethods, StatusCodes, Uri}
@@ -21,7 +21,6 @@ import org.purevalue.arbitrage.traderoom.exchange.{Balance, ExchangeAccountStrea
 import org.purevalue.arbitrage.util.HttpUtil.hmacSha384Signature
 import org.purevalue.arbitrage.util.Util.{convertBytesToLowerCaseHex, formatDecimal}
 import org.purevalue.arbitrage.util.{ConnectionLostException, WrongAssumption}
-import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsNumber, JsObject, JsString, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
 import scala.collection.Seq
@@ -291,8 +290,7 @@ object BitfinexAccountDataChannel {
 private[bitfinex] class BitfinexAccountDataChannel(config: Config,
                                                    exchangeConfig: ExchangeConfig,
                                                    exchange: ActorRef,
-                                                   exchangePublicDataInquirer: ActorRef) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[BitfinexAccountDataChannel])
+                                                   exchangePublicDataInquirer: ActorRef) extends Actor with ActorLogging {
 
   val BaseRestEndpoint = "https://api.bitfinex.com"
   val WebSocketEndpoint: Uri = Uri("wss://api.bitfinex.com/ws/2")
@@ -327,7 +325,7 @@ private[bitfinex] class BitfinexAccountDataChannel(config: Config,
       case j: JsObject if j.fields.contains("event") =>
         j.fields("event").convertTo[String] match {
           case "auth" if j.fields("status").convertTo[String] == "OK" =>
-            log.trace(s"received auth response: $j")
+            if (log.isDebugEnabled) log.debug(s"received auth response: $j")
             self ! OnStreamsRunning()
             None
           case "auth" =>
@@ -337,7 +335,7 @@ private[bitfinex] class BitfinexAccountDataChannel(config: Config,
             None
         }
       case j: JsObject =>
-        log.warn(s"Unknown json event object received: $j")
+        log.warning(s"Unknown json event object received: $j")
         None
     }
   }
@@ -349,16 +347,16 @@ private[bitfinex] class BitfinexAccountDataChannel(config: Config,
         dataArray(1).convertTo[String] match {
 
           case "hb" =>
-            if (log.isTraceEnabled) log.trace(s"received heartbeat event")
+            if (log.isDebugEnabled) log.debug(s"received heartbeat event")
             Nil
 
           case "os" => // order snapshot
-            if (log.isTraceEnabled) log.trace(s"received event 'order snaphot': $s")
+            if (log.isDebugEnabled) log.debug(s"received event 'order snaphot': $s")
             dataArray(2).convertTo[Vector[JsValue]]
               .map(e => BitfinexOrderUpdateJson("os", e.convertTo[Vector[JsValue]]))
 
           case streamType: String if Seq("on", "ou", "oc").contains(streamType) =>
-            if (log.isTraceEnabled) log.trace(s"received event 'order new/update/cancel': $s")
+            if (log.isDebugEnabled) log.debug(s"received event 'order new/update/cancel': $s")
             Seq(BitfinexOrderUpdateJson(streamType, dataArray(2).convertTo[Vector[JsValue]]))
 
           case streamType: String if Seq("ps", "pn", "pu", "pc").contains(streamType) =>
@@ -366,40 +364,40 @@ private[bitfinex] class BitfinexAccountDataChannel(config: Config,
             Nil
 
           case "tu" =>
-            if (log.isTraceEnabled) log.trace(s"watching trade update event: $s")
+            if (log.isDebugEnabled) log.debug(s"watching trade update event: $s")
             Nil // ignoring trade updates (prefering order updates, which have more details)
 
           case "te" =>
-            if (log.isTraceEnabled) log.trace(s"watching event 'trade executed': $s")
+            if (log.isDebugEnabled) log.debug(s"watching event 'trade executed': $s")
             //Seq(BitfinexTradeExecutedJson(dataArray(2).convertTo[Vector[JsValue]]))
             Nil
 
           case "ws" =>
-            if (log.isTraceEnabled) log.trace(s"received event 'wallet snapshot': $s")
+            if (log.isDebugEnabled) log.debug(s"received event 'wallet snapshot': $s")
             dataArray(2).convertTo[Vector[JsValue]].map(e => BitfinexWalletUpdateJson(e.convertTo[Vector[JsValue]]))
 
           case "wu" =>
-            if (log.isTraceEnabled) log.trace(s"received event 'wallet update': $s")
+            if (log.isDebugEnabled) log.debug(s"received event 'wallet update': $s")
             Seq(BitfinexWalletUpdateJson(dataArray(2).convertTo[Vector[JsValue]]))
 
           case "bu" =>
-            if (log.isTraceEnabled) log.trace(s"watching event 'balance update': $s")
+            if (log.isDebugEnabled) log.debug(s"watching event 'balance update': $s")
             Nil // we ignore that event, we can calculate balance from wallet
 
           case "miu" =>
-            if (log.isTraceEnabled) log.trace(s"watching event 'margin info update': $s")
+            if (log.isDebugEnabled) log.debug(s"watching event 'margin info update': $s")
             Nil // ignore margin info update
 
           case "fiu" =>
-            if (log.isTraceEnabled) log.trace(s"watching event 'funding info': $s")
+            if (log.isDebugEnabled) log.debug(s"watching event 'funding info': $s")
             Nil // ignore funding info
 
           case s: String if Seq("fte", "ftu").contains(s) =>
-            if (log.isTraceEnabled) log.trace(s"watching event 'funding trade': $s")
+            if (log.isDebugEnabled) log.debug(s"watching event 'funding trade': $s")
             Nil // ignore funding trades
 
           case "n" =>
-            if (log.isTraceEnabled) log.trace(s"received notification event: $s")
+            if (log.isDebugEnabled) log.debug(s"received notification event: $s")
             Nil // ignore notifications
 
           case x => throw new RuntimeException(s"bitfinex: received data of unidentified stream type '$x': $s")
@@ -417,7 +415,7 @@ private[bitfinex] class BitfinexAccountDataChannel(config: Config,
           case x => throw new RuntimeException(s"unidentified response: $x")
         }
     case _ =>
-      log.warn(s"Received non TextMessage")
+      log.warning(s"Received non TextMessage")
       Future.successful(Nil)
   }
 
@@ -520,7 +518,7 @@ private[bitfinex] class BitfinexAccountDataChannel(config: Config,
     ).map {
       case Left(response) => response match {
         case r: SubmitOrderResponseJson if r.status == "SUCCESS" && r.orders.length == 1 =>
-          if (log.isTraceEnabled) log.trace(s"$r")
+          if (log.isDebugEnabled) log.debug(s"$r")
           val order = r.orders.head
           exchange ! IncomingAccountData(exchangeDataMapping(Seq(order)))
           NewOrderAck(exchangeConfig.name, o.pair, order.orderId.toString, o.id)
@@ -543,7 +541,7 @@ private[bitfinex] class BitfinexAccountDataChannel(config: Config,
     ).map {
       case Left(response) => response match {
         case r: CancelOrderResponseJson if r.status == "SUCCESS" =>
-          if (log.isTraceEnabled) log.trace(s"$r")
+          if (log.isDebugEnabled) log.debug(s"$r")
           exchange ! IncomingAccountData(exchangeDataMapping(Seq(r.order)))
           CancelOrderResult(exchangeConfig.name, tradePair, r.order.orderId.toString, success = true)
         case r: CancelOrderResponseJson =>
@@ -551,7 +549,7 @@ private[bitfinex] class BitfinexAccountDataChannel(config: Config,
           CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId.toString, success = false, orderUnknown = false, Some(r.text))
       }
       case Right(errorResponse) => // TODO figure out what we get when order-id does not exist and set CancelOrderResult.orderUnknown accordingly. For now we take the error-response as orderUnknown=true
-        log.warn(s"CancelOrder id=$externalOrderId failed: $errorResponse")
+        log.warning(s"CancelOrder id=$externalOrderId failed: $errorResponse")
         CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId.toString, success = false, orderUnknown = true, Some(errorResponse.compactPrint))
     }
   }

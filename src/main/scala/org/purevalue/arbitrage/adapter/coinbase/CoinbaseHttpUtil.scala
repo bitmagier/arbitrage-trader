@@ -4,19 +4,20 @@ import java.nio.charset.StandardCharsets
 import java.util.Base64
 
 import akka.actor.ActorSystem
+import akka.event.Logging
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model._
 import akka.http.scaladsl.model.headers.RawHeader
 import akka.stream.Materializer
+import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.util.HttpUtil.hmacSha256Signature
 import org.purevalue.arbitrage.{GlobalConfig, Main, SecretsConfig}
-import org.slf4j.LoggerFactory
 import spray.json.{JsValue, JsonParser, JsonReader}
 
 import scala.concurrent.{ExecutionContext, Future}
 
 private[coinbase] object CoinbaseHttpUtil {
-  private val log = LoggerFactory.getLogger("org.purevalue.arbitrage.adapter.coinbase.CoinbaseHttpUtil")
+  private val log = Logging(actorSystem.eventStream, getClass)
   private lazy val globalConfig: GlobalConfig = Main.config().global
 
   // {"iso":"2020-10-01T21:22:24Z","epoch":1601587344.} <- spray cannot parse that, but we can
@@ -69,7 +70,7 @@ private[coinbase] object CoinbaseHttpUtil {
       .flatMap {
         response: HttpResponse =>
           response.entity.toStrict(globalConfig.httpTimeout).map { r =>
-            if (!response.status.isSuccess()) log.warn(s"$response")
+            if (!response.status.isSuccess()) log.warning(s"$response")
             (response.status, r.data.utf8String)
           }
       }
@@ -81,7 +82,7 @@ private[coinbase] object CoinbaseHttpUtil {
       .flatMap {
         response: HttpResponse =>
           response.entity.toStrict(globalConfig.httpTimeout).map { r =>
-            if (!response.status.isSuccess()) log.warn(s"$response")
+            if (!response.status.isSuccess()) log.warning(s"$response")
             r.contentType match {
               case ContentTypes.`application/json` => (response.status, JsonParser(r.data.utf8String))
               case _ => throw new RuntimeException(s"Non-Json message received:\n${r.data.utf8String}")

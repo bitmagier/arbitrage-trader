@@ -1,12 +1,11 @@
 package org.purevalue.arbitrage.adapter.bitfinex
 
-import akka.actor.{Actor, ActorSystem, Props}
+import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.{GetBitfinexAssets, GetBitfinexTradePairs}
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.GetAllTradePairs
 import org.purevalue.arbitrage.traderoom.{Asset, TradePair}
 import org.purevalue.arbitrage.util.HttpUtil.httpGetJson
-import org.slf4j.LoggerFactory
 import spray.json._
 
 import scala.concurrent.duration.DurationInt
@@ -31,8 +30,7 @@ object BitfinexPublicDataInquirer {
  * Bitfinex exchange data channel
  */
 private[bitfinex] class BitfinexPublicDataInquirer(globalConfig: GlobalConfig,
-                                                   exchangeConfig: ExchangeConfig) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[BitfinexPublicDataInquirer])
+                                                   exchangeConfig: ExchangeConfig) extends Actor with ActorLogging {
   private implicit val system: ActorSystem = Main.actorSystem
   private implicit val executor: ExecutionContextExecutor = system.dispatcher
 
@@ -57,7 +55,7 @@ private[bitfinex] class BitfinexPublicDataInquirer(globalConfig: GlobalConfig,
         case Right(errorResponse) => throw new RuntimeException(s"query currency symbols failed: $errorResponse")
       }
 
-    if (log.isTraceEnabled) log.trace(s"currency mappings received: $apiSymbolToOfficialCurrencySymbolMapping")
+    if (log.isDebugEnabled) log.debug(s"currency mappings received: $apiSymbolToOfficialCurrencySymbolMapping")
 
     // currency->verbose name
     val currencyNames: Map[String, String] =
@@ -71,7 +69,7 @@ private[bitfinex] class BitfinexPublicDataInquirer(globalConfig: GlobalConfig,
         case Right(errorResponse) => throw new RuntimeException(s"query currency labels failed: $errorResponse")
       }
 
-    if (log.isTraceEnabled) log.trace(s"pub:map:currency:label: $currencyNames")
+    if (log.isDebugEnabled) log.debug(s"pub:map:currency:label: $currencyNames")
 
     val rawBitfinexCurrencies: Set[String] = Await.result(
       httpGetJson[List[List[String]], JsValue](s"$BaseRestEndpointPublic/v2/conf/pub:list:currency"),
@@ -91,7 +89,7 @@ private[bitfinex] class BitfinexPublicDataInquirer(globalConfig: GlobalConfig,
       BitfinexAsset(Asset(officialSymbol), e)
     }
 
-    if (log.isTraceEnabled) log.trace(s"bitfinex assets: $bitfinexAssets")
+    if (log.isDebugEnabled) log.debug(s"bitfinex assets: $bitfinexAssets")
 
     val rawTradePairs: List[String] =
       Await.result(
@@ -100,7 +98,7 @@ private[bitfinex] class BitfinexPublicDataInquirer(globalConfig: GlobalConfig,
         case Left(response) => response.head
         case Right(errorResponse) => throw new RuntimeException(s"query exchange pairs failed: $errorResponse")
       }
-    if (log.isTraceEnabled) log.trace(s"pub:list:pair:exchange: $rawTradePairs")
+    if (log.isDebugEnabled) log.debug(s"pub:list:pair:exchange: $rawTradePairs")
 
     bitfinexTradePairs = rawTradePairs
       .filter(_.length == 6)
@@ -114,7 +112,7 @@ private[bitfinex] class BitfinexPublicDataInquirer(globalConfig: GlobalConfig,
       .map(e => BitfinexTradePair(Asset(e._1), Asset(e._2), s"t${e._3}"))
       .filterNot(e => exchangeConfig.assetBlocklist.contains(e.baseAsset) || exchangeConfig.assetBlocklist.contains(e.quoteAsset))
       .toSet
-    if (log.isTraceEnabled) log.trace(s"bitfinex trade pairs: $bitfinexTradePairs")
+    if (log.isDebugEnabled) log.debug(s"bitfinex trade pairs: $bitfinexTradePairs")
   }
 
   def init(): Unit = {

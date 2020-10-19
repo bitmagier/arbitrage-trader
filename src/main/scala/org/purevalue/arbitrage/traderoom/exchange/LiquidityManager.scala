@@ -3,12 +3,11 @@ package org.purevalue.arbitrage.traderoom.exchange
 import java.time.Instant
 import java.util.UUID
 
-import akka.actor.{Actor, ActorRef, PoisonPill, Props}
+import akka.actor.{Actor, ActorLogging, ActorRef, PoisonPill, Props}
 import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager._
 import org.purevalue.arbitrage.{Config, ExchangeConfig}
-import org.slf4j.LoggerFactory
 
 import scala.concurrent.ExecutionContextExecutor
 
@@ -108,7 +107,7 @@ class LiquidityManager(val config: Config,
                        val tradePairs: Set[TradePair],
                        val wallet: Wallet,
                        val tradeRoom: ActorRef
-                      ) extends Actor {
+                      ) extends Actor with ActorLogging {
 
   case class LiquidityDemand(exchange: String,
                              tradePattern: String,
@@ -122,7 +121,6 @@ class LiquidityManager(val config: Config,
       LiquidityDemand(r.exchange, r.tradePattern, r.coins, r.dontUseTheseReserveAssets)
   }
 
-  private val log = LoggerFactory.getLogger(classOf[LiquidityManager])
   private implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
   private var shutdownInitiated: Boolean = false
@@ -132,7 +130,7 @@ class LiquidityManager(val config: Config,
   private var liquidityLocks: Map[UUID, LiquidityLock] = Map()
 
   def noticeUniqueDemand(d: UniqueDemand): Unit = {
-    if (log.isTraceEnabled) log.trace(s"noticed $d")
+    if (log.isDebugEnabled) log.debug(s"noticed $d")
     liquidityDemand = liquidityDemand + (d.uk -> d)
   }
 
@@ -144,12 +142,12 @@ class LiquidityManager(val config: Config,
 
   def clearLock(id: UUID): Unit = {
     liquidityLocks = liquidityLocks - id
-    if (log.isTraceEnabled) log.trace(s"Liquidity lock with ID $id cleared")
+    if (log.isDebugEnabled) log.debug(s"Liquidity lock with ID $id cleared")
   }
 
   def addLock(l: LiquidityLock): Unit = {
     liquidityLocks = liquidityLocks + (l.liquidityRequestId -> l)
-    if (log.isTraceEnabled) log.trace(s"Liquidity locked: $l")
+    if (log.isDebugEnabled) log.debug(s"Liquidity locked: $l")
   }
 
   def clearObsoleteDemands(): Unit = {

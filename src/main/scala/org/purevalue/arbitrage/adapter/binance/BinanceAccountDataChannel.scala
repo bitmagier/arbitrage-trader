@@ -4,7 +4,7 @@ import java.time.Instant
 import java.util.UUID
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, Props}
+import akka.actor.{Actor, ActorLogging, ActorRef, ActorSystem, Cancellable, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{HttpMethods, StatusCodes, Uri}
@@ -21,7 +21,6 @@ import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.{Balance, ExchangeAccountStreamData, WalletAssetUpdate, WalletBalanceUpdate}
 import org.purevalue.arbitrage.util.Util.{alignToStepSizeCeil, alignToStepSizeNearest, formatDecimal, formatDecimalWithFixPrecision}
 import org.purevalue.arbitrage.util.{BadCalculationError, ConnectionLostException, WrongAssumption}
-import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
 import scala.concurrent.duration.DurationInt
@@ -310,8 +309,7 @@ object BinanceAccountDataChannel {
 private[binance] class BinanceAccountDataChannel(config: Config,
                                                  exchangeConfig: ExchangeConfig,
                                                  exchange: ActorRef,
-                                                 exchangePublicDataInquirer: ActorRef) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[BinanceAccountDataChannel])
+                                                 exchangePublicDataInquirer: ActorRef) extends Actor with ActorLogging {
 
   // outboundAccountPosition is sent any time an account balance has changed and contains the assets
   // that were possibly changed by the event that generated the balance change
@@ -359,7 +357,7 @@ private[binance] class BinanceAccountDataChannel(config: Config,
   }
 
   def onStreamSubscribeResponse(j: JsObject): Unit = {
-    if (log.isTraceEnabled) log.trace(s"received $j")
+    if (log.isDebugEnabled) log.debug(s"received $j")
     val channelId = j.fields("id").convertTo[Int]
 
     val initialized: Boolean = synchronized {
@@ -386,23 +384,23 @@ private[binance] class BinanceAccountDataChannel(config: Config,
             case j: JsObject if j.fields.contains("e") =>
               j.fields("e").convertTo[String] match {
                 case OutboundAccountPositionStreamName =>
-                  if (log.isTraceEnabled) log.trace(s"received $j")
+                  if (log.isDebugEnabled) log.debug(s"received $j")
                   List(j.convertTo[OutboundAccountPositionJson])
                 case BalanceUpdateStreamName =>
-                  if (log.isTraceEnabled) log.trace(s"received $j")
+                  if (log.isDebugEnabled) log.debug(s"received $j")
                   List(j.convertTo[BalanceUpdateJson])
                 case OrderExecutionReportStreamName =>
-                  if (log.isTraceEnabled) log.trace(s"received $j")
+                  if (log.isDebugEnabled) log.debug(s"received $j")
                   List(j.convertTo[OrderExecutionReportJson])
                 case "outboundAccountInfo" =>
-                  if (log.isTraceEnabled) log.trace(s"watching obsolete outboundAccountInfo: $j")
+                  if (log.isDebugEnabled) log.debug(s"watching obsolete outboundAccountInfo: $j")
                   Nil
                 case name =>
                   log.error(s"Unknown data stream '$name' received: $j")
                   Nil
               }
             case j: JsObject =>
-              log.warn(s"Unknown json object received: $j")
+              log.warning(s"Unknown json object received: $j")
               Nil
           }
       } catch {
@@ -410,7 +408,7 @@ private[binance] class BinanceAccountDataChannel(config: Config,
           Future.failed(e)
       }
     case x =>
-      log.warn(s"Received non TextMessage: $x")
+      log.warning(s"Received non TextMessage: $x")
       Future.successful(Nil)
   }
 
@@ -419,7 +417,7 @@ private[binance] class BinanceAccountDataChannel(config: Config,
     httpRequestJsonBinanceAccount[AccountInformationJson, JsValue](HttpMethods.GET, s"$BinanceBaseRestEndpoint/api/v3/account", None, exchangeConfig.secrets, sign = true)
       .map {
         case Left(response) =>
-          if (log.isTraceEnabled) log.trace(s"received initial account information: $response")
+          if (log.isDebugEnabled) log.debug(s"received initial account information: $response")
           IncomingAccountData(exchangeDataMapping(Seq(response)))
         case Right(errorResponse) => throw new RuntimeException(s"deliverAccountInformation failed: $errorResponse")
       }.pipeTo(exchange)
@@ -430,7 +428,7 @@ private[binance] class BinanceAccountDataChannel(config: Config,
     httpRequestJsonBinanceAccount[List[OpenOrderJson], JsValue](HttpMethods.GET, s"$BinanceBaseRestEndpoint/api/v3/openOrders", None, exchangeConfig.secrets, sign = true)
       .map {
         case Left(response) =>
-          if (log.isTraceEnabled) log.trace(s"received initial open orders: $response")
+          if (log.isDebugEnabled) log.debug(s"received initial open orders: $response")
           IncomingAccountData(exchangeDataMapping(response))
         case Right(errorResponse) => throw new RuntimeException(s"deliverOpenOrders failed: $errorResponse")
       }.pipeTo(exchange)
@@ -501,7 +499,7 @@ private[binance] class BinanceAccountDataChannel(config: Config,
       sign = true
     ).map {
       case Left(response) =>
-        log.trace(s"Order successfully canceled: $response")
+        if (log.isDebugEnabled) log.debug(s"Order successfully canceled: $response")
         exchange ! IncomingAccountData(exchangeDataMapping(Seq(response)))
         CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId.toString, success = true)
       case Right(errorResponse) =>

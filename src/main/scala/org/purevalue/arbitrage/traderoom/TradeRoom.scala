@@ -6,7 +6,7 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 import akka.Done
-import akka.actor.{Actor, ActorRef, ActorSystem, Cancellable, PoisonPill, Props}
+import akka.actor.{Actor, ActorLogging, ActorRef, ActorSystem, Cancellable, PoisonPill, Props}
 import akka.pattern.{ask, pipe}
 import akka.util.Timeout
 import org.purevalue.arbitrage._
@@ -18,7 +18,6 @@ import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLoc
 import org.purevalue.arbitrage.traderoom.exchange.{FullDataSnapshot, LiquidityBalancerStats, OrderBook, Ticker, TickerSnapshot, Wallet}
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.util.{Emoji, WrongAssumption}
-import org.slf4j.LoggerFactory
 
 import scala.collection.concurrent.TrieMap
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
@@ -89,8 +88,8 @@ object TradeRoom {
  */
 class TradeRoom(val config: Config,
                 val exchanges: Map[String, ActorRef],
-                val usableTradePairs: Map[String, Set[TradePair]]) extends Actor {
-  private val log = LoggerFactory.getLogger(classOf[TradeRoom])
+                val usableTradePairs: Map[String, Set[TradePair]]) extends Actor with ActorLogging {
+
   private implicit val actorSystem: ActorSystem = Main.actorSystem
   private implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
@@ -186,7 +185,7 @@ class TradeRoom(val config: Config,
 
     // this should not occur - but here is a last guard
     if (activeLiquidityTx.keys.exists(ref => ref.exchange == request.exchange && ref.tradePair == request.pair)) {
-      log.warn(s"Ignoring liquidity tx because a similar one (same trade pair on same exchange) is still in place: $request")
+      log.warning(s"Ignoring liquidity tx because a similar one (same trade pair on same exchange) is still in place: $request")
       return Future.successful(None)
     }
 
@@ -231,7 +230,7 @@ class TradeRoom(val config: Config,
 
     if (bundle.orderRequests.exists(e =>
       doNotTouchAssets(e.exchange).intersect(e.pair.involvedAssets).nonEmpty)) {
-      log.warn(s"ignoring $bundle containing a DO-NOT-TOUCH asset")
+      log.warning(s"ignoring $bundle containing a DO-NOT-TOUCH asset")
     }
 
     collectTradeContext().foreach {
@@ -385,12 +384,12 @@ class TradeRoom(val config: Config,
         }
 
         if (orders.exists(_.orderStatus != OrderStatus.FILLED)) {
-          log.warn(s"${Emoji.Questionable}  ${finishedOrderBundle.shortDesc} did not complete. Orders: \n${orders.mkString("\n")}")
+          log.warning(s"${Emoji.Questionable}  ${finishedOrderBundle.shortDesc} did not complete. Orders: \n${orders.mkString("\n")}")
         } else if (bill.sumUSDAtCalcTime >= 0) {
           val emoji = if (bill.sumUSDAtCalcTime >= 1.0) Emoji.Opera else Emoji.Winning
           log.info(s"$emoji  ${finishedOrderBundle.shortDesc} completed with a win of ${formatDecimal(bill.sumUSDAtCalcTime, 2)} USD")
         } else {
-          log.warn(s"${Emoji.SadFace}  ${finishedOrderBundle.shortDesc} completed with a loss of ${formatDecimal(bill.sumUSDAtCalcTime, 2)} USD ${Emoji.LookingDown}:\n $finishedOrderBundle")
+          log.warning(s"${Emoji.SadFace}  ${finishedOrderBundle.shortDesc} completed with a loss of ${formatDecimal(bill.sumUSDAtCalcTime, 2)} USD ${Emoji.LookingDown}:\n $finishedOrderBundle")
         }
     }
   }
@@ -425,15 +424,15 @@ class TradeRoom(val config: Config,
           log.error(s"No order present for ${orderBundle.shortDesc} -> cleaning up")
           cleanupOrderBundle(orderBundleId)
         case order: Seq[Order] if order.forall(_.orderStatus == OrderStatus.FILLED) =>
-          if (log.isTraceEnabled) log.trace(s"All orders of ${orderBundle.shortDesc} FILLED -> finishing it")
+          if (log.isDebugEnabled) log.debug(s"All orders of ${orderBundle.shortDesc} FILLED -> finishing it")
           cleanupOrderBundle(orderBundleId)
           log.info(s"${Emoji.Robot}  OrderBundle ${orderBundle.shortDesc} successfully finished")
         case order: Seq[Order] if order.forall(_.orderStatus.isFinal) =>
           log.debug(s"${Emoji.Robot}  All orders of ${orderBundle.shortDesc} have a final state (${order.map(_.orderStatus).mkString(",")}) -> not ideal")
           cleanupOrderBundle(orderBundleId)
-          log.warn(s"${Emoji.Robot}  Finished OrderBundle ${orderBundle.shortDesc}, but NOT all orders are FILLED: $orders")
+          log.warning(s"${Emoji.Robot}  Finished OrderBundle ${orderBundle.shortDesc}, but NOT all orders are FILLED: $orders")
         case order: Seq[Order] => // order bundle still active: nothing to do
-          if (log.isTraceEnabled) log.trace(s"Watching minor order update for $orderBundle: $order")
+          if (log.isDebugEnabled) log.debug(s"Watching minor order update for $orderBundle: $order")
       }
     }
   }
@@ -447,11 +446,11 @@ class TradeRoom(val config: Config,
           cleanupLiquidityTxOrder(tx)
         }
         else if (order.orderStatus.isFinal) {
-          log.warn(s"${Emoji.NoSupport}  Liquidity tx ${tx.orderRef} finished with state ${order.orderStatus}")
+          log.warning(s"${Emoji.NoSupport}  Liquidity tx ${tx.orderRef} finished with state ${order.orderStatus}")
           cleanupLiquidityTxOrder(tx)
         }
         else { // order still active: nothing to do
-          if (log.isTraceEnabled) log.trace(s"Watching liquidity tx minor order update: $order")
+          if (log.isDebugEnabled) log.debug(s"Watching liquidity tx minor order update: $order")
         }
     }
   }
@@ -479,7 +478,7 @@ class TradeRoom(val config: Config,
           activeOrder(t.ref).foreach {
             case None => // order & liquidityTx gone -> nothing there to pay heed to
             case Some(order) =>
-              log.warn(s"Got order-update (${t.ref.exchange}: ${t.ref.externalOrderId}) but cannot find active order bundle or liquidity tx for it." +
+              log.warning(s"Got order-update (${t.ref.exchange}: ${t.ref.externalOrderId}) but cannot find active order bundle or liquidity tx for it." +
                 s" Corresponding order is: $order")
             // otherwise, when the active order is already gone, we can just drop that update-trigger, because it comes too late.
             // Then the order from activeOrderBundles/activeLiquidityTx was already cleaned-up by a previous trigger
@@ -507,7 +506,7 @@ class TradeRoom(val config: Config,
           }
         }
 
-        log.warn(s"${Emoji.Judgemental}  Canceling aged order ${o.shortDesc} $source")
+        log.warning(s"${Emoji.Judgemental}  Canceling aged order ${o.shortDesc} $source")
         exchanges(o.exchange) ! CancelOrder(o.ref)
       }
     }
@@ -522,7 +521,7 @@ class TradeRoom(val config: Config,
         .filterNot(o => activeOrderBundles.values.exists(_.orderRefs.contains(o._1)))
         .filterNot(o => activeLiquidityTx.contains(o._1))
       if (orphanOrders.nonEmpty) {
-        log.warn(s"""unreferenced order(s) on ${orphanOrders.head._1.exchange}: ${orphanOrders.map(_._2.shortDesc).mkString(", ")}""")
+        log.warning(s"""unreferenced order(s) on ${orphanOrders.head._1.exchange}: ${orphanOrders.map(_._2.shortDesc).mkString(", ")}""")
         orphanOrders
           .filter(_._2.orderStatus.isFinal)
           .foreach { o =>
