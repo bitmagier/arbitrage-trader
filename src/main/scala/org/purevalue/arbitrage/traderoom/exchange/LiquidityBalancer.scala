@@ -71,6 +71,14 @@ class LiquidityBalancer(val config: Config,
                      amount: Double): Int =
     (amount / bucketSize(asset)).round.toInt
 
+  def toBucketsCeil(asset: Asset, amount: Double): Int = {
+    (amount / bucketSize(asset)).ceil.toInt
+  }
+
+  def toBucketsFloor(asset: Asset, amount: Double): Int = {
+    (amount / bucketSize(asset)).floor.toInt
+  }
+
   def createOrders(transfers: Iterable[LiquidityTransfer]): Iterable[NewLiquidityTransformationOrder] = {
     transfers.map(e => NewLiquidityTransformationOrder(
       OrderRequest(UUID.randomUUID(), None, exchangeConfig.name, e.pair, e.side, exchangeConfig.feeRate, e.quantity, e.limit))
@@ -264,12 +272,13 @@ class LiquidityBalancer(val config: Config,
     result
   }
 
+
   // delivers secondary reserve asset liquidity demand - sorted by importance of reserve asset
   def calcSecondaryReserveFillUpDemand(previousTransfers: Iterable[LiquidityTransfer],
                                        minimumKeepReserveAssetBuckets: Int): List[(Asset, Int)] = {
     val secondaryReserveBalanceBuckets: Map[Asset, Int] =
       exchangeConfig.reserveAssets.tail
-        .map(e => e -> toSupplyBuckets(e, wc.balanceSnapshot.get(e).map(_.amountAvailable).getOrElse(0.0)))
+        .map(e => e -> toBucketsFloor(e, wc.balanceSnapshot.get(e).map(_.amountAvailable).getOrElse(0.0)))
         .toMap
 
     val secondaryReserveBalanceAfterTransfers: Map[Asset, Int] = calcSupplyAfterTransfers(secondaryReserveBalanceBuckets, previousTransfers)
@@ -319,7 +328,8 @@ class LiquidityBalancer(val config: Config,
 
       // fill-up secondary reserve assets in order
       val minimumKeepReserveAssetBuckets: Int =
-        toBucketsRound(exchangeConfig.usdEquivalentCoin, config.liquidityManager.minimumKeepReserveLiquidityPerAssetInUSD)
+        toBucketsCeil(exchangeConfig.usdEquivalentCoin, config.liquidityManager.minimumKeepReserveLiquidityPerAssetInUSD)
+
       val afterDemandsFilledSupplyOverhead: Map[Asset, Int] =
         calcFinalSupplyOverhead(
           calcRemainingSupply(supplyOverhead, fillDemandTransfers),
