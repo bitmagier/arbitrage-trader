@@ -17,6 +17,7 @@ import scala.annotation.tailrec
 trait LBStatisticEvent {
   def exchange: String
 }
+case class NoManufacturingOptionAvailable(exchange: String, demandAsset: Asset) extends LBStatisticEvent
 case class NoGoodManufacturingOptionAvailable(exchange: String, demandAsset: Asset) extends LBStatisticEvent
 case class LiquidityRebalanceCurrentlyLossy(exchange: String, source: Asset, destination: Asset) extends LBStatisticEvent
 
@@ -184,7 +185,7 @@ class LiquidityBalancer(val config: Config,
 
       if (demandBuckets == 0) return (demandBuckets, supply, None)
 
-      val transferOptions =
+      val theoreticalTransferOptions =
         supply
           .filter(_._1.canConvertDirectlyTo(demandAsset, tradePairs)) // transfer possible
           .map(e => {
@@ -195,21 +196,28 @@ class LiquidityBalancer(val config: Config,
             val exchangeRateRating: Double = localExchangeRateRating(pair, side, limit, wc.referenceTicker)
             LiquidityTransfer(pair, side, buckets, quantity, limit, exchangeRateRating)
           })
-          .filter(_.exchangeRateRating >= -config.liquidityManager.maxAcceptableExchangeRateLossVersusReferenceTicker) // rating above loss limit
 
-      transferOptions match {
+      theoreticalTransferOptions match {
         case o if o.isEmpty =>
-          LiquidityBalancerStats.inc(NoGoodManufacturingOptionAvailable(exchangeConfig.name, demandAsset))
-          log.debug(s"[${exchangeConfig.name}] No good manufacturing option available for $demandAsset. Supply was: $supply")
+          log.debug(s"[${exchangeConfig.name}] No manufacturing option available for $demandAsset. Supply was: $supply")
+          LiquidityBalancerStats.inc(NoManufacturingOptionAvailable(exchangeConfig.name, demandAsset))
           (demandBuckets, supply, None)
 
-        case transferOptions =>
-          val bestRating = transferOptions.map(_.exchangeRateRating).max
-          val BestRatingEquivalenceLevel = 0.00001
-          val transfer = transferOptions
-            .filter(_.exchangeRateRating >= bestRating - BestRatingEquivalenceLevel)
-            .maxBy(e => sourceAssetPreference(e.supplyAsset))
-          (demandBuckets - transfer.buckets, calcRemainingSupply(supply, Seq(transfer)), Some(transfer))
+        // check if rating is above loss limit
+        case o => o.filter(_.exchangeRateRating >= -config.liquidityManager.maxAcceptableExchangeRateLossVersusReferenceTicker) match {
+          case o if o.isEmpty =>
+            LiquidityBalancerStats.inc(NoGoodManufacturingOptionAvailable(exchangeConfig.name, demandAsset))
+            log.debug(s"[${exchangeConfig.name}] No good manufacturing option available for $demandAsset. Supply was: $supply")
+            (demandBuckets, supply, None)
+
+          case transferOptions =>
+            val bestRating = transferOptions.map(_.exchangeRateRating).max
+            val BestRatingEquivalenceLevel = 0.00001
+            val transfer = transferOptions
+              .filter(_.exchangeRateRating >= bestRating - BestRatingEquivalenceLevel)
+              .maxBy(e => sourceAssetPreference(e.supplyAsset))
+            (demandBuckets - transfer.buckets, calcRemainingSupply(supply, Seq(transfer)), Some(transfer))
+        }
       }
     }
 
