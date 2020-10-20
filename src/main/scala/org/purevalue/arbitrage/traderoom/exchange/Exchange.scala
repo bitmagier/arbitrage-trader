@@ -564,6 +564,8 @@ case class Exchange(exchangeName: String,
     case LiquidityHouseKeeping()         => liquidityHouseKeeping()
     case LiquidityBalancerRun.Finished() => liquidityHouseKeepingRunning = false
     case s: TradeRoom.Stop               => onStop(s)
+
+    case Failure(cause)                  => log.error(cause, s"[$exchangeName] received failure [to be fixed]")
   }
   // @formatter:off
 
