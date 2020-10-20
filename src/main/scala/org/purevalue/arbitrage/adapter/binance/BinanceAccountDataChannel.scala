@@ -404,7 +404,7 @@ private[binance] class BinanceAccountDataChannel(config: Config,
               Nil
           }
       } catch {
-        case e: Throwable => log.error("decodeMessage failed", e)
+        case e: Throwable => log.error(e, "decodeMessage failed")
           Future.failed(e)
       }
     case x =>
@@ -480,7 +480,7 @@ private[binance] class BinanceAccountDataChannel(config: Config,
       case Right(errorResponse) => throw new RuntimeException(s"newLimitOrder failed: $errorResponse")
     } recover {
       case e: Exception =>
-        log.error(s"NewLimitOrder failed. Request body:\n$requestBody\nbinanceTradePair:$binanceTradePair\n", e)
+        log.error(e, s"NewLimitOrder failed. Request body:\n$requestBody\nbinanceTradePair:$binanceTradePair\n")
         throw e
     }
 
@@ -584,7 +584,7 @@ private[binance] class BinanceAccountDataChannel(config: Config,
       pullBinanceTradePairs()
       self ! Connect()
     } catch {
-      case e: Exception => log.error("init failed", e)
+      case e: Exception => log.error(e, "init failed")
     }
   }
 

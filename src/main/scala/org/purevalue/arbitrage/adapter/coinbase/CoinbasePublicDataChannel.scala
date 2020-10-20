@@ -217,7 +217,7 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
       initCoinbaseTradePairBySymbol()
       self ! Connect()
     } catch {
-      case e: Exception => log.error("init failed", e)
+      case e: Exception => log.error(e, "init failed")
     }
   }
 

@@ -112,7 +112,7 @@ private[coinbase] class CoinbasePublicDataInquirer(globalConfig: GlobalConfig,
       registerAssets()
       pullTradePairs()
     } catch {
-      case e: Throwable => log.error("init failed", e)
+      case e: Throwable => log.error(e, "init failed")
       // TODO coordinated shudown
     }
   }

@@ -404,7 +404,7 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
       initBitfinexTradePairBySymbol()
       self ! Connect()
     } catch {
-      case e: Exception => log.error("init failed", e)
+      case e: Exception => log.error(e, "init failed")
     }
   }
 

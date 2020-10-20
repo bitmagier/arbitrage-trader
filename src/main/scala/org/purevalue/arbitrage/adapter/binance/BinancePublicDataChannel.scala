@@ -205,7 +205,7 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
         val rawTicker = tickers.filter(e => binanceTradePairBySymbol.keySet.contains(e.symbol))
         exchange ! IncomingPublicData(exchangeDataMapping(rawTicker))
       case Success(Right(errorResponse)) => log.error(s"deliverBookTickerState failed: $errorResponse")
-      case Failure(e) => log.error("Query/Transform RawBookTickerRestJson failed", e)
+      case Failure(e) => log.error(e, "Query/Transform RawBookTickerRestJson failed")
     }
   }
 
@@ -230,7 +230,7 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
       initBinanceTradePairBySymbol()
       self ! Connect()
     } catch {
-      case e: Exception => log.error("init failed", e)
+      case e: Exception => log.error(e, "init failed")
     }
   }
 

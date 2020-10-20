@@ -565,7 +565,7 @@ private[bitfinex] class BitfinexAccountDataChannel(config: Config,
       pullBitfinexAssets()
       self ! Connect()
     } catch {
-      case e: Exception => log.error("init failed", e)
+      case e: Exception => log.error(e, "init failed")
     }
   }
 

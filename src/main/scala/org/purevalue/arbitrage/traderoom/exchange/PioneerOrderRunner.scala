@@ -367,7 +367,7 @@ class PioneerOrderRunner(config: Config,
         exchange ! PioneerOrderSucceeded()
         stop()
       case Failure(e) =>
-        log.error(s"[$exchangeName] PioneerOrderRunner failed", e)
+        log.error(e, s"[$exchangeName] PioneerOrderRunner failed")
         exchange ! PioneerOrderFailed(e)
         stop()
     }
@@ -381,7 +381,7 @@ class PioneerOrderRunner(config: Config,
   override def receive: Receive = {
     case Watch() => watchNextEvent()
     case Failure(e) => // TODO
-      log.error(s"PioneerOrderRunner failed", e)
+      log.error(e, s"PioneerOrderRunner failed")
       exchange ! PioneerOrderFailed(e)
       stop()
   }

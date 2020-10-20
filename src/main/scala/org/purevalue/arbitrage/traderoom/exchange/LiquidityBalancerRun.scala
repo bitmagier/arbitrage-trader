@@ -54,7 +54,7 @@ class LiquidityBalancerRun(val config: Config,
         (tradeRoom ? o).mapTo[Option[OrderRef]]
           .recover {
             case e: Exception =>
-              log.error(s"[${exchangeConfig.name}] Error while placing liquidity tx order $o", e)
+              log.error(e, s"[${exchangeConfig.name}] Error while placing liquidity tx order $o")
               None
           }
       )
@@ -98,7 +98,7 @@ class LiquidityBalancerRun(val config: Config,
         // @formatter:off
         case Success(orderRefs)                    => waitUntilLiquidityOrdersFinished(orderRefs)
         case Failure(e: OrderBookTooFlatException) => log.warning(s"[to be improved] [${exchangeConfig.name}] Cannot perform liquidity housekeeping because the order book of trade pair ${e.tradePair} was too flat")
-        case Failure(e)                            => log.error(s"[${exchangeConfig.name}] liquidity houskeeping failed", e)
+        case Failure(e)                            => log.error(e, s"[${exchangeConfig.name}] liquidity houskeeping failed")
         // @formatter:on
       }
     } finally {

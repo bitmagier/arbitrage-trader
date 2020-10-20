@@ -119,7 +119,7 @@ private[bitfinex] class BitfinexPublicDataInquirer(globalConfig: GlobalConfig,
     try {
       initTradePairs()
     } catch {
-      case e: Exception => log.error("init failed", e)
+      case e: Exception => log.error(e, "init failed")
     }
   }
 

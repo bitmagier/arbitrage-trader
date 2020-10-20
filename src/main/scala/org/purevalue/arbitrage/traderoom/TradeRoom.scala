@@ -167,7 +167,7 @@ class TradeRoom(val config: Config,
         None
     } recover {
       case e: Exception =>
-        log.error("Error while locking liquidity", e)
+        log.error(e, "Error while locking liquidity")
         None
     }
   }
@@ -212,7 +212,7 @@ class TradeRoom(val config: Config,
           Some(ref)
       } recover {
         case e: Exception =>
-          log.error(s"failed to place new liquidity tx $request", e)
+          log.error(e, s"failed to place new liquidity tx $request")
           exchanges(request.exchange) ? LiquidityLockClearance(lock.liquidityRequestId)
           None
       }
@@ -250,11 +250,11 @@ class TradeRoom(val config: Config,
                   registerOrderBundle(bundle, lockedLiquidity, orderRefs)
                   log.info(s"${Emoji.Excited}  Placed checked $bundle (estimated total win: ${formatDecimal(totalWin, 2)})")
 
-                case Failure(e) => log.error("placing orders failed", e)
+                case Failure(e) => log.error(e, "placing orders failed")
               }
 
             case Success(None) => log.info(s"""${Emoji.Robot}  Liquidity for trades not yet available: ${requiredLiquidity.mkString(", ")}""")
-            case Failure(e) => log.error("lockAllRequiredLiquidity failed", e)
+            case Failure(e) => log.error(e, "lockAllRequiredLiquidity failed")
           }
         }
     }

@@ -148,7 +148,7 @@ private[binance] class BinancePublicDataInquirer(globalConfig: GlobalConfig,
 
       if (log.isDebugEnabled) log.debug("received ExchangeInfo")
     } catch {
-      case e: Exception => log.error("init failed", e)
+      case e: Exception => log.error(e, "init failed")
     }
   }
 

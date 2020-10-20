@@ -341,7 +341,7 @@ class LiquidityBalancer(val config: Config,
       )
     } catch {
       case e: Exception =>
-        log.error(s"[${exchangeConfig.name}] liquidity balancer failed.\nAvailable trade pairs: ${tradePairs.toSeq.sortBy(_.toString)}.", e)
+        log.error(e, s"[${exchangeConfig.name}] liquidity balancer failed.\nAvailable trade pairs: ${tradePairs.toSeq.sortBy(_.toString)}.")
         Nil
     }
   }

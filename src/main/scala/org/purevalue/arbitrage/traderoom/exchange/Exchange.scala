@@ -254,7 +254,7 @@ case class Exchange(exchangeName: String,
     Future(initSequence.run()).onComplete {
       case Success(_) => self ! SwitchToInitializedMode()
       case Failure(e) =>
-        log.error(s"[$exchangeName] Init sequence failed", e)
+        log.error(e, s"[$exchangeName] Init sequence failed")
         self ! PoisonPill // TODO coordinated shutdown
     }
   }
@@ -274,7 +274,7 @@ case class Exchange(exchangeName: String,
       startPublicDataInquirer()
 
     } catch {
-      case e: Exception => log.error(s"$exchangeName: preStart failed", e)
+      case e: Exception => log.error(e, s"$exchangeName: preStart failed")
       // TODO coordinated shutdown
     }
   }
@@ -297,7 +297,7 @@ case class Exchange(exchangeName: String,
     case StartStreaming()                         => startStreaming()
     case AccountDataChannelInitialized()          => accountDataChannelInitialized.arrived()
     case PioneerOrderSucceeded()                  => pioneerOrdersSucceeded.arrived()
-    case PioneerOrderFailed(e)                    => log.error(s"[$exchangeName] Pioneer order failed", e); self ! PoisonPill
+    case PioneerOrderFailed(e)                    => log.error(e, s"[$exchangeName] Pioneer order failed"); self ! PoisonPill
     case j: JoinTradeRoom                         => joinTradeRoom(j)
 
     case GetAllTradePairs()                       => sender() ! allTradePairs
@@ -338,7 +338,7 @@ case class Exchange(exchangeName: String,
           log.debug(s"removed order ${c.ref} in activeOrders")
         case Success(result) => cancelOrderOrigin ! result
         case Failure(e) =>
-          log.error("[houston, we...] CancelOrder failed", e)
+          log.error(e, "[houston, we...] CancelOrder failed")
       }
     }
   }
@@ -500,7 +500,7 @@ case class Exchange(exchangeName: String,
         liquidityBalancerRunTempActor = context.actorOf(LiquidityBalancerRun.props(config, exchangeConfig, usableTradePairs, self, tradeRoom.get, wc),
           s"${exchangeConfig.name}-liquidity-balancer-run")
 
-      case Failure(cause) => log.error(s"[$exchangeName]  liquidityHouseKeeping()", cause)
+      case Failure(cause) => log.error(cause, s"[$exchangeName]  liquidityHouseKeeping()")
     }
   }
 

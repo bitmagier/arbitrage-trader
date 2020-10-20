@@ -409,7 +409,7 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
           case Right(error) => throw new RuntimeException(s"newLimitOrder failed: $error")
         } recover {
         case e: Exception =>
-          log.error(s"NewLimitOrder failed. Request body:\n$requestBody\ncoinbaseTradePair:$coinbaseTradepair\n", e)
+          log.error(e, s"NewLimitOrder failed. Request body:\n$requestBody\ncoinbaseTradePair:$coinbaseTradepair\n")
           throw e
       }
     }
@@ -482,7 +482,7 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
         deliverAccountsSchedule = Some(actorSystem.scheduler.scheduleAtFixedRate(1.second, 1500.millis, self, DeliverAccounts()))
       }
     } catch {
-      case e: Exception => log.error("init failed", e)
+      case e: Exception => log.error(e, "init failed")
     }
   }
 
