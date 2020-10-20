@@ -1,7 +1,6 @@
 package org.purevalue.arbitrage.traderoom
 
-import akka.actor.SupervisorStrategy.{Escalate, Restart}
-import akka.actor.{Actor, ActorKilledException, ActorLogging, ActorRef, OneForOneStrategy, Props}
+import akka.actor.{Actor, ActorLogging, ActorRef, Props}
 import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage.Config
@@ -141,15 +140,6 @@ class TradeRoomInitCoordinator(val config: Config,
     log.debug(s"streaming started on $exchange. Still waiting for $exchangesStreamingPending")
     if (exchangesStreamingPending.isEmpty) {
       onInitialized()
-    }
-  }
-
-  override val supervisorStrategy: OneForOneStrategy = {
-    OneForOneStrategy() {
-      // @formatter:off
-      case _: ActorKilledException => Restart
-      case _: Exception            => Escalate
-      // @formatter:on
     }
   }
 

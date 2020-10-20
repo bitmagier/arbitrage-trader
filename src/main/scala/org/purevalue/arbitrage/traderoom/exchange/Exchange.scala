@@ -5,7 +5,8 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 import akka.Done
-import akka.actor.{Actor, ActorLogging, ActorRef, ActorSystem, Cancellable, PoisonPill, Props}
+import akka.actor.SupervisorStrategy.{Escalate, Restart}
+import akka.actor.{Actor, ActorKilledException, ActorLogging, ActorRef, ActorSystem, Cancellable, OneForOneStrategy, PoisonPill, Props}
 import akka.pattern.{ask, pipe}
 import akka.util.Timeout
 import org.purevalue.arbitrage._
@@ -278,7 +279,6 @@ case class Exchange(exchangeName: String,
       // TODO coordinated shutdown
     }
   }
-
 
   // @formatter:off
   override def receive: Receive = {
@@ -567,4 +567,13 @@ case class Exchange(exchangeName: String,
     case s: TradeRoom.Stop               => onStop(s)
   }
   // @formatter:off
+
+  override val supervisorStrategy: OneForOneStrategy = {
+    OneForOneStrategy(maxNrOfRetries = 10, withinTimeRange = 5.minutes, loggingEnabled = true) {
+      // @formatter:off
+      case _: ActorKilledException => Restart
+      case _: Exception            => Escalate
+      // @formatter:on
+    }
+  }
 }
