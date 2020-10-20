@@ -1,7 +1,6 @@
-
 #TODO
 
-- drop trade pairs on exchange, which have low liquidity
+- drop trade pairs on exchange, which have low order book liquidity
 
 - steering-man actor: taking care, that we keep going into the profit zone
   - provides/analyzes overall statistics
@@ -16,7 +15,7 @@
 Test strategy: 
     - Unit tests
     - Expectation validations wherever possible in production code
-       
+     
        Because a lot of things can only be tested with responses from real-world exchanges,
        I prefer in-code expectation validations instead of integration-tests.
       
