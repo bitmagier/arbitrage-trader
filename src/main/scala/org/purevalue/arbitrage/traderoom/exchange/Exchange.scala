@@ -550,7 +550,6 @@ case class Exchange(exchangeName: String,
 
     case GetTickerSnapshot()             => sender() ! TickerSnapshot(exchangeName, publicData.ticker)
     case GetWallet()                     => sender() ! accountData.wallet
-    case GetWalletLiquidCrypto()         => sender() ! accountData.wallet.liquidCryptoValues(exchangeConfig.usdEquivalentCoin, publicData.ticker)
     case GetActiveOrder(ref)             => sender() ! accountData.activeOrders.get(ref)
     case GetActiveOrders()               => sender() ! accountData.activeOrders
     case GetFullDataSnapshot()           => sender() ! exchangeDataSnapshot

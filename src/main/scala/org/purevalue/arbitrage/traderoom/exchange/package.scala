@@ -119,12 +119,16 @@ package object exchange {
         .sortBy(_.asset.officialSymbol)
 
     // "liquid crypto values" are our wallet value of crypt assets, which are available for trading and converting-calculations
-    def liquidCryptoValues(aggregateAsset: Asset, ticker: Map[TradePair, Ticker]): Iterable[CryptoValue] =
+    def liquidCryptoValues(aggregateAsset: Asset, ticker: Map[TradePair, Ticker]): Seq[CryptoValue] =
       balance
         .filterNot(_._1.isFiat)
         .filterNot(b => doNotTouchTheseAssets.contains(b._1))
         .map(b => CryptoValue(b._1, b._2.amountAvailable))
         .filter(_.canConvertTo(aggregateAsset, ticker))
+        .toSeq
+        .sortBy(_.convertTo(aggregateAsset, ticker).amount)
+        .reverse
+
 
     def liquidCryptoValueSum(aggregateAsset: Asset, ticker: Map[TradePair, Ticker]): CryptoValue = {
       liquidCryptoValues(aggregateAsset, ticker)

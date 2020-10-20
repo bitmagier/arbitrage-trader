@@ -260,7 +260,7 @@ class TradeRoom(val config: Config,
     }
   }
 
-  // TODO I think, we will need a merged reference-ticker which comes from binance + assets from other exchanges, which binance does not have
+  // TODO probably we will need a merged reference-ticker which comes from binance + assets from other exchanges, which binance does not have
 
   def logStats(): Unit = {
     if (shutdownInitiated) return
