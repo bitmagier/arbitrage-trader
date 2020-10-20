@@ -3,7 +3,7 @@ package org.purevalue.arbitrage.traderoom.exchange
 import org.purevalue.arbitrage.traderoom.Asset.{BTC, USDT}
 import org.purevalue.arbitrage.traderoom.TradeSide.{Buy, Sell}
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer.{LiquidityTransfer, WorkingContext}
-import org.purevalue.arbitrage.traderoom.{Asset, CryptoValue, TradePair}
+import org.purevalue.arbitrage.traderoom.{Asset, CryptoValue, TradePair, TradeSide}
 import org.purevalue.arbitrage.{Config, ExchangeConfig, GlobalConfig, LiquidityManagerConfig, TradeRoomConfig}
 import org.scalatest.matchers.must.Matchers
 import org.scalatest.matchers.should.Matchers.convertToAnyShouldWrapper
@@ -20,11 +20,11 @@ class LiquidityBalancerSpec extends AnyWordSpecLike
   Asset.register("LINK", "Link", isFiat = false)
   Asset.register("OMG", "OMG", isFiat = false)
 
-  val ETH = Asset("ETH")
-  val ALGO = Asset("ALGO")
-  val ADA = Asset("ADA")
-  val LINK = Asset("LINK")
-  val OMG = Asset("OMG")
+  val ETH: Asset = Asset("ETH")
+  val ALGO: Asset = Asset("ALGO")
+  val ADA: Asset = Asset("ADA")
+  val LINK: Asset = Asset("LINK")
+  val OMG: Asset = Asset("OMG")
 
   val ExchangeName = "foo"
   val TxGranularityUSD = 20.0
@@ -58,7 +58,7 @@ class LiquidityBalancerSpec extends AnyWordSpecLike
     LINK -> 500.0
   ).map(e => e._1 -> Balance(e._1, e._2, 0.0))
 
-  val wc = WorkingContext(ExchangeTicker, ExchangeTicker, Map(), BalanceSnapshot, Map(), Map())
+  val wc: WorkingContext = WorkingContext(ExchangeTicker, ExchangeTicker, Map(), BalanceSnapshot, Map(), Map())
   val defaultLiquidityBalancer: LiquidityBalancer = new LiquidityBalancer(Cfg, Cfg.exchanges(ExchangeName), TradePairs, wc)
 
   "LiquidityBalancer" must {
@@ -124,6 +124,28 @@ class LiquidityBalancerSpec extends AnyWordSpecLike
         println(s"LINK ${linkToUsdtOrder.get.orderRequest.amountBaseAsset} between $minTransferValue and $maxTransferValue}")
         linkToUsdtOrder.get.orderRequest.amountBaseAsset should (be >= minTransferValue and be <= maxTransferValue)
       }
+    }
+
+    "squash transfers" in {
+      val t1 = Seq(
+        LiquidityTransfer(TradePair(ETH, BTC), TradeSide.Buy, 2, 100.0, 0.1, 0.0),
+        LiquidityTransfer(TradePair(ETH, BTC), TradeSide.Buy, 2, 100.0, 0.1, 0.0),
+        LiquidityTransfer(TradePair(ETH, USDT), TradeSide.Sell, 1, 100.0, 200, 0.0),
+      )
+      val t2 = Seq(LiquidityTransfer(TradePair(ETH, USDT), TradeSide.Sell, 2, 100.0, 200, 0.0))
+      val squashed = defaultLiquidityBalancer.squash(t1 ++ t2)
+
+      squashed should have size 2
+      val r1 = squashed.find(e => e.pair == TradePair(ETH, BTC)).get
+      val r2 = squashed.find(e => e.pair == TradePair(ETH, USDT)).get
+
+      r1.side shouldBe TradeSide.Buy
+      r1.buckets shouldBe 4
+      r1.quantity shouldBe 200.0
+
+      r2.side shouldBe TradeSide.Sell
+      r2.buckets shouldBe 3
+      r2.quantity shouldBe 200.0
     }
   }
 }

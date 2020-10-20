@@ -112,11 +112,7 @@ object Asset {
 
 
 // a universal usable trade-pair
-abstract class TradePair extends Ordered[TradePair] {
-
-  def baseAsset: Asset
-
-  def quoteAsset: Asset
+case class TradePair(baseAsset: Asset, quoteAsset: Asset) extends Ordered[TradePair] {
 
   def compare(that: TradePair): Int = this.toString compare that.toString
 
@@ -125,23 +121,6 @@ abstract class TradePair extends Ordered[TradePair] {
   def involvedAssets: Set[Asset] = Set(baseAsset, quoteAsset)
 
   override def toString: String = s"${baseAsset.officialSymbol}:${quoteAsset.officialSymbol}"
-
-  override def equals(obj: Any): Boolean = {
-    obj.isInstanceOf[TradePair] &&
-      this.baseAsset == obj.asInstanceOf[TradePair].baseAsset &&
-      this.quoteAsset == obj.asInstanceOf[TradePair].quoteAsset
-  }
-
-  override def hashCode(): Int = {
-    val state = Seq(baseAsset, quoteAsset)
-    state.map(_.hashCode()).foldLeft(0)((a, b) => 31 * a + b)
-  }
-}
-object TradePair {
-  def apply(b: Asset, q: Asset): TradePair = new TradePair {
-    override val baseAsset: Asset = b
-    override val quoteAsset: Asset = q
-  }
 }
 
 case class FiatMoney(asset: Asset, amount: Double) {
