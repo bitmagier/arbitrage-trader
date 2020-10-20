@@ -334,7 +334,9 @@ class LiquidityBalancer(val config: Config,
       val primaryReserveInflowTransfers: Iterable[LiquidityTransfer] =
         transferAllSupplyTo(
           exchangeConfig.primaryReserveAsset,
-          calcRemainingSupply(afterDemandsFilledSupplyOverhead, secondaryReserveFillUpTransfers))
+          calcRemainingSupply(afterDemandsFilledSupplyOverhead, secondaryReserveFillUpTransfers)
+            .filterNot(_._1 == exchangeConfig.primaryReserveAsset)
+        )
 
       createOrders(
         squash(fillDemandTransfers ++ secondaryReserveFillUpTransfers ++ primaryReserveInflowTransfers)
