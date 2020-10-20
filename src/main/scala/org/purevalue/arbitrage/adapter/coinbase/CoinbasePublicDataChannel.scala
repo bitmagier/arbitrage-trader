@@ -1,7 +1,7 @@
 package org.purevalue.arbitrage.adapter.coinbase
 
 import akka.Done
-import akka.actor.{Actor, ActorLogging, ActorRef, ActorSystem, Props}
+import akka.actor.{Actor, ActorLogging, ActorRef, ActorSystem, Kill, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.StatusCodes
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
@@ -13,7 +13,6 @@ import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataInquirer.GetCo
 import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.IncomingPublicData
 import org.purevalue.arbitrage.traderoom.exchange.{Ask, Bid, ExchangePublicStreamData, OrderBook, OrderBookUpdate, Ticker}
-import org.purevalue.arbitrage.util.ConnectionLostException
 import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig, Main}
 import spray.json.{DefaultJsonProtocol, JsObject, JsonParser, RootJsonFormat, enrichAny}
 
@@ -194,7 +193,7 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
     ws = Http().singleWebSocketRequest(WebSocketRequest(CoinbaseWebSocketEndpoint), wsFlow)
     ws._2.future.onComplete { e =>
       log.info(s"connection closed: ${e.get}")
-      throw new ConnectionLostException(s"coinbase public connection lost") // trigger restart
+      self ! Kill
     }
     connected = createConnected
   }

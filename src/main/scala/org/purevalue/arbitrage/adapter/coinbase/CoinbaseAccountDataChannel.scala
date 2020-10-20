@@ -4,7 +4,7 @@ import java.time.Instant
 import java.util.UUID
 
 import akka.Done
-import akka.actor.{Actor, ActorLogging, ActorRef, ActorSystem, Cancellable, Props}
+import akka.actor.{Actor, ActorLogging, ActorRef, ActorSystem, Cancellable, Kill, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{HttpMethods, HttpResponse, StatusCodes}
@@ -19,8 +19,8 @@ import org.purevalue.arbitrage.traderoom.TradeRoom.OrderRef
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.{Balance, CompleteWalletUpdate, ExchangeAccountStreamData}
+import org.purevalue.arbitrage.util.HttpUtil
 import org.purevalue.arbitrage.util.Util.{alignToStepSizeCeil, alignToStepSizeNearest, formatDecimalWithFixPrecision}
-import org.purevalue.arbitrage.util.{ConnectionLostException, HttpUtil}
 import org.purevalue.arbitrage.{Config, ExchangeConfig, Main}
 import spray.json.{DefaultJsonProtocol, JsObject, JsonParser, RootJsonFormat, enrichAny}
 
@@ -365,13 +365,12 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
       }
     }
 
-
   def connect(): Unit = {
     log.info(s"starting WebSocket $CoinbaseWebSocketEndpoint ...")
     ws = Http().singleWebSocketRequest(WebSocketRequest(CoinbaseWebSocketEndpoint), wsFlow())
     ws._2.future.onComplete { e =>
       log.info(s"connection closed: ${e.get}")
-      throw new ConnectionLostException(s"coinbase account connection lost") // trigger restart
+      self ! Kill
     }
     connected = createConnected
   }
@@ -379,7 +378,6 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
   def onStreamsRunning(): Unit = {
     exchange ! AccountDataChannelInitialized()
   }
-
 
   def newLimitOrder(o: OrderRequest): Future[NewOrderAck] = {
 

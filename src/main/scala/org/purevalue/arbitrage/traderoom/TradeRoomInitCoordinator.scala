@@ -1,7 +1,7 @@
 package org.purevalue.arbitrage.traderoom
 
 import akka.actor.SupervisorStrategy.{Escalate, Restart}
-import akka.actor.{Actor, ActorLogging, ActorRef, OneForOneStrategy, Props}
+import akka.actor.{Actor, ActorKilledException, ActorLogging, ActorRef, OneForOneStrategy, Props}
 import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage.Config
@@ -11,7 +11,6 @@ import org.purevalue.arbitrage.adapter.coinbase.{CoinbaseAccountDataChannel, Coi
 import org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator.InitializedTradeRoom
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.{Exchange, ExchangeAccountDataChannelInit, ExchangePublicDataChannelInit, ExchangePublicDataInquirerInit}
-import org.purevalue.arbitrage.util.ConnectionLostException
 
 import scala.concurrent.Await
 import scala.concurrent.duration.DurationInt
@@ -148,8 +147,8 @@ class TradeRoomInitCoordinator(val config: Config,
   override val supervisorStrategy: OneForOneStrategy = {
     OneForOneStrategy() {
       // @formatter:off
-      case _: ConnectionLostException => Restart
-      case _: Exception               => Escalate
+      case _: ActorKilledException => Restart
+      case _: Exception            => Escalate
       // @formatter:on
     }
   }
