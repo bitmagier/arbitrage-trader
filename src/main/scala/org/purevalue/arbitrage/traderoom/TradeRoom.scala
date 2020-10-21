@@ -597,6 +597,7 @@ class TradeRoom(val config: Config,
     case HouseKeeping()                                => houseKeeping()
     case TriggerTrader()                               => collectTradeContext().pipeTo(fooTrader.get)
     case Stop(timeout)                                 => shutdown(timeout)
+    case akka.actor.Status.Failure(cause)              => log.error(cause, "Failure received")
   }
   // @formatter:on
 

@@ -112,6 +112,9 @@ class LiquidityBalancerRun(val config: Config,
   }
 
   override def receive: Receive = {
-    case Run() => balanceLiquidity()
+    // @formatter:off
+    case Run()                            => balanceLiquidity()
+    case akka.actor.Status.Failure(cause) => log.error(cause, "Failure received")
+    // @formatter:on
   }
 }

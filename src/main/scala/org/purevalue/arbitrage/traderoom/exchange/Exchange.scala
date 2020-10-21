@@ -6,7 +6,7 @@ import java.util.concurrent.TimeUnit
 
 import akka.Done
 import akka.actor.SupervisorStrategy.{Escalate, Restart}
-import akka.actor.{Actor, ActorKilledException, ActorLogging, ActorRef, ActorSystem, Cancellable, OneForOneStrategy, PoisonPill, Props}
+import akka.actor.{Actor, ActorKilledException, ActorLogging, ActorRef, ActorSystem, Cancellable, Kill, OneForOneStrategy, PoisonPill, Props}
 import akka.pattern.{ask, pipe}
 import akka.util.Timeout
 import org.purevalue.arbitrage._
@@ -16,7 +16,7 @@ import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer.WorkingContext
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{GetState, LiquidityLockClearance, LiquidityLockRequest}
 import org.purevalue.arbitrage.traderoom.exchange.PioneerOrderRunner.{PioneerOrderFailed, PioneerOrderSucceeded}
-import org.purevalue.arbitrage.util.{Emoji, ExchangeDataOutdated, InitSequence, InitStep, WaitingFor}
+import org.purevalue.arbitrage.util.{Emoji, InitSequence, InitStep, WaitingFor}
 
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.concurrent.{Await, ExecutionContextExecutor, Future}
@@ -466,7 +466,8 @@ case class Exchange(exchangeName: String,
   def stalePublicDataWatch(): Unit = {
     val lastSeen: Instant = (publicData.heartbeatTS.toSeq ++ publicData.tickerTS.toSeq ++ publicData.orderBookTS.toSeq).max
     if (Duration.between(lastSeen, Instant.now).compareTo(config.tradeRoom.restarWhenDataStreamIsOlderThan) > 0) {
-      throw new ExchangeDataOutdated(s"$exchangeName data is outdated")
+      log.error(s"[$exchangeName] data is outdated!")
+      self ! Kill
     }
   }
 
@@ -565,7 +566,7 @@ case class Exchange(exchangeName: String,
     case LiquidityBalancerRun.Finished() => liquidityHouseKeepingRunning = false
     case s: TradeRoom.Stop               => onStop(s)
 
-    case Failure(cause)                  => log.error(cause, s"[$exchangeName] received failure [to be fixed]")
+    case Failure(cause)                  => log.error(cause, s"[$exchangeName] failure received")
   }
   // @formatter:off
 

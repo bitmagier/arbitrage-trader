@@ -1,6 +1,7 @@
 package org.purevalue.arbitrage.traderoom
 
-import akka.actor.{Actor, ActorLogging, ActorRef, Props}
+import akka.actor.SupervisorStrategy.Escalate
+import akka.actor.{Actor, ActorLogging, ActorRef, AllForOneStrategy, Props}
 import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage.Config
@@ -152,7 +153,16 @@ class TradeRoomInitCoordinator(val config: Config,
   }
 
   override def receive: Receive = {
+    // @formatter:off
     case Exchange.StreamingStarted(exchange) => onStreamingStarted(exchange)
-    case msg => log.error(s"unexpected message: $msg")
+    case akka.actor.Status.Failure(cause)    => log.error(cause, "Failure received")
+    case msg                                 => log.error(s"unexpected message: $msg")
+    // @formatter:on
+  }
+
+  override val supervisorStrategy: AllForOneStrategy = {
+    AllForOneStrategy() {
+      case _: Exception => Escalate
+    }
   }
 }

@@ -1,9 +1,8 @@
 package org.purevalue.arbitrage
 
 import akka.actor.SupervisorStrategy.{Escalate, Restart}
-import akka.actor.{Actor, ActorRef, ActorSystem, AllForOneStrategy, Props}
+import akka.actor.{Actor, ActorKilledException, ActorRef, ActorSystem, AllForOneStrategy, Props}
 import org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator
-import org.purevalue.arbitrage.util.ExchangeDataOutdated
 
 import scala.concurrent.duration.DurationInt
 
@@ -28,16 +27,17 @@ class UserRootGuardian(val config: Config) extends Actor {
   - send restart request to all children which were not killed in step 3; restarted children will follow the same process recursively, from step 2
   - resume the actor
 */
-  override val supervisorStrategy: AllForOneStrategy = {
-    AllForOneStrategy(maxNrOfRetries = 5, withinTimeRange = 2.minutes, loggingEnabled = true) {
-      // @formatter:off
-      case _: ExchangeDataOutdated => Restart
-      case _: Exception            => Escalate
-    } // @formatter:on
-  }
 
   override def receive: Receive = {
     case TradeRoomInitCoordinator.InitializedTradeRoom(tradeRoom) => this.tradeRoom = tradeRoom
+  }
+
+  override val supervisorStrategy: AllForOneStrategy = {
+    AllForOneStrategy(maxNrOfRetries = 5, withinTimeRange = 2.minutes, loggingEnabled = true) {
+      // @formatter:off
+      case _: ActorKilledException => Restart
+      case _: Exception            => Escalate
+    } // @formatter:on
   }
 
   //  // TODO coordinated shutdown
