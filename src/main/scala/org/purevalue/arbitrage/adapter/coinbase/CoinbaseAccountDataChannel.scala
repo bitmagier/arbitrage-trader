@@ -369,7 +369,7 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
     log.info(s"starting WebSocket $CoinbaseWebSocketEndpoint ...")
     ws = Http().singleWebSocketRequest(WebSocketRequest(CoinbaseWebSocketEndpoint), wsFlow())
     ws._2.future.onComplete { e =>
-      log.info(s"connection closed: ${e.get}")
+      log.info(s"connection closed")
       self ! Kill
     }
     connected = createConnected

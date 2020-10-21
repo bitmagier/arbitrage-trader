@@ -190,7 +190,7 @@ private[binance] class BinancePublicDataChannel(globalConfig: GlobalConfig,
 
     ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow)
     ws._2.future.onComplete { e =>
-      log.info(s"connection closed: ${e.get}")
+      log.info(s"connection closed")
       self ! Kill
     }
     connected = createConnected

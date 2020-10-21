@@ -368,7 +368,7 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
       val subscribeMessages: List[SubscribeRequestJson] = partition.map(e => subscribeTickerMessage(e)).toList
       connectionId += 1
       val ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow(connectionId, subscribeMessages))
-      ws._2.future.onComplete(e => log.info(s"connection closed: ${e.get}"))
+      ws._2.future.onComplete(e => log.info(s"connection closed"))
       wsList = ws :: wsList
       connectedList = createConnected(ws._1) :: connectedList
     }
@@ -379,7 +379,7 @@ private[bitfinex] class BitfinexPublicDataChannel(globalConfig: GlobalConfig,
       connectionId += 1
       val ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow(connectionId, subscribeMessages))
       ws._2.future.onComplete { e =>
-        log.info(s"connection closed: ${e.get}")
+        log.info(s"connection closed")
         self ! Kill
       }
       wsList = ws :: wsList
