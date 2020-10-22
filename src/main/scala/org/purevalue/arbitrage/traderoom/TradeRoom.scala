@@ -97,7 +97,7 @@ class TradeRoom(val config: Config,
 
   private val houseKeepingSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(5.seconds, 3.seconds, self, HouseKeeping())
   private val logScheduleRate: FiniteDuration = FiniteDuration(config.tradeRoom.statsReportInterval.toNanos, TimeUnit.NANOSECONDS)
-  private val logSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(3.minutes, logScheduleRate, self, LogStats())
+  private val logSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(2.minutes, logScheduleRate, self, LogStats())
 
   private val traderScheduleDelay: FiniteDuration = FiniteDuration(config.tradeRoom.traderTriggerInterval.toNanos, TimeUnit.NANOSECONDS)
   private var traderSchedule: Cancellable = _
