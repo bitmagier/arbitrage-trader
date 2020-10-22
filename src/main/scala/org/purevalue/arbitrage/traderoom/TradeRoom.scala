@@ -444,7 +444,7 @@ class TradeRoom(val config: Config,
       case None => throw new WrongAssumption("order must exist")
       case Some(order) =>
         if (order.orderStatus == OrderStatus.FILLED) {
-          log.info(s"${Emoji.Robot}  Liquidity tx ${tx.orderRequest.tradeDesc} FILLED")
+          log.info(s"${Emoji.Robot}  Liquidity tx ${tx.orderRequest.tradeDesc} (externalId:${tx.orderRef.externalOrderId}) FILLED")
           cleanupLiquidityTxOrder(tx)
         }
         else if (order.orderStatus.isFinal) {

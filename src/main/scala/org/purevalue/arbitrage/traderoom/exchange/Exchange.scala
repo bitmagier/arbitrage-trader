@@ -138,8 +138,8 @@ case class Exchange(exchangeName: String,
         config,
         exchangeConfig,
         usableTradePairs,
-        accountData.wallet,
-        j.tradeRoom),
+        j.tradeRoom,
+        self),
       s"LiquidityManager-$exchangeName"
     )
   }
