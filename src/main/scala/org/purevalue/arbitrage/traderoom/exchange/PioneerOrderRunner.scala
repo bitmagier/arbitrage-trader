@@ -159,19 +159,22 @@ class PioneerOrderRunner(config: Config,
     implicit val timeout: Timeout = config.global.internalCommunicationTimeout
     (exchange ? GetActiveOrders()).mapTo[Map[OrderRef, Order]].foreach { activeOrders =>
 
-      activeOrders.get(o.ref) match {
-        case Some(order) if order.orderStatus.isFinal =>
-          validationMethod(o.request, order)
-          log.info(s"[$exchangeName]  pioneer order ${o.request.shortDesc} successfully validated")
-          arrival.arrived()
-          exchange ! RemoveActiveOrder(o.ref)
+      try {
+        activeOrders.get(o.ref) match {
+          case Some(order) if order.orderStatus.isFinal =>
+            validationMethod(o.request, order)
+            log.info(s"[$exchangeName]  pioneer order ${o.request.shortDesc} successfully validated")
+            arrival.arrived()
+            exchange ! RemoveActiveOrder(o.ref)
 
-        case Some(order) =>
-          log.debug(s"[$exchangeName] pioneer order in progress: $order")
-          validationMethod(o.request, order)
+          case Some(order) =>
+            log.debug(s"[$exchangeName] pioneer order in progress: $order")
+            validationMethod(o.request, order)
 
-        case None => // nop
-
+          case None => // nop
+        }
+      } catch {
+        case e:Exception => exchange ! PioneerOrderFailed(e)
       }
     }
   }

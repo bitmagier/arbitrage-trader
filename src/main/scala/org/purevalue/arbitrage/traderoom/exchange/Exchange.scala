@@ -10,7 +10,7 @@ import akka.actor.{Actor, ActorKilledException, ActorLogging, ActorRef, ActorSys
 import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage._
-import org.purevalue.arbitrage.traderoom.TradeRoom.{GetReferenceTicker, JoinTradeRoom, OrderRef, OrderUpdateTrigger, TradeRoomJoined}
+import org.purevalue.arbitrage.traderoom.TradeRoom.{GetReferenceTicker, JoinTradeRoom, OrderRef, OrderUpdateTrigger, Stop, TradeRoomJoined}
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer.WorkingContext
@@ -295,7 +295,7 @@ case class Exchange(exchangeName: String,
     case StartStreaming()                         => startStreaming()
     case AccountDataChannelInitialized()          => accountDataChannelInitialized.arrived()
     case PioneerOrderSucceeded()                  => pioneerOrdersSucceeded.arrived()
-    case PioneerOrderFailed(e)                    => log.error(e, s"[$exchangeName] Pioneer order failed"); self ! PoisonPill
+    case PioneerOrderFailed(e)                    => log.error(e, s"[$exchangeName] Pioneer order failed"); stop()
     case j: JoinTradeRoom                         => joinTradeRoom(j)
 
     case GetAllTradePairs()                       => sender() ! allTradePairs
@@ -307,7 +307,7 @@ case class Exchange(exchangeName: String,
 
     case Done                                     => // ignoring Done from cascaded JoinTradeRoom
     case SwitchToInitializedMode()                => switchToInitializedMode()
-    case s: TradeRoom.Stop                        => onStop(s)
+    case TradeRoom.Stop()                         => stop()
   }
   // @formatter:on
 
@@ -503,9 +503,9 @@ case class Exchange(exchangeName: String,
     }
   }
 
-  def onStop(s: TradeRoom.Stop): Unit = {
+  def stop(): Unit = {
     shutdownInitiated = true
-    liquidityManager ! s
+    liquidityManager ! Stop()
     self ! PoisonPill
   }
 
@@ -566,7 +566,7 @@ case class Exchange(exchangeName: String,
     case DataHouseKeeping()              => dataHouseKeeping()
     case LiquidityHouseKeeping()         => liquidityHouseKeeping()
     case LiquidityBalancerRun.Finished() => liquidityHouseKeepingRunning = false
-    case s: TradeRoom.Stop               => onStop(s)
+    case TradeRoom.Stop()                => stop()
 
     case Failure(cause)                  => log.error(cause, s"[$exchangeName] failure received")
   }

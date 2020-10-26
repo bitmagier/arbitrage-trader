@@ -221,7 +221,7 @@ class LiquidityManager(val config: Config,
     case r: LiquidityLockRequest      => liquidityLockRequest(r)
     case LiquidityLockClearance(id)   => clearLock(id)
     case GetState()                   => houseKeeping(); sender() ! State(liquidityDemand, liquidityLocks)
-    case TradeRoom.Stop(_)            => stop()
+    case TradeRoom.Stop()             => stop()
     // @formatter:off
   }
 }

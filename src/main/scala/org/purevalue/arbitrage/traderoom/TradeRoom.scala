@@ -69,7 +69,7 @@ object TradeRoom {
   case class HouseKeeping()
   case class OrderUpdateTrigger(ref: OrderRef, resendCounter: Int = 0) // status of an order has changed
   case class TriggerTrader()
-  case class Stop(timeout: Duration)
+  case class Stop()
   case class NewLiquidityTransformationOrder(orderRequest: OrderRequest)
   case class GetFinishedLiquidityTxs()
   case class JoinTradeRoom(tradeRoom: ActorRef)
@@ -597,16 +597,16 @@ class TradeRoom(val config: Config,
     case LogStats()                                    => logStats()
     case HouseKeeping()                                => houseKeeping()
     case TriggerTrader()                               => collectTradeContext().pipeTo(fooTrader.get)
-    case Stop(timeout)                                 => shutdown(timeout)
+    case Stop()                                        => shutdown()
     case akka.actor.Status.Failure(cause)              => log.error(cause, "Failure received")
   }
   // @formatter:on
 
-  def shutdown(timeout: Duration): Unit = {
+  def shutdown(): Unit = {
     log.info("shutdown initiated")
     shutdownInitiated = true
     exchanges.values.foreach {
-      _ ! Stop(timeout.minusSeconds(2))
+      _ ! Stop()
     }
     sender() ! Done
     self ! PoisonPill
