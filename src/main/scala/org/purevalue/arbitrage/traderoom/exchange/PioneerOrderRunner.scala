@@ -174,7 +174,9 @@ class PioneerOrderRunner(config: Config,
           case None => // nop
         }
       } catch {
-        case e:Exception => exchange ! PioneerOrderFailed(e)
+        case e:Exception =>
+          exchange ! PioneerOrderFailed(e)
+          self ! PoisonPill
       }
     }
   }
