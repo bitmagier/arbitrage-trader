@@ -32,7 +32,7 @@ class LiquidityBalancerSpec extends AnyWordSpecLike
     GlobalConfig(1.second, 1.second, 1.second),
     TradeRoomConfig(tradeSimulation = true, ExchangeName, null, null, 50.0, null, null, null, List(ExchangeName)),
     Map(ExchangeName -> ExchangeConfig(ExchangeName, List(USDT, BTC, ETH), Set(), USDT, 0.0, Set(), tickerIsRealtime = true, null, None, 1)),
-    LiquidityManagerConfig(null, null, 0.0002, 55.0, 1.0, 0.0001, TxGranularityUSD, 1.0))
+    LiquidityManagerConfig(null, null, 0.0002, 55.0, 1.0, 0.0001, TxGranularityUSD))
 
   private val BitcoinPriceUSD = 10200.24
   private val EthPriceUSD = 342.12
