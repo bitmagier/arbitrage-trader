@@ -113,8 +113,7 @@ case class LiquidityManagerConfig(liquidityLockMaxLifetime: Duration, // when a 
                                   minimumKeepReserveLiquidityPerAssetInUSD: Double, // when we convert to a reserve liquidity or re-balance our reserve liquidity, each of them should reach at least that value (measured in USD)
                                   orderbookBasedTxLimitQuantityOverbooking: Double, // we assume, we have to trade more quantity (real quantity multiplied by this factor), when we calculate the ideal order limit based on an orderbook, because in reality we are not alone on the exchange
                                   tickerBasedTxLimitBeyondEdgeLimit: Double, // [limit-reality-adjustment-rate] for ticker based limit calculation; defines the rate we set our limit above the highest ask or below the lowest bid (use 0.0 for matching exactly the bid or ask price).
-                                  txValueGranularityInUSD: Double, // that's the granularity (and also minimum amount) we transfer for reserve asset re-balance orders)}
-                                  dustLevelInUSD: Double) // we don't try to convert back assets with a value below that one back to a reserve asset
+                                  txValueGranularityInUSD: Double) // that's the granularity (and also minimum amount) we transfer for reserve asset re-balance orders)}
 object LiquidityManagerConfig {
   def apply(c: com.typesafe.config.Config): LiquidityManagerConfig = LiquidityManagerConfig(
     c.getDuration("liquidity-lock-max-lifetime"),
@@ -123,8 +122,7 @@ object LiquidityManagerConfig {
     c.getDouble("minimum-keep-reserve-liquidity-per-asset-in-usd"),
     c.getDouble("orderbook-based-tx-limit-quantity-overbooking"),
     c.getDouble("ticker-based-tx-limit-beyond-edge-limit"),
-    c.getDouble("tx-value-granularity-in-usd"),
-    c.getDouble("dust-level-in-usd")
+    c.getDouble("tx-value-granularity-in-usd")
   )
 }
 

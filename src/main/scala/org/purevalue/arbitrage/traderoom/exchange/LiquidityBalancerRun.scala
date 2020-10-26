@@ -28,8 +28,8 @@ object LiquidityBalancerRun {
             tradePairs: Set[TradePair],
             parent: ActorRef,
             tradeRoom: ActorRef,
-            wc: WorkingContext
-           ): Props = Props(new LiquidityBalancerRun(config, exchangeConfig, tradePairs, parent, tradeRoom, wc))
+            wc: WorkingContext): Props =
+    Props(new LiquidityBalancerRun(config, exchangeConfig, tradePairs, parent, tradeRoom, wc))
 }
 
 // Temporary Actor - stops itself after successful run
