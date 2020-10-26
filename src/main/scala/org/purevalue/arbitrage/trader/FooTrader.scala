@@ -33,7 +33,7 @@ class FooTrader(traderConfig: Config, tradeRoom: ActorRef) extends Actor with Ac
   var shotsDelivered: Int = 0
   var lastLifeSign: Instant = Instant.now()
 
-  val OrderbookBasedLimitQuantityOverbookingRate: Double = traderConfig.getDouble("orderbook-based-tx-limit-quantity-overbooking")
+  val OrderbookBasedLimitQuantityOverbookingRate: Double = traderConfig.getDouble("order-bundle.orderbook-based-tx-limit-quantity-overbooking")
   val TickerBasedOrderLimitRealityAdjustmentRate: Double = traderConfig.getDouble("order-bundle.ticker-based-tx-limit-beyond-edge-limit")
   val OrderBundleMinGainInUSD: Double = traderConfig.getDouble("order-bundle.min-gain-in-usd")
   val TradeAmountInUSD: Double = traderConfig.getDouble("order-bundle.trade-amount-in-usd")
