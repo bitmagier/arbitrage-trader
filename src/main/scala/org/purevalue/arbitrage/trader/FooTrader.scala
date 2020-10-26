@@ -33,7 +33,8 @@ class FooTrader(traderConfig: Config, tradeRoom: ActorRef) extends Actor with Ac
   var shotsDelivered: Int = 0
   var lastLifeSign: Instant = Instant.now()
 
-  val OrderLimitRealityAdjustmentRate: Double = traderConfig.getDouble("order-bundle.order-limit-addition-rate")
+  val OrderbookBasedLimitQuantityOverbookingRate: Double = traderConfig.getDouble("orderbook-based-tx-limit-quantity-overbooking")
+  val TickerBasedOrderLimitRealityAdjustmentRate: Double = traderConfig.getDouble("order-bundle.ticker-based-tx-limit-beyond-edge-limit")
   val OrderBundleMinGainInUSD: Double = traderConfig.getDouble("order-bundle.min-gain-in-usd")
   val TradeAmountInUSD: Double = traderConfig.getDouble("order-bundle.trade-amount-in-usd")
 
@@ -65,7 +66,7 @@ class FooTrader(traderConfig: Config, tradeRoom: ActorRef) extends Actor with Ac
 
   def determineLimit(exchange: String, tradePair: TradePair, tradeSide: TradeSide, amountBaseAsset: Double)(implicit tc: TradeContext): Option[Double] = {
     new OrderLimitChooser(tc.orderBooks(exchange).get(tradePair), tc.tickers(exchange)(tradePair))
-      .determineRealisticOrderLimit(tradeSide, amountBaseAsset, OrderLimitRealityAdjustmentRate)
+      .determineRealisticOrderLimit(tradeSide, amountBaseAsset, OrderbookBasedLimitQuantityOverbookingRate, TickerBasedOrderLimitRealityAdjustmentRate)
   }
 
   def findBestShot(tradePair: TradePair)(implicit tc: TradeContext): Either[OrderRequestBundle, NoResultReason] = {

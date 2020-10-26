@@ -32,7 +32,7 @@ class LiquidityBalancerSpec extends AnyWordSpecLike
     GlobalConfig(1.second, 1.second, 1.second),
     TradeRoomConfig(tradeSimulation = true, ExchangeName, null, null, 50.0, null, null, null, List(ExchangeName)),
     Map(ExchangeName -> ExchangeConfig(ExchangeName, List(USDT, BTC, ETH), Set(), USDT, 0.0, Set(), tickerIsRealtime = true, null, None, 1)),
-    LiquidityManagerConfig(null, null, 0.0002, 55.0, 0.0001, TxGranularityUSD, 1.0))
+    LiquidityManagerConfig(null, null, 0.0002, 55.0, 1.0, 0.0001, TxGranularityUSD, 1.0))
 
   private val BitcoinPriceUSD = 10200.24
   private val EthPriceUSD = 342.12
@@ -105,7 +105,7 @@ class LiquidityBalancerSpec extends AnyWordSpecLike
       linkToUsdtOrder.isDefined shouldBe true
 
       linkToEthOrder.get.orderRequest.amountBaseAsset shouldBe (3 * 20.0) / 10.55 +- 0.000001
-      linkToEthOrder.get.orderRequest.limit shouldBe ((10.55 / EthPriceUSD) * (1.0 - Cfg.liquidityManager.setTxLimitAwayFromEdgeLimit)) +- 0.00001
+      linkToEthOrder.get.orderRequest.limit shouldBe ((10.55 / EthPriceUSD) * (1.0 - Cfg.liquidityManager.tickerBasedTxLimitBeyondEdgeLimit)) +- 0.00001
 
       {
         val btcBucketSize = defaultLiquidityBalancer.bucketSize(BTC)

@@ -37,7 +37,7 @@ case class Order(externalId: String,
       case TradeSide.Buy => "<-"
       case TradeSide.Sell => "->"
     }
-    s"[$exchange side ${cumulativeFilledQuantity.map(formatDecimal(_, pair.baseAsset.defaultFractionDigits))} " +
+    s"[$exchange $side ${cumulativeFilledQuantity.map(formatDecimal(_, pair.baseAsset.defaultFractionDigits))} " +
       s"${pair.baseAsset.officialSymbol}$direction${pair.quoteAsset.officialSymbol} " +
       s"""filled ${if (cumulativeFilledQuantity.isDefined && priceAverage.isDefined) formatDecimal(cumulativeFilledQuantity.get * priceAverage.get, pair.quoteAsset.defaultFractionDigits) else "n/a"} """ +
       s"price ${price.map(formatDecimal(_, pair.quoteAsset.defaultFractionDigits))} $orderStatus]"

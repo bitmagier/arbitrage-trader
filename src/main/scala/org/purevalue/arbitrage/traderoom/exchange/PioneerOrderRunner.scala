@@ -240,7 +240,7 @@ class PioneerOrderRunner(config: Config,
   def submitPioneerOrder(pair: TradePair, side: TradeSide, amountBaseAsset: Double, unrealisticGoodlimit: Boolean): Future[PioneerOrder] = {
     implicit val timeout: Timeout = config.global.internalCommunicationTimeout
 
-    (exchange ? DetermineRealisticLimit(pair, side, amountBaseAsset * 5.0, config.liquidityManager.setTxLimitAwayFromEdgeLimit))
+    (exchange ? DetermineRealisticLimit(pair, side, amountBaseAsset))
       .mapTo[Double]
       .flatMap {
         realisticLimit =>

@@ -7,10 +7,10 @@ import java.util.concurrent.TimeUnit
 import akka.Done
 import akka.actor.SupervisorStrategy.{Escalate, Restart}
 import akka.actor.{Actor, ActorKilledException, ActorLogging, ActorRef, ActorSystem, Cancellable, Kill, OneForOneStrategy, PoisonPill, Props}
-import akka.pattern.{ask, pipe}
+import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage._
-import org.purevalue.arbitrage.traderoom.TradeRoom.{GetReferenceTicker, JoinTradeRoom, OrderRef, TradeRoomJoined}
+import org.purevalue.arbitrage.traderoom.TradeRoom.{GetReferenceTicker, JoinTradeRoom, OrderRef, OrderUpdateTrigger, TradeRoomJoined}
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer.WorkingContext
@@ -53,7 +53,6 @@ object Exchange {
   case class StreamingStarted(exchange: String)
   case class AccountDataChannelInitialized()
   case class WalletUpdateTrigger()
-  case class OrderUpdateTrigger(ref: OrderRef, resendCounter: Int = 0) // status of an order has changed
   case class DataHouseKeeping()
   case class LiquidityHouseKeeping()
   case class SwitchToInitializedMode()
@@ -72,7 +71,7 @@ object Exchange {
 
   case class ConvertValue(value: CryptoValue, targetAsset: Asset) // return CryptoValue
   case class GetPriceEstimate(tradepair: TradePair) // return Double
-  case class DetermineRealisticLimit(pair: TradePair, side: TradeSide, quantity: Double, realityAdjustmentRate: Double) // return Double
+  case class DetermineRealisticLimit(pair: TradePair, side: TradeSide, quantity: Double) // return Double
 
   def props(exchangeName: String,
             config: Config,
@@ -290,7 +289,6 @@ case class Exchange(exchangeName: String,
     case c: CancelOrder                           => onCancelOrder(c) // needed for pioneer order runner
 
     case WalletUpdateTrigger()                    => if (!walletInitialized.isArrived) walletInitialized.arrived()
-    case t: OrderUpdateTrigger                    => if (tradeRoom.isDefined) tradeRoom.get.forward(t)
 
     case SetUsableTradePairs(tradePairs)          => setUsableTradePairs(tradePairs)
     case RemoveActiveOrder(ref)                   => accountData.activeOrders = accountData.activeOrders - ref
@@ -305,7 +303,7 @@ case class Exchange(exchangeName: String,
     case GetPriceEstimate(tradePair)              => sender() ! publicData.ticker(tradePair).priceEstimate
     case GetWalletLiquidCrypto()                  => sender() ! accountData.wallet.liquidCryptoValues(exchangeConfig.usdEquivalentCoin, publicData.ticker)
     case ConvertValue(value, target)              => sender() ! value.convertTo(target, publicData.ticker)
-    case m:DetermineRealisticLimit                => determineRealisticLimit(m).pipeTo(sender())
+    case m:DetermineRealisticLimit                => sender() ! determineRealisticLimit(m)
 
     case Done                                     => // ignoring Done from cascaded JoinTradeRoom
     case SwitchToInitializedMode()                => switchToInitializedMode()
@@ -348,14 +346,13 @@ case class Exchange(exchangeName: String,
     else cancelOrderIfStillExist(c)
   }
 
-
   def guardedRetry(e: ExchangePublicStreamData): Unit = {
     if (e.applyDeadline.isEmpty) e.applyDeadline = Some(Instant.now.plus(e.MaxApplyDelay))
     if (Instant.now.isAfter(e.applyDeadline.get)) {
       log.warning(s"ignoring update [timeout] $e")
     } else {
       log.debug(s"scheduling retry of $e")
-      Future( concurrent.blocking {
+      Future(concurrent.blocking {
         Thread.sleep(20)
         self ! IncomingPublicData(Seq(e))
       })
@@ -399,7 +396,7 @@ case class Exchange(exchangeName: String,
       log.debug(s"ignoring update [timeout] $e")
     } else {
       log.debug(s"scheduling retry of $e")
-      Future( concurrent.blocking {
+      Future(concurrent.blocking {
         Thread.sleep(20)
         self ! IncomingAccountData(Seq(e))
       })
@@ -448,7 +445,8 @@ case class Exchange(exchangeName: String,
             guardedRetry(o)
           }
         }
-        self ! OrderUpdateTrigger(ref)
+
+        if (tradeRoom.isDefined) tradeRoom.get ! OrderUpdateTrigger(ref)
 
       case _ => throw new NotImplementedError
     }
@@ -519,10 +517,15 @@ case class Exchange(exchangeName: String,
     }
   }
 
-  def determineRealisticLimit(r: DetermineRealisticLimit): Future[Double] = {
-    Future {
-      exchange.determineRealisticLimit(r.pair, r.side, r.quantity, r.realityAdjustmentRate, publicData.ticker, publicData.orderBook)
-    }
+  def determineRealisticLimit(r: DetermineRealisticLimit): Double = {
+    exchange.determineRealisticLimit(
+      r.pair,
+      r.side,
+      r.quantity,
+      config.liquidityManager.orderbookBasedTxLimitQuantityOverbooking,
+      config.liquidityManager.tickerBasedTxLimitBeyondEdgeLimit,
+      publicData.ticker,
+      publicData.orderBook)
   }
 
   def exchangeDataSnapshot: FullDataSnapshot = FullDataSnapshot(
@@ -540,7 +543,6 @@ case class Exchange(exchangeName: String,
     case SimulatedAccountData(dataset)   => applySimulatedAccountData(dataset)
 
     case _: WalletUpdateTrigger          => // currently unused
-    case t: OrderUpdateTrigger           => tradeRoom.get.forward(t)
 
     case o: NewLimitOrder                => onNewLimitOrder(o)
     case c: CancelOrder                  => onCancelOrder(c)
@@ -556,7 +558,7 @@ case class Exchange(exchangeName: String,
     case GetFullDataSnapshot()           => sender() ! exchangeDataSnapshot
 
     case GetPriceEstimate(tradePair)     => sender() ! publicData.ticker(tradePair).priceEstimate
-    case m:DetermineRealisticLimit       => determineRealisticLimit(m).pipeTo(sender())
+    case m:DetermineRealisticLimit       => sender() ! determineRealisticLimit(m)
     case ConvertValue(value, target)     => sender() ! value.convertTo(target, publicData.ticker)
 
     case AccountDataChannelInitialized() => log.info(s"[$exchangeName] account data channel re-initialized")

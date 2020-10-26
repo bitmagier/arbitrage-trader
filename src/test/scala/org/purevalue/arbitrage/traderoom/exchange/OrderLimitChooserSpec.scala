@@ -22,7 +22,8 @@ class OrderLimitChooserSpec extends TestKit(ActorSystem("ExchangeLiquidityManage
         Ticker("e1", TradePair(BTC, Asset("USDT")), 9999.0, None, 10001.0, None, Some(10000.0))
       )
 
-      limitChooser.determineEdgeOrderLimit(TradeSide.Buy, 1.0).get shouldBe 10000.0 +- 0.000001
+      limitChooser.determineRealisticOrderLimit(TradeSide.Buy, 1.0, 1.0, 0.0)
+        .get shouldBe 10000.0 +- 0.000001
     }
 
     "find optimal limit for Sell and Buy" in {
@@ -41,15 +42,15 @@ class OrderLimitChooserSpec extends TestKit(ActorSystem("ExchangeLiquidityManage
 
       val limitChooser = new OrderLimitChooser(Some(book), null)
 
-      limitChooser.determineEdgeOrderLimit(TradeSide.Buy, 0.5) shouldBe Some(10000.2)
-      limitChooser.determineEdgeOrderLimit(TradeSide.Buy, 2.0) shouldBe Some(10000.6)
-      limitChooser.determineEdgeOrderLimit(TradeSide.Buy, 20) shouldBe Some(10002.0)
-      limitChooser.determineEdgeOrderLimit(TradeSide.Buy, 500) shouldBe None
+      limitChooser.determineRealisticOrderLimit(TradeSide.Buy, 0.5, 1.0, 0.0) shouldBe Some(10000.2)
+      limitChooser.determineRealisticOrderLimit(TradeSide.Buy, 2.0, 1.0, 0.0) shouldBe Some(10000.6)
+      limitChooser.determineRealisticOrderLimit(TradeSide.Buy, 20, 1.0, 0.0) shouldBe Some(10002.0)
+      limitChooser.determineRealisticOrderLimit(TradeSide.Buy, 500, 1.0, 0.0) shouldBe None
 
-      limitChooser.determineEdgeOrderLimit(TradeSide.Sell, 0.5) shouldBe Some(10000.0)
-      limitChooser.determineEdgeOrderLimit(TradeSide.Sell, 2.0) shouldBe Some(10000.0)
-      limitChooser.determineEdgeOrderLimit(TradeSide.Sell, 20) shouldBe Some(9998.0)
-      limitChooser.determineEdgeOrderLimit(TradeSide.Sell, 500) shouldBe None
+      limitChooser.determineRealisticOrderLimit(TradeSide.Sell, 0.5, 1.0, 0.0) shouldBe Some(10000.0)
+      limitChooser.determineRealisticOrderLimit(TradeSide.Sell, 2.0, 1.0, 0.0) shouldBe Some(10000.0)
+      limitChooser.determineRealisticOrderLimit(TradeSide.Sell, 20, 1.0, 0.0) shouldBe Some(9998.0)
+      limitChooser.determineRealisticOrderLimit(TradeSide.Sell, 500, 1.0, 0.0) shouldBe None
     }
   }
 }

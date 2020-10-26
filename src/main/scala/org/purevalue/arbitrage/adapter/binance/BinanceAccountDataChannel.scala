@@ -477,10 +477,10 @@ private[binance] class BinanceAccountDataChannel(config: Config,
       sign = true
     ).map {
       case Left(response) => response
-      case Right(errorResponse) => throw new RuntimeException(s"newLimitOrder failed: $errorResponse")
+      case Right(errorResponse) => throw new RuntimeException(s"newLimitOrder(${o.shortDesc}) failed: $errorResponse")
     } recover {
       case e: Exception =>
-        log.error(e, s"NewLimitOrder failed. Request body:\n$requestBody\nbinanceTradePair:$binanceTradePair\n")
+        log.error(e, s"NewLimitOrder(${o.shortDesc}) failed. Request body:\n$requestBody\nbinanceTradePair:$binanceTradePair\n")
         throw e
     }
 

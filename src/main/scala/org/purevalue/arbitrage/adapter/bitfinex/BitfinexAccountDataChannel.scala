@@ -523,9 +523,9 @@ private[bitfinex] class BitfinexAccountDataChannel(config: Config,
           exchange ! IncomingAccountData(exchangeDataMapping(Seq(order)))
           NewOrderAck(exchangeConfig.name, o.pair, order.orderId.toString, o.id)
         case r: SubmitOrderResponseJson =>
-          throw new RuntimeException(s"Something went wrong while placing a limit-order. Response is: $r")
+          throw new RuntimeException(s"newLimitOrder(${o.shortDesc}) failed: $r")
       }
-      case Right(errorResponse) => throw new RuntimeException(s"NewLimitOrder failed: $errorResponse")
+      case Right(errorResponse) => throw new RuntimeException(s"NewLimitOrder(${o.shortDesc}) failed: $errorResponse")
     }
   }
 

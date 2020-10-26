@@ -67,6 +67,7 @@ object TradeRoom {
   case class GetReferenceTicker()
   case class LogStats()
   case class HouseKeeping()
+  case class OrderUpdateTrigger(ref: OrderRef, resendCounter: Int = 0) // status of an order has changed
   case class TriggerTrader()
   case class Stop(timeout: Duration)
   case class NewLiquidityTransformationOrder(orderRequest: OrderRequest)
@@ -93,7 +94,7 @@ class TradeRoom(val config: Config,
   private implicit val actorSystem: ActorSystem = Main.actorSystem
   private implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
-  private val orderBundleSafetyGuard = new OrderBundleSafetyGuard(config.tradeRoom.orderBundleSafetyGuard, config.exchanges)
+  private val orderBundleSafetyGuard = new OrderBundleSafetyGuard(config)
 
   private val houseKeepingSchedule: Cancellable = actorSystem.scheduler.scheduleAtFixedRate(5.seconds, 3.seconds, self, HouseKeeping())
   private val logScheduleRate: FiniteDuration = FiniteDuration(config.tradeRoom.statsReportInterval.toNanos, TimeUnit.NANOSECONDS)
@@ -336,7 +337,7 @@ class TradeRoom(val config: Config,
     implicit val timeout: Timeout = config.global.internalCommunicationTimeout
     val wf: Iterable[Future[Wallet]] = exchanges.values.map(e => (e ? GetWallet()).mapTo[Wallet])
     val tf: Iterable[Future[TickerSnapshot]] = exchanges.values.map(e => (e ? GetTickerSnapshot()).mapTo[TickerSnapshot])
-    val rtf: Future[TickerSnapshot] = (self ? GetReferenceTicker()).mapTo[TickerSnapshot]
+    val rtf: Future[TickerSnapshot] = pullReferenceTicker
     (for {
       wallets <- Future.sequence(wf)
       tickers <- Future.sequence(tf)
@@ -364,9 +365,10 @@ class TradeRoom(val config: Config,
     implicit val timeout: Timeout = config.global.internalCommunicationTimeout
     val bundle: OrderBundle = activeOrderBundles(orderBundleId)
     val of: Seq[Future[Option[Order]]] = bundle.orderRefs.map(e => activeOrder(e))
+    val rtf = pullReferenceTicker
     (for {
       orders <- Future.sequence(of)
-      referenceTicker <- (self ? GetReferenceTicker()).mapTo[TickerSnapshot]
+      referenceTicker <- rtf
     } yield (orders.flatten, referenceTicker.ticker)).foreach {
       case (orders, referenceTicker) =>
         val finishTime = orders.map(_.lastUpdateTime).max
@@ -400,8 +402,7 @@ class TradeRoom(val config: Config,
   def cleanupLiquidityTxOrder(tx: LiquidityTx): Unit = {
     implicit val timeout: Timeout = config.global.internalCommunicationTimeout
     val of = activeOrder(tx.orderRef)
-    val rtf = (self ? GetReferenceTicker()).mapTo[TickerSnapshot]
-
+    val rtf = pullReferenceTicker
     (for {
       order <- of
       referenceTicker <- rtf
@@ -576,7 +577,7 @@ class TradeRoom(val config: Config,
     }
   }
 
-  def referenceTicker: Future[TickerSnapshot] = {
+  def pullReferenceTicker: Future[TickerSnapshot] = {
     implicit val timeout: Timeout = config.global.internalCommunicationTimeout
     (exchanges(config.tradeRoom.referenceTickerExchange) ? GetTickerSnapshot()).mapTo[TickerSnapshot]
   }
@@ -590,7 +591,7 @@ class TradeRoom(val config: Config,
     case t: OrderUpdateTrigger                         => onOrderUpdate(t)
     case c: CancelOrderResult                          => onCancelOrderResult(c)
 
-    case GetReferenceTicker()                          => referenceTicker.pipeTo(sender())
+    case GetReferenceTicker()                          => pullReferenceTicker.pipeTo(sender())
     case GetFinishedLiquidityTxs()                     => sender() ! finishedLiquidityTxs.keySet.toSet
 
     case LogStats()                                    => logStats()

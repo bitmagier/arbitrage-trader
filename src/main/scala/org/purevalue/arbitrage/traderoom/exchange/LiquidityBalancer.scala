@@ -192,7 +192,11 @@ class LiquidityBalancer(val config: Config,
             val (pair, side) = tradePairAndSide(e._1, demandAsset)
             val buckets: Int = Math.min(demandBuckets, e._2)
             val quantity: Double = buckets * bucketSize(pair.baseAsset)
-            val limit = determineRealisticLimit(pair, side, quantity, config.liquidityManager.setTxLimitAwayFromEdgeLimit, wc.ticker, wc.orderBook)
+            val limit = determineRealisticLimit(
+              pair, side, quantity,
+              config.liquidityManager.orderbookBasedTxLimitQuantityOverbooking,
+              config.liquidityManager.tickerBasedTxLimitBeyondEdgeLimit, wc.ticker, wc.orderBook)
+
             val exchangeRateRating: Double = localExchangeRateRating(pair, side, limit, wc.referenceTicker)
             LiquidityTransfer(pair, side, buckets, quantity, limit, exchangeRateRating)
           })
@@ -305,7 +309,11 @@ class LiquidityBalancer(val config: Config,
       .flatMap { e =>
         val (pair, side) = tradePairAndSide(e._1, destination)
         val quantity: Double = bucketSize(pair.baseAsset) * e._2
-        val limit: Double = determineRealisticLimit(pair, side, quantity, config.liquidityManager.setTxLimitAwayFromEdgeLimit, wc.ticker, wc.orderBook)
+        val limit: Double = determineRealisticLimit(pair, side, quantity,
+          config.liquidityManager.orderbookBasedTxLimitQuantityOverbooking,
+          config.liquidityManager.tickerBasedTxLimitBeyondEdgeLimit,
+          wc.ticker, wc.orderBook)
+
         val exchangeRateRating: Double = localExchangeRateRating(pair, side, limit, wc.referenceTicker)
         if (exchangeRateRating >= -config.liquidityManager.maxAcceptableExchangeRateLossVersusReferenceTicker) {
           Some(LiquidityTransfer(pair, side, e._2, quantity, limit, exchangeRateRating))
@@ -322,7 +330,11 @@ class LiquidityBalancer(val config: Config,
       .groupBy(e => (e.supplyAsset, e.pair, e.side))
       .map { e =>
         val quantity = e._2.map(_.quantity).sum
-        val limit = determineRealisticLimit(e._1._2, e._1._3, quantity, config.liquidityManager.setTxLimitAwayFromEdgeLimit, wc.ticker, wc.orderBook)
+        val limit = determineRealisticLimit(e._1._2, e._1._3, quantity,
+          config.liquidityManager.orderbookBasedTxLimitQuantityOverbooking,
+          config.liquidityManager.tickerBasedTxLimitBeyondEdgeLimit,
+          wc.ticker, wc.orderBook)
+
         LiquidityTransfer(e._1._2, e._1._3, e._2.map(_.buckets).sum, quantity, limit, 0.0) // rating is not important any more, we just merge already approved single transfers and find an appropriate limit
       }
   }

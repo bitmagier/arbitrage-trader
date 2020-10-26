@@ -70,15 +70,13 @@ object ExchangeConfig {
 case class OrderBundleSafetyGuardConfig(maximumReasonableWinPerOrderBundleUSD: Double,
                                         maxOrderLimitTickerVariance: Double,
                                         maxTickerAge: Duration,
-                                        minTotalGainInUSD: Double,
-                                        setTxLimitAwayFromEdgeLimit: Double)
+                                        minTotalGainInUSD: Double)
 object OrderBundleSafetyGuardConfig {
   def apply(c: com.typesafe.config.Config): OrderBundleSafetyGuardConfig = OrderBundleSafetyGuardConfig(
     c.getDouble("max-reasonable-win-per-order-bundle-usd"),
     c.getDouble("max-order-limit-ticker-variance"),
     c.getDuration("max-ticker-age"),
-    c.getDouble("min-total-gain-in-usd"),
-    c.getDouble("set-tx-limit-away-from-edge-limit")
+    c.getDouble("min-total-gain-in-usd")
   )
 }
 case class TradeRoomConfig(tradeSimulation: Boolean,
@@ -113,7 +111,8 @@ case class LiquidityManagerConfig(liquidityLockMaxLifetime: Duration, // when a 
                                   liquidityDemandActiveTime: Duration, // when demanded liquidity is not requested within that time, the coins are transferred back to a reserve asset
                                   maxAcceptableExchangeRateLossVersusReferenceTicker: Double, // defines the maximum acceptable relative loss (local exchange rate versus reference ticker) for liquidity conversion transactions
                                   minimumKeepReserveLiquidityPerAssetInUSD: Double, // when we convert to a reserve liquidity or re-balance our reserve liquidity, each of them should reach at least that value (measured in USD)
-                                  setTxLimitAwayFromEdgeLimit: Double, // [limit-reality-adjustment-rate] defines the rate we set our limit above the highest ask or below the lowest bid (use 0.0 for matching exactly the bid or ask price).
+                                  orderbookBasedTxLimitQuantityOverbooking: Double, // we assume, we have to trade more quantity (real quantity multiplied by this factor), when we calculate the ideal order limit based on an orderbook, because in reality we are not alone on the exchange
+                                  tickerBasedTxLimitBeyondEdgeLimit: Double, // [limit-reality-adjustment-rate] for ticker based limit calculation; defines the rate we set our limit above the highest ask or below the lowest bid (use 0.0 for matching exactly the bid or ask price).
                                   txValueGranularityInUSD: Double, // that's the granularity (and also minimum amount) we transfer for reserve asset re-balance orders)}
                                   dustLevelInUSD: Double) // we don't try to convert back assets with a value below that one back to a reserve asset
 object LiquidityManagerConfig {
@@ -122,7 +121,8 @@ object LiquidityManagerConfig {
     c.getDuration("liquidity-demand-active-time"),
     c.getDouble("max-acceptable-exchange-rate-loss-versus-reference-ticker"),
     c.getDouble("minimum-keep-reserve-liquidity-per-asset-in-usd"),
-    c.getDouble("set-tx-limit-away-from-edge-limit"),
+    c.getDouble("orderbook-based-tx-limit-quantity-overbooking"),
+    c.getDouble("ticker-based-tx-limit-beyond-edge-limit"),
     c.getDouble("tx-value-granularity-in-usd"),
     c.getDouble("dust-level-in-usd")
   )

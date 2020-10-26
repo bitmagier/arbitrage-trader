@@ -8,31 +8,19 @@ import scala.collection.{Iterator, Map}
 
 class OrderLimitChooser(private val orderBook: Option[OrderBook], private val ticker: Ticker) {
     private val log = Logging(actorSystem.eventStream, getClass)
+
   /**
    * First we determine a theoretical ideal order limit (like when realityAdjustmentRate is 0.0) based on order book, if present,
    * to get our order through for the best available price. Ticker price is used instead, if no order book is present.
    *
-   * In reality the order book changes between our snapshot timestamp and the timestamp when our order arrives at the exchange,
-   * so the limit, we determine here, needs some adjustments before we have a real good order limit.
-   * To adjust the (theoretical ideal) edge-limit to reality, we change the limit a bit to our disadvantage-side by the realityAdjustmentRate
+   * In reality the order book changes between our snapshot timestamp, so we assume to have a higher quantity to trade (by multiplying the amount by orderbookBasedLimitQuantityOverbooking)
+   * If the limit is calculated based on the ticker value, we adjust the (theoretical ideal) edge-limit to reality, by changing the limit a bit to our disadvantage-side by the tickerLimitRealityAdjustmentRate
    *
    * The result will be None, in case we have an order book available, but not enough entires in the order book to fulfil our order
-   * (happened on bitfinex for TUSD:USDT)
-   *
-   * @param realityAdjustmentRate small relative rate to add/substract from the edge-order-limit to get our order through. 0.0002 is a good starting point
+   * (happened on bitfinex for TUSD:USDT). In this case we don't want to place an order there anyway.
    */
-  def determineRealisticOrderLimit(tradeSide: TradeSide, amountBaseAssetEstimate: Double, realityAdjustmentRate: Double): Option[Double] = {
-    determineEdgeOrderLimit(tradeSide, amountBaseAssetEstimate)
-      .map(edgeLimit => tradeSide match {
-        case TradeSide.Buy => edgeLimit * (1.0 + realityAdjustmentRate)
-        case TradeSide.Sell => edgeLimit * (1.0 - realityAdjustmentRate)
-      })
-  }
-
-  /**
-   * Determines the theoretical ideal order limit, based on order book, if present. Otherwise the ticker value is used.
-   */
-  def determineEdgeOrderLimit(tradeSide: TradeSide, amountBaseAssetEstimate: Double): Option[Double] = {
+  def determineRealisticOrderLimit(tradeSide: TradeSide, amountBaseAssetEstimate: Double,
+                                   orderbookBasedLimitQuantityOverbooking: Double, tickerLimitRealityAdjustmentRate: Double): Option[Double] = {
     //                                            Iterator (price , amount)  : limit
     def fillAmount(amount: Double, stackIterator: Iterator[(Double, Double)]): Option[Double] = {
       var filled: Double = 0.0
@@ -48,6 +36,9 @@ class OrderLimitChooser(private val orderBook: Option[OrderBook], private val ti
       else None
     }
 
+    /**
+     * Determines the theoretical ideal order limit, based on order book, if present.
+     */
     def highestLevelToFulfillAmount(bids: Map[Double, Bid], amount: Double): Option[Double] = {
       val stackIterator = bids.values.map(e => (e.price, e.quantity)).toSeq.sortBy(_._1).reverseIterator // (price,quantity) sorted with highest price first
       val result = fillAmount(amount, stackIterator)
@@ -57,6 +48,9 @@ class OrderLimitChooser(private val orderBook: Option[OrderBook], private val ti
       result
     }
 
+    /**
+     * Determines the theoretical ideal order limit, based on order book, if present.
+     */
     def lowestLevelToFulfillAmount(asks: Map[Double, Ask], amount: Double): Option[Double] = {
       val stackIterator = asks.values.map(e => (e.price, e.quantity)).toSeq.sortBy(_._1).iterator // (price,quantity) sorted with lowest price first
       val result = fillAmount(amount, stackIterator)
@@ -68,11 +62,14 @@ class OrderLimitChooser(private val orderBook: Option[OrderBook], private val ti
 
     if (orderBook.isDefined) {
       tradeSide match {
-        case TradeSide.Sell => highestLevelToFulfillAmount(orderBook.get.bids, amountBaseAssetEstimate)
-        case TradeSide.Buy => lowestLevelToFulfillAmount(orderBook.get.asks, amountBaseAssetEstimate)
+        case TradeSide.Sell => highestLevelToFulfillAmount(orderBook.get.bids, amountBaseAssetEstimate * orderbookBasedLimitQuantityOverbooking)
+        case TradeSide.Buy => lowestLevelToFulfillAmount(orderBook.get.asks, amountBaseAssetEstimate * orderbookBasedLimitQuantityOverbooking)
       }
     } else { // fallback for exchanges where we have no order book
-      Some(ticker.priceEstimate)
+      tradeSide match {
+        case TradeSide.Sell => Some(ticker.priceEstimate * (1.0 - tickerLimitRealityAdjustmentRate))
+        case TradeSide.Buy => Some(ticker.priceEstimate * (1.0 + tickerLimitRealityAdjustmentRate))
+      }
     }
   }
 }

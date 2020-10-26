@@ -404,10 +404,10 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
           case Left(newOrderResponse) =>
             exchange ! IncomingAccountData(Seq(newOrderResponse.toOrderUpdate(exchangeConfig.name, id => coinbaseTradePairsByProductId(id).toTradePair)))
             newOrderResponse.toNewOrderAck(exchangeConfig.name, id => coinbaseTradePairsByProductId(id).toTradePair, o.id)
-          case Right(error) => throw new RuntimeException(s"newLimitOrder failed: $error")
+          case Right(error) => throw new RuntimeException(s"newLimitOrder(${o.shortDesc}) failed: $error")
         } recover {
         case e: Exception =>
-          log.error(e, s"NewLimitOrder failed. Request body:\n$requestBody\ncoinbaseTradePair:$coinbaseTradepair\n")
+          log.error(e, s"NewLimitOrder(${o.shortDesc}) failed. Request body:\n$requestBody\ncoinbaseTradePair:$coinbaseTradepair\n")
           throw e
       }
     }

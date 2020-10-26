@@ -147,11 +147,12 @@ package object exchange {
   def determineRealisticLimit(pair: TradePair,
                               side: TradeSide,
                               quantity: Double,
-                              realityAdjustmentRate: Double,
+                              orderbookBasedLimitQuantityOverbooking: Double,
+                              tickerLimitRealityAdjustmentRate: Double,
                               ticker: Map[TradePair, Ticker],
                               orderBook: Map[TradePair, OrderBook]): Double = {
     new OrderLimitChooser(orderBook.get(pair), ticker(pair))
-      .determineRealisticOrderLimit(side, quantity, realityAdjustmentRate) match {
+      .determineRealisticOrderLimit(side, quantity, orderbookBasedLimitQuantityOverbooking, tickerLimitRealityAdjustmentRate) match {
       case Some(limit) => limit
       case None => throw new OrderBookTooFlatException(pair, side)
     }
@@ -178,12 +179,13 @@ package object exchange {
   def localExchangeRateRating(pair: TradePair,
                               side: TradeSide,
                               quantity: Double,
-                              realityAdjustmentRate: Double,
+                              orderbookBasedLimitQuantityOverbooking: Double,
+                              tickerLimitRealityAdjustmentRate: Double,
                               ticker: Map[TradePair, Ticker],
                               referenceTicker: Map[TradePair, Ticker],
                               orderBook: Map[TradePair, OrderBook]
                              ): Double = {
-    val localLimit = determineRealisticLimit(pair, side, quantity, realityAdjustmentRate, ticker, orderBook)
+    val localLimit = determineRealisticLimit(pair, side, quantity, orderbookBasedLimitQuantityOverbooking, tickerLimitRealityAdjustmentRate, ticker, orderBook)
     localExchangeRateRating(pair, side, localLimit, referenceTicker)
   }
 }
