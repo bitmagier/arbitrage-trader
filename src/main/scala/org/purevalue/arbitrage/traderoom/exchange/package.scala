@@ -118,6 +118,13 @@ package object exchange {
         .toSeq
         .sortBy(_.asset.officialSymbol)
 
+    def availableCryptoValues(): Iterable[CryptoValue] = {
+      balance
+        .filterNot(_._1.isFiat)
+        .filterNot(e => doNotTouchTheseAssets.contains(e._1))
+        .map(e => CryptoValue(e._1, e._2.amountAvailable))
+    }
+
     // "liquid crypto values" are our wallet value of crypt assets, which are available for trading and converting-calculations
     def liquidCryptoValues(aggregateAsset: Asset, ticker: Map[TradePair, Ticker]): Seq[CryptoValue] =
       balance

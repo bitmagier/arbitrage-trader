@@ -18,7 +18,7 @@ import org.purevalue.arbitrage.adapter.binance.BinanceOrder.{toOrderStatus, toOr
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.{BinanceBaseRestEndpoint, GetBinanceTradePairs}
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
-import org.purevalue.arbitrage.traderoom.exchange.{Balance, ExchangeAccountStreamData, WalletAssetUpdate, WalletBalanceUpdate}
+import org.purevalue.arbitrage.traderoom.exchange.{Balance, ExchangeAccountStreamData, TickerSnapshot, Wallet, WalletAssetUpdate, WalletBalanceUpdate}
 import org.purevalue.arbitrage.util.Util.{alignToStepSizeCeil, alignToStepSizeNearest, formatDecimal, formatDecimalWithFixPrecision}
 import org.purevalue.arbitrage.util.{BadCalculationError, WrongAssumption}
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
@@ -440,6 +440,20 @@ private[binance] class BinanceAccountDataChannel(config: Config,
       s"$BinanceBaseRestEndpoint/api/v3/userDataStream?listenKey=$listenKey", None, exchangeConfig.secrets, sign = false)
   }
 
+  def logWallet(): Unit = {
+    implicit val timeout: Timeout = config.global.internalCommunicationTimeout
+    val wf = (exchange ? GetWallet()).mapTo[Wallet]
+    val tf = (exchange ? GetTickerSnapshot()).mapTo[TickerSnapshot].map(_.ticker)
+    (for {
+      wallet <- wf
+      ticker <- tf
+    } yield (wallet, ticker)).foreach {
+      case (wallet, ticker) =>
+        log.info(s"[${exchangeConfig.name}] Wallet available crypto: ${wallet.availableCryptoValues()}\n" +
+          s"liquid crypto: ${wallet.liquidCryptoValues(exchangeConfig.usdEquivalentCoin, ticker)}");
+    }
+  }
+
   def newLimitOrder(o: OrderRequest): Future[NewOrderAck] = {
     if (o.amountBaseAsset < 0.0) throw new WrongAssumption("our order amount is always positive")
 
@@ -469,7 +483,7 @@ private[binance] class BinanceAccountDataChannel(config: Config,
         s"&newClientOrderId=${o.id.toString}" +
         s"&newOrderRespType=ACK"
 
-    val response: Future[NewOrderResponseAckJson] = httpRequestJsonBinanceAccount[NewOrderResponseAckJson, JsValue](
+    val response: Future[NewOrderResponseAckJson] = httpRequestJsonBinanceAccount[NewOrderResponseAckJson, ErrorResponseJson](
       HttpMethods.POST,
       s"$BinanceBaseRestEndpoint/api/v3/order",
       Some(requestBody),
@@ -477,14 +491,19 @@ private[binance] class BinanceAccountDataChannel(config: Config,
       sign = true
     ).map {
       case Left(response) => response
-      case Right(errorResponse) => throw new RuntimeException(s"newLimitOrder(${o.shortDesc}) failed: $errorResponse")
+      case Right(errorResponse) =>
+        errorResponse match {
+          case ErrorResponseJson(BinanceErrorCodes.NewOrderRejected, "Account has insufficient balance for requested action.") =>
+            logWallet()
+          case _ =>
+        }
+        throw new RuntimeException(s"newLimitOrder(${o.shortDesc}) failed: $errorResponse")
     } recover {
       case e: Exception =>
         log.error(e, s"NewLimitOrder(${o.shortDesc}) failed. Request body:\n$requestBody\nbinanceTradePair:$binanceTradePair\n")
         throw e
     }
 
-    // response type FULL: response.map(e => IncomingData(exchangeDataMapping(Seq(e)))).pipeTo(exchangeAccountDataManager)
     response.map(_.toNewOrderAck(exchangeConfig.name, symbol => binanceTradePairsBySymbol(symbol).toTradePair))
   }
 
@@ -504,7 +523,11 @@ private[binance] class BinanceAccountDataChannel(config: Config,
         CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId.toString, success = true)
       case Right(errorResponse) =>
         log.error(s"CancelOrder failed: $errorResponse")
-        val orderUnknown: Boolean = errorResponse.code == BinanceErrorCodes.NoSuchOrder
+        val orderUnknown: Boolean = errorResponse.code match {
+          case BinanceErrorCodes.NoSuchOrder => true
+          case BinanceErrorCodes.CancelRejected if errorResponse.msg == "Unknown order sent." => true
+          case _ => false
+        }
         CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId.toString, success = false, orderUnknown, Some(errorResponse.toString))
     }
   }
@@ -573,7 +596,8 @@ private[binance] class BinanceAccountDataChannel(config: Config,
     ws._2.future.onComplete { e =>
       log.info(s"connection closed")
       self ! Kill
-1    }
+      1
+    }
     connected = createConnected
   }
 

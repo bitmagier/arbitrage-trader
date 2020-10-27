@@ -363,7 +363,12 @@ class TradeRoom(val config: Config,
   // cleanup completed order bundle, which is still in the "active" list
   def cleanupOrderBundle(orderBundleId: UUID): Unit = {
     implicit val timeout: Timeout = config.global.internalCommunicationTimeout
-    val bundle: OrderBundle = activeOrderBundles(orderBundleId)
+    val bundle: OrderBundle = activeOrderBundles.get(orderBundleId) match {
+      case Some(bundle) => bundle
+      case None =>
+        log.error(s"OrderBundle with ID=$orderBundleId is gone") // TODO sequential processing here, to avoid that!!!
+        return
+    }
     val of: Seq[Future[Option[Order]]] = bundle.orderRefs.map(e => activeOrder(e))
     val rtf = pullReferenceTicker
     (for {
