@@ -362,44 +362,47 @@ class TradeRoom(val config: Config,
 
   // cleanup completed order bundle, which is still in the "active" list
   def cleanupOrderBundle(orderBundleId: UUID): Unit = {
-    implicit val timeout: Timeout = config.global.internalCommunicationTimeout
-    val bundle: OrderBundle = activeOrderBundles.get(orderBundleId) match {
-      case Some(bundle) => bundle
-      case None =>
-        log.error(s"OrderBundle with ID=$orderBundleId is gone") // TODO sequential processing here, to avoid that!!!
-        return
-    }
-    val of: Seq[Future[Option[Order]]] = bundle.orderRefs.map(e => activeOrder(e))
-    val rtf = pullReferenceTicker
-    (for {
-      orders <- Future.sequence(of)
-      referenceTicker <- rtf
-    } yield (orders.flatten, referenceTicker.ticker)).foreach {
-      case (orders, referenceTicker) =>
-        val finishTime = orders.map(_.lastUpdateTime).max
-        val usdEquivalentCoin: Asset = config.exchanges(config.tradeRoom.referenceTickerExchange).usdEquivalentCoin
-        val bill: OrderBill = OrderBill.calc(orders, referenceTicker, usdEquivalentCoin, config.exchanges.map(e => (e._1, e._2.feeRate)))
-        val finishedOrderBundle = FinishedOrderBundle(bundle, orders, finishTime, bill)
-        synchronized {
+
+    activeOrderBundles.synchronized { // to avoid, that the cleanup-code of another OrderUpdateTrigger of the same order-bundle is race-conditioning with us
+
+      implicit val timeout: Timeout = config.global.internalCommunicationTimeout
+      val bundle: OrderBundle = activeOrderBundles.get(orderBundleId) match {
+        case Some(bundle) => bundle
+        case None =>
+          log.warning(s"OrderBundle with ID=$orderBundleId is gone")
+          return
+      }
+      val of: Seq[Future[Option[Order]]] = bundle.orderRefs.map(e => activeOrder(e))
+      val rtf = pullReferenceTicker
+      (for {
+        orders <- Future.sequence(of)
+        referenceTicker <- rtf
+      } yield (orders.flatten, referenceTicker.ticker)).foreach {
+        case (orders, referenceTicker) =>
+          val finishTime = orders.map(_.lastUpdateTime).max
+          val usdEquivalentCoin: Asset = config.exchanges(config.tradeRoom.referenceTickerExchange).usdEquivalentCoin
+          val bill: OrderBill = OrderBill.calc(orders, referenceTicker, usdEquivalentCoin, config.exchanges.map(e => (e._1, e._2.feeRate)))
+          val finishedOrderBundle = FinishedOrderBundle(bundle, orders, finishTime, bill)
           finishedOrderBundles = finishedOrderBundle :: finishedOrderBundles
-        }
-        activeOrderBundles.remove(orderBundleId)
-        bundle.orderRefs.foreach {
-          e => exchanges(e.exchange) ! RemoveActiveOrder(e)
-        }
+          activeOrderBundles.remove(orderBundleId)
+          bundle.orderRefs.foreach {
+            e => exchanges(e.exchange) ! RemoveActiveOrder(e)
+          }
 
-        bundle.lockedLiquidity.foreach { l =>
-          exchanges(l.exchange) ! LiquidityLockClearance(l.liquidityRequestId)
-        }
+          bundle.lockedLiquidity.foreach { l =>
+            exchanges(l.exchange) ! LiquidityLockClearance(l.liquidityRequestId)
+          }
 
-        if (orders.exists(_.orderStatus != OrderStatus.FILLED)) {
-          log.warning(s"${Emoji.Questionable}  ${finishedOrderBundle.shortDesc} did not complete. Orders: \n${orders.mkString("\n")}")
-        } else if (bill.sumUSDAtCalcTime >= 0) {
-          val emoji = if (bill.sumUSDAtCalcTime >= 1.0) Emoji.Opera else Emoji.Winning
-          log.info(s"$emoji  ${finishedOrderBundle.shortDesc} completed with a win of ${formatDecimal(bill.sumUSDAtCalcTime, 2)} USD")
-        } else {
-          log.warning(s"${Emoji.SadFace}  ${finishedOrderBundle.shortDesc} completed with a loss of ${formatDecimal(bill.sumUSDAtCalcTime, 2)} USD ${Emoji.LookingDown}:\n $finishedOrderBundle")
-        }
+          if (orders.exists(_.orderStatus != OrderStatus.FILLED)) {
+            log.warning(s"${Emoji.Questionable}  ${finishedOrderBundle.shortDesc} did not complete. Orders: \n${orders.mkString("\n")}")
+          } else if (bill.sumUSDAtCalcTime >= 0) {
+            val emoji = if (bill.sumUSDAtCalcTime >= 1.0) Emoji.Opera else Emoji.Winning
+            log.info(s"$emoji  ${finishedOrderBundle.shortDesc} completed with a win of ${formatDecimal(bill.sumUSDAtCalcTime, 2)} USD")
+          } else {
+            log.warning(s"${Emoji.SadFace}  ${finishedOrderBundle.shortDesc} completed with a loss of ${formatDecimal(bill.sumUSDAtCalcTime, 2)} USD ${Emoji.LookingDown}:\n $finishedOrderBundle")
+          }
+      }
+
     }
   }
 
