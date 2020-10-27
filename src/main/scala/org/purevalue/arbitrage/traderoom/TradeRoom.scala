@@ -6,8 +6,10 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 import akka.Done
-import akka.actor.{Actor, ActorLogging, ActorRef, ActorSystem, Cancellable, PoisonPill, Props}
-import akka.pattern.{ask, pipe}
+import akka.actor.typed.scaladsl.Behaviors
+import akka.actor.typed.{Behavior, Signal}
+import akka.actor.{Actor, ActorLogging, ActorRef, Cancellable, PoisonPill}
+import akka.pattern.ask
 import akka.util.Timeout
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.trader.FooTrader
@@ -20,8 +22,8 @@ import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.util.{Emoji, WrongAssumption}
 
 import scala.collection.concurrent.TrieMap
+import scala.concurrent.Future
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
-import scala.concurrent.{ExecutionContextExecutor, Future}
 import scala.util.{Failure, Success}
 
 
@@ -40,45 +42,44 @@ case class TradeContext(tradePairs: Map[String, Set[TradePair]],
 }
 
 object TradeRoom {
+  def apply(config: Config,
+            exchanges: Map[String, ActorRef],
+            usableTradePairs: Map[String, Set[TradePair]]): Behavior[Command] =
+    Behaviors.setup(context => new TradeRoom(config, exchanges, usableTradePairs))
 
-  case class OrderRef(exchange: String, tradePair: TradePair, externalOrderId: String)
-
-  case class OrderBundle(orderRequestBundle: OrderRequestBundle,
-                         lockedLiquidity: Seq[LiquidityLock],
-                         orderRefs: Seq[OrderRef]) {
+  sealed trait Command
+  final case class OrderRef(exchange: String, tradePair: TradePair, externalOrderId: String)
+  final case class OrderBundle(orderRequestBundle: OrderRequestBundle,
+                               lockedLiquidity: Seq[LiquidityLock],
+                               orderRefs: Seq[OrderRef]) {
     def shortDesc: String = s"OrderBundle(${orderRequestBundle.id}, ${orderRequestBundle.tradeDesc})"
   }
-  case class FinishedOrderBundle(bundle: OrderBundle,
-                                 finishedOrders: Seq[Order],
-                                 finishTime: Instant,
-                                 bill: OrderBill) {
+  final case class FinishedOrderBundle(bundle: OrderBundle,
+                                       finishedOrders: Seq[Order],
+                                       finishTime: Instant,
+                                       bill: OrderBill) {
     def shortDesc: String = s"FinishedOrderBundle(${finishedOrders.map(o => o.shortDesc).mkString(" & ")})"
   }
-  case class LiquidityTx(orderRequest: OrderRequest,
-                         orderRef: OrderRef,
-                         lockedLiquidity: LiquidityLock,
-                         creationTime: Instant)
-  case class FinishedLiquidityTx(liquidityTx: LiquidityTx,
-                                 finishedOrder: Order,
-                                 finishTime: Instant,
-                                 bill: OrderBill)
+  final case class LiquidityTx(orderRequest: OrderRequest,
+                               orderRef: OrderRef,
+                               lockedLiquidity: LiquidityLock,
+                               creationTime: Instant)
+  final case class FinishedLiquidityTx(liquidityTx: LiquidityTx,
+                                       finishedOrder: Order,
+                                       finishTime: Instant,
+                                       bill: OrderBill)
 
   // communication
-  case class GetReferenceTicker()
-  case class LogStats()
-  case class HouseKeeping()
-  case class OrderUpdateTrigger(ref: OrderRef, resendCounter: Int = 0) // status of an order has changed
-  case class TriggerTrader()
-  case class Stop()
-  case class NewLiquidityTransformationOrder(orderRequest: OrderRequest)
-  case class GetFinishedLiquidityTxs()
-  case class JoinTradeRoom(tradeRoom: ActorRef)
+  case class GetReferenceTicker() extends Command
+  case class LogStats() extends Command
+  case class HouseKeeping() extends Command
+  case class OrderUpdateTrigger(ref: OrderRef, resendCounter: Int = 0) extends Command // status of an order has changed
+  case class TriggerTrader() extends Command
+  case class Stop() extends Command
+  case class NewLiquidityTransformationOrder(orderRequest: OrderRequest) extends Command
+  case class GetFinishedLiquidityTxs() extends Command
+  case class JoinTradeRoom(tradeRoom: ActorRef) extends Command
   case class TradeRoomJoined(exchange: String)
-
-  def props(config: Config,
-            exchanges: Map[String, ActorRef],
-            usableTradePairs: Map[String, Set[TradePair]]): Props =
-    Props(new TradeRoom(config, exchanges, usableTradePairs))
 }
 
 /**
@@ -90,9 +91,10 @@ object TradeRoom {
 class TradeRoom(val config: Config,
                 val exchanges: Map[String, ActorRef],
                 val usableTradePairs: Map[String, Set[TradePair]]) extends Actor with ActorLogging {
+  import TradeRoom._
 
-  private implicit val actorSystem: ActorSystem = Main.actorSystem
-  private implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
+//  private implicit val actorSystem: ActorSystem = Main.actorSystem
+//  private implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
 
   private val orderBundleSafetyGuard = new OrderBundleSafetyGuard(config)
 
@@ -481,7 +483,7 @@ class TradeRoom(val config: Config,
       case None =>
         if (t.resendCounter < MaxTries) {
           // wait 200ms and try again, before giving up - sometimes the real order-filled-update is faster than our registering of the acknowledge
-          Future (concurrent.blocking {
+          Future(concurrent.blocking {
             Thread.sleep(200)
             self ! OrderUpdateTrigger(t.ref, t.resendCounter + 1)
           })
@@ -590,9 +592,8 @@ class TradeRoom(val config: Config,
     (exchanges(config.tradeRoom.referenceTickerExchange) ? GetTickerSnapshot()).mapTo[TickerSnapshot]
   }
 
-  // @formatter:off
-  override def receive: Receive = {
-    // messages from Exchanges
+  override def onMessage(msg: Command): Behavior[Command] = msg match {
+    // @formatter:off
     case TradeRoomJoined(exchange)                     => onExchangeJoined(exchange)
     case bundle: OrderRequestBundle                    => tryToPlaceOrderBundle(bundle)
     case NewLiquidityTransformationOrder(orderRequest) => tryToPlaceLiquidityTransformationOrder(orderRequest).pipeTo(sender())
@@ -607,8 +608,12 @@ class TradeRoom(val config: Config,
     case TriggerTrader()                               => collectTradeContext().pipeTo(fooTrader.get)
     case Stop()                                        => shutdown()
     case akka.actor.Status.Failure(cause)              => log.error(cause, "Failure received")
+    // @formatter:on
   }
-  // @formatter:on
+
+  override def onSIgnal: PartialFunction[Signal, Behavior[Command]] = {
+    case PostStop
+  }
 
   def shutdown(): Unit = {
     log.info("shutdown initiated")
