@@ -2,15 +2,15 @@ package org.purevalue.arbitrage.traderoom.exchange
 
 import java.time.Instant
 
-import akka.actor.{Actor, ActorLogging, ActorRef, ActorSystem, PoisonPill, Props}
-import akka.pattern.ask
+import akka.actor.typed.scaladsl.AskPattern.{Askable, schedulerFromActorSystem}
+import akka.actor.typed.scaladsl.{AbstractBehavior, ActorContext, Behaviors}
+import akka.actor.typed.{ActorRef, ActorSystem, Behavior}
 import akka.util.Timeout
-import org.purevalue.arbitrage.traderoom.TradeRoom.{GetFinishedLiquidityTxs, NewLiquidityTransformationOrder, OrderRef}
+import org.purevalue.arbitrage.traderoom.TradeRoom.OrderRef
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer.WorkingContext
-import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancerRun.{Finished, Run}
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.OrderBookTooFlatException
-import org.purevalue.arbitrage.traderoom.{TradePair, TradeRoom}
-import org.purevalue.arbitrage.{Config, ExchangeConfig, Main}
+import org.purevalue.arbitrage.traderoom.{OrderRequest, TradePair, TradeRoom}
+import org.purevalue.arbitrage.{Config, ExchangeConfig, Main, UserRootGuardian}
 
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor, Future}
@@ -19,42 +19,45 @@ import scala.util.{Failure, Success}
 
 
 object LiquidityBalancerRun {
-
-  private case class Run()
-  case class Finished()
-
-  def props(config: Config,
+  def apply(config: Config,
             exchangeConfig: ExchangeConfig,
             tradePairs: Set[TradePair],
-            parent: ActorRef,
-            tradeRoom: ActorRef,
-            wc: WorkingContext): Props =
-    Props(new LiquidityBalancerRun(config, exchangeConfig, tradePairs, parent, tradeRoom, wc))
+            parent: ActorRef[Exchange.Message],
+            tradeRoom: ActorRef[TradeRoom.Message],
+            wc: WorkingContext):
+  Behavior[Command] =
+    Behaviors.setup(context => new LiquidityBalancerRun(context, config, exchangeConfig, tradePairs, parent, tradeRoom, wc))
+
+  sealed trait Command
+  private case class Run() extends Command
 }
 
 // Temporary Actor - stops itself after successful run
-class LiquidityBalancerRun(val config: Config,
-                           val exchangeConfig: ExchangeConfig,
-                           val tradePairs: Set[TradePair],
-                           val parent: ActorRef,
-                           val tradeRoom: ActorRef,
-                           val wc: WorkingContext) extends Actor with ActorLogging {
+class LiquidityBalancerRun(context: ActorContext[LiquidityBalancerRun.Command],
+                           config: Config,
+                           exchangeConfig: ExchangeConfig,
+                           tradePairs: Set[TradePair],
+                           parent: ActorRef[Exchange.Message],
+                           tradeRoom: ActorRef[TradeRoom.Message],
+                           wc: WorkingContext) extends AbstractBehavior[LiquidityBalancerRun.Command](context) {
 
-  private implicit val actorSystem: ActorSystem = Main.actorSystem
-  private implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
+  import LiquidityBalancerRun._
+
+  private implicit val system: ActorSystem[UserRootGuardian.Reply] = Main.actorSystem
+  private implicit val executionContext: ExecutionContextExecutor = system.executionContext
+  private implicit val timeout: Timeout = config.global.internalCommunicationTimeout
 
   if (wc.liquidityLocks.values.exists(_.exchange != exchangeConfig.name)) throw new IllegalArgumentException
 
-  def placeOrders(orders: Iterable[NewLiquidityTransformationOrder]): Future[Iterable[OrderRef]] = {
+  def placeOrders(orders: Iterable[OrderRequest]): Future[Iterable[OrderRef]] = {
     if (orders.isEmpty) return Future.successful(Nil)
-    implicit val timeout: Timeout = config.global.internalCommunicationTimeout
 
     Future.sequence(
       orders.map(o =>
-        (tradeRoom ? o).mapTo[Option[OrderRef]]
+        tradeRoom.ask(ref => TradeRoom.PlaceLiquidityTransformationOrder(o, ref))
           .recover {
             case e: Exception =>
-              log.error(e, s"[${exchangeConfig.name}] Error while placing liquidity tx order $o")
+              context.log.error(s"[${exchangeConfig.name}] Error while placing liquidity tx order $o", e)
               None
           }
       )
@@ -62,8 +65,7 @@ class LiquidityBalancerRun(val config: Config,
   }
 
   def unfinishedOrders(refs: Iterable[OrderRef]): Future[Iterable[OrderRef]] = {
-    implicit val timeout: Timeout = config.global.internalCommunicationTimeout
-    (tradeRoom ? GetFinishedLiquidityTxs()).mapTo[Set[OrderRef]]
+    tradeRoom.ask(ref => TradeRoom.GetFinishedLiquidityTxs(ref))
       .map(l => refs.filterNot(e => l.contains(e)))
   }
 
@@ -83,38 +85,28 @@ class LiquidityBalancerRun(val config: Config,
       } while (Instant.now.isBefore(orderFinishDeadline))
     }
     if (stillUnfinished.isEmpty) {
-      log.debug(s"[${exchangeConfig.name}] all ${orderRefs.size} liquidity transaction(s) finished")
-    } else {
-      throw new RuntimeException(s"Not all liquidity tx orders did finish. Still unfinished: [$stillUnfinished]") // should not happen, because TradeRoom/Exchange cleanup unfinsihed orders by themself!
+      context.log.debug(s"[${exchangeConfig.name}] all ${orderRefs.size} liquidity transaction(s) finished")
+    } else { // should not happen, because TradeRoom/Exchange doing cleanup unfinished orders by themself!
+      throw new RuntimeException(s"Not all liquidity tx orders did finish. Still unfinished: [$stillUnfinished]")
     }
   }
-
 
   def balanceLiquidity(): Unit = {
-    try {
-      placeOrders(
-        new LiquidityBalancer(config, exchangeConfig, tradePairs, wc).calculateOrders()
-      ).onComplete {
-        // @formatter:off
-        case Success(orderRefs)                    => waitUntilLiquidityOrdersFinished(orderRefs)
-        case Failure(e: OrderBookTooFlatException) => log.warning(s"[to be improved] [${exchangeConfig.name}] Cannot perform liquidity housekeeping because the order book of trade pair ${e.tradePair} was too flat")
-        case Failure(e)                            => log.error(e, s"[${exchangeConfig.name}] liquidity houskeeping failed")
-        // @formatter:on
-      }
-    } finally {
-      parent ! Finished()
-      self ! PoisonPill
+    placeOrders(
+      new LiquidityBalancer(config, exchangeConfig, tradePairs, wc).calculateOrders()
+    ).onComplete {
+      // @formatter:off
+      case Success(orderRefs)                    => waitUntilLiquidityOrdersFinished(orderRefs)
+      case Failure(e: OrderBookTooFlatException) => context.log.warn(s"[code improved needed] [${exchangeConfig.name}] Cannot perform liquidity housekeeping because the order book of trade pair ${e.tradePair} was too flat")
+      case Failure(e)                            => context.log.error(s"[${exchangeConfig.name}] liquidity houskeeping failed", e)
+      // @formatter:on
     }
   }
 
-  override def preStart(): Unit = {
-    self ! Run()
-  }
-
-  override def receive: Receive = {
-    // @formatter:off
-    case Run()                            => balanceLiquidity()
-    case akka.actor.Status.Failure(cause) => log.error(cause, "Failure received")
-    // @formatter:on
+  override def onMessage(message: Command): Behavior[Command] = {
+    case Run() =>
+      balanceLiquidity()
+      parent ! Exchange.LiquidityBalancerRunFinished()
+      Behaviors.stopped
   }
 }

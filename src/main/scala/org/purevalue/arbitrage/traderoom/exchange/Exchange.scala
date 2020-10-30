@@ -4,86 +4,88 @@ import java.time.{Duration, Instant}
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
-import akka.Done
-import akka.actor.SupervisorStrategy.{Escalate, Restart}
-import akka.actor.{Actor, ActorKilledException, ActorLogging, ActorRef, ActorSystem, Cancellable, Kill, OneForOneStrategy, PoisonPill, Props}
-import akka.pattern.ask
+import akka.actor.typed.scaladsl.AskPattern.{Askable, schedulerFromActorSystem}
+import akka.actor.typed.scaladsl.{AbstractBehavior, ActorContext, Behaviors, TimerScheduler}
+import akka.actor.typed.{ActorRef, ActorSystem, Behavior}
 import akka.util.Timeout
-import org.purevalue.arbitrage._
-import org.purevalue.arbitrage.traderoom.TradeRoom.{GetReferenceTicker, JoinTradeRoom, OrderRef, OrderUpdateTrigger, Stop, TradeRoomJoined}
-import org.purevalue.arbitrage.traderoom._
-import org.purevalue.arbitrage.traderoom.exchange.Exchange._
+import org.purevalue.arbitrage.adapter.{AccountDataChannel, PublicDataChannel, PublicDataInquirer}
+import org.purevalue.arbitrage.traderoom.TradeRoom.{OrderRef, OrderUpdateTrigger, TradeRoomJoined}
+import org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator.StreamingStarted
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer.WorkingContext
-import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{GetState, LiquidityLockClearance, LiquidityLockRequest}
-import org.purevalue.arbitrage.traderoom.exchange.PioneerOrderRunner.{PioneerOrderFailed, PioneerOrderSucceeded}
-import org.purevalue.arbitrage.util.{Emoji, InitSequence, InitStep, WaitingFor}
+import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLockClearance, LiquidityLockRequest}
+import org.purevalue.arbitrage.traderoom.{Asset, CryptoValue, ExchangeInitStuff, Order, OrderRequest, OrderUpdate, TradePair, TradeRoom, TradeRoomInitCoordinator, TradeSide, exchange}
+import org.purevalue.arbitrage.util.{Emoji, InitSequence, InitStep, StaleDataException, WaitingFor}
+import org.purevalue.arbitrage.{Config, ExchangeConfig, Main, UserRootGuardian}
 
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
-import scala.concurrent.{Await, ExecutionContextExecutor, Future}
+import scala.concurrent.{ExecutionContextExecutor, Future}
 import scala.util.{Failure, Success}
 
 case class TickerSnapshot(exchange: String, ticker: Map[TradePair, Ticker])
 case class OrderBookSnapshot(exchange: String, orderBook: Map[TradePair, OrderBook])
 case class DataTSSnapshot(exchange: String, heartbeatTS: Option[Instant], tickerTS: Option[Instant], orderBookTS: Option[Instant])
-case class FullDataSnapshot(exchange: String,
-                            ticker: Map[TradePair, Ticker],
-                            orderBook: Map[TradePair, OrderBook],
-                            heartbeatTS: Option[Instant],
-                            tickerTS: Option[Instant],
-                            orderBookTS: Option[Instant],
-                            wallet: Wallet)
 
 object Exchange {
-  case class IncomingPublicData(data: Seq[ExchangePublicStreamData])
-  case class IncomingAccountData(data: Seq[ExchangeAccountStreamData])
+  def apply(exchangeName: String,
+            config: Config,
+            exchangeConfig: ExchangeConfig,
+            initStuff: ExchangeInitStuff):
+  Behavior[Message] = {
+    Behaviors.withTimers(timers =>
+      Behaviors.setup(context => new Exchange(context, timers, exchangeName, config, exchangeConfig, initStuff)))
+  }
 
-  case class GetAllTradePairs()
-  case class GetTickerSnapshot()
-  case class GetWallet()
-  case class GetFullDataSnapshot()
-  case class GetActiveOrder(r: OrderRef)
-  case class GetActiveOrders()
-  case class GetWalletLiquidCrypto()
+  trait Message
+  case class IncomingPublicData(data: Seq[ExchangePublicStreamData]) extends Message
+  case class IncomingAccountData(data: Seq[ExchangeAccountStreamData]) extends Message
+  case class SimulatedAccountData(dataset: ExchangeAccountStreamData) extends Message
 
-  case class SetUsableTradePairs(tradeable: Set[TradePair])
-  case class RemoveActiveOrder(ref: OrderRef)
-  case class RemoveOrphanOrder(ref: OrderRef)
+  case class GetAllTradePairs(replyTo: ActorRef[TradeRoomInitCoordinator.Reply]) extends Message // request from TradeRommInitCoordinator
+  case class AllTradePairs(pairs: Set[TradePair]) extends Message // reply from PublicDataInquirer
+  case class GetTickerSnapshot(replyTo: ActorRef[TickerSnapshot]) extends Message
+  case class GetWallet(replyTo: ActorRef[Wallet]) extends Message
+  case class GetFullDataSnapshot(replyTo: ActorRef[TradeRoom.Message]) extends Message
+  case class GetActiveOrders(replyTo: ActorRef[Map[OrderRef, Order]]) extends Message
+  case class GetWalletLiquidCrypto(replyTo: ActorRef[PioneerOrderRunner.Message]) extends Message
 
-  case class StartStreaming()
-  case class StreamingStarted(exchange: String)
-  case class AccountDataChannelInitialized()
-  case class WalletUpdateTrigger()
-  case class DataHouseKeeping()
-  case class LiquidityHouseKeeping()
-  case class SwitchToInitializedMode()
+  case class SetUsableTradePairs(tradeable: Set[TradePair], replyTo: ActorRef[TradeRoomInitCoordinator.Reply]) extends Message
+  case class JoinTradeRoom(tradeRoom: ActorRef[TradeRoom.Message]) extends Message
+  case class RemoveActiveOrder(ref: OrderRef) extends Message
+  case class RemoveOrphanOrder(ref: OrderRef) extends Message
 
-  case class CancelOrder(ref: OrderRef)
+  case class StartStreaming(replyTo: ActorRef[TradeRoomInitCoordinator.Reply]) extends Message
+  case class AccountDataChannelInitialized() extends Message
+  case class WalletUpdateTrigger() extends Message
+  case class PioneerOrderSucceeded() extends Message
+  case class PioneerOrderFailed(e: Throwable) extends Message
+  case class DataHouseKeeping() extends Message
+  case class LiquidityHouseKeeping() extends Message
+  case class LiquidityBalancerRunFinished() extends Message
+
+  case class CancelOrder(ref: OrderRef, replyTo: ActorRef[CancelOrderResult]) extends Message
   case class CancelOrderResult(exchange: String,
                                tradePair: TradePair,
                                externalOrderId: String,
                                success: Boolean,
                                orderUnknown: Boolean = false,
-                               text: Option[String] = None)
-  case class NewLimitOrder(orderRequest: OrderRequest) // response is NewOrderAck
-  case class NewOrderAck(exchange: String, tradePair: TradePair, externalOrderId: String, orderId: UUID) {
+                               text: Option[String] = None) extends Message
+  case class NewLimitOrder(orderRequest: OrderRequest, replyTo: ActorRef[NewOrderAck]) extends Message
+  case class NewOrderAck(exchange: String, tradePair: TradePair, externalOrderId: String, orderId: UUID) { // answer to NewLimitOrder (done by *AccountDataChannel)
     def toOrderRef: OrderRef = OrderRef(exchange, tradePair, externalOrderId)
   }
-
-  case class ConvertValue(value: CryptoValue, targetAsset: Asset) // return CryptoValue
-  case class GetPriceEstimate(tradepair: TradePair) // return Double
-  case class DetermineRealisticLimit(pair: TradePair, side: TradeSide, quantity: Double) // return Double
-
-  def props(exchangeName: String,
-            config: Config,
-            exchangeConfig: ExchangeConfig,
-            initStuff: ExchangeInitStuff): Props =
-    Props(new Exchange(exchangeName, config, exchangeConfig, initStuff))
+  case class ConvertValue(value: CryptoValue, targetAsset: Asset, replyTo: ActorRef[CryptoValue]) extends Message
+  case class GetPriceEstimate(pair: TradePair, replyTo: ActorRef[Double]) extends Message
+  case class DetermineRealisticLimit(pair: TradePair, side: TradeSide, quantity: Double, replyTo: ActorRef[Double]) extends Message
 }
 
-case class Exchange(exchangeName: String,
-                    config: Config,
-                    exchangeConfig: ExchangeConfig,
-                    initStuff: ExchangeInitStuff) extends Actor with ActorLogging {
+class Exchange(context: ActorContext[Exchange.Message],
+               timers: TimerScheduler[Exchange.Message],
+               exchangeName: String,
+               config: Config,
+               exchangeConfig: ExchangeConfig,
+               initStuff: ExchangeInitStuff) extends AbstractBehavior[Exchange.Message](context) {
+
+  import Exchange._
 
   private case class ExchangePublicData(var ticker: Map[TradePair, Ticker],
                                         var orderBook: Map[TradePair, OrderBook],
@@ -95,51 +97,46 @@ case class Exchange(exchangeName: String,
                                          var activeOrders: Map[OrderRef, Order])
 
 
-  private implicit val actorSystem: ActorSystem = Main.actorSystem
-  private implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
+  private implicit val system: ActorSystem[UserRootGuardian.Reply] = Main.actorSystem
+  private implicit val executionContext: ExecutionContextExecutor = system.executionContext
 
   private val publicData: ExchangePublicData = ExchangePublicData(Map(), Map(), None, None, None)
   private val accountData: ExchangeAccountData = ExchangeAccountData(
     Wallet(exchangeName, exchangeConfig.doNotTouchTheseAssets, Map()),
     Map())
 
-  private var dataHouseKeepingSchedule: Cancellable = _
-  private var liquidityHouseKeepingSchedule: Cancellable = _
   private var liquidityHouseKeepingRunning: Boolean = false
 
-  private var tradeRoom: Option[ActorRef] = None
-  private var liquidityBalancerRunTempActor: ActorRef = _
+  private var tradeRoom: Option[ActorRef[TradeRoom.Message]] = None
+  private var liquidityBalancerRunTempActor: ActorRef[LiquidityBalancerRun.Command] = _
 
   private var shutdownInitiated: Boolean = false
 
   private var allTradePairs: Set[TradePair] = _
 
   private var usableTradePairs: Set[TradePair] = _ // all trade pairs we need for calculations and trades
-  private var publicDataInquirer: ActorRef = _
+  private var publicDataInquirer: ActorRef[PublicDataInquirer.Command] = _
 
-  private var liquidityManager: ActorRef = _
-  private var tradeSimulator: Option[ActorRef] = None
-  private var publicDataChannel: ActorRef = _
-  private var accountDataChannel: ActorRef = _
-  private var pioneerOrderRunner: ActorRef = _
+  private var liquidityManager: ActorRef[LiquidityManager.Command] = _
+  private var tradeSimulator: Option[ActorRef[AccountDataChannel.Command]] = None
+  private var publicDataChannel: ActorRef[PublicDataChannel.Command] = _
+  private var accountDataChannel: ActorRef[AccountDataChannel.Command] = _
+  private var pioneerOrderRunner: ActorRef[PioneerOrderRunner.Message] = _
 
   def tradeSimulationMode: Boolean = config.tradeRoom.tradeSimulation
 
   def startPublicDataChannel(): Unit = {
-    publicDataChannel = context.actorOf(
-      initStuff.exchangePublicDataChannelProps(config.global, exchangeConfig, usableTradePairs, self, publicDataInquirer),
+    publicDataChannel = context.spawn(
+      initStuff.exchangePublicDataChannelProps(config.global, exchangeConfig, usableTradePairs, context.self, publicDataInquirer),
       s"${exchangeConfig.name}-PublicDataChannel")
   }
 
   def initLiquidityManager(j: JoinTradeRoom): Unit = {
-    liquidityManager = context.actorOf(
-      LiquidityManager.props(
+    liquidityManager = context.spawn(
+      LiquidityManager(
         config,
-        exchangeConfig,
-        usableTradePairs,
-        j.tradeRoom,
-        self),
-      s"LiquidityManager-$exchangeName"
+        exchangeConfig
+      ), s"LiquidityManager-$exchangeName"
     )
   }
 
@@ -173,37 +170,30 @@ case class Exchange(exchangeName: String,
     }
   }
 
-  def startPublicDataInquirer(): Unit = {
-    publicDataInquirer = context.actorOf(initStuff.exchangePublicDataInquirerProps(config.global, exchangeConfig), s"PublicDataInquirer-$exchangeName")
-
-    implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
-    allTradePairs = Await.result(
-      (publicDataInquirer ? GetAllTradePairs()).mapTo[Set[TradePair]],
-      timeout.duration.plus(500.millis))
-
-    log.debug(s"$exchangeName: ${allTradePairs.size} Total TradePairs: ${allTradePairs.toSeq.sortBy(e => e.toString)}")
-  }
 
   def startAccountDataManager(): Unit = {
     if (shutdownInitiated) return
     if (exchangeConfig.secrets.apiKey.isEmpty || exchangeConfig.secrets.apiSecretKey.isEmpty) {
       throw new RuntimeException(s"Can not start AccountDataManager for exchange $exchangeName because API-Key is not set")
     } else {
-      accountDataChannel = context.actorOf(initStuff.exchangeAccountDataChannelProps(config, exchangeConfig, self, publicDataInquirer),
+      accountDataChannel = context.spawn(
+        initStuff.exchangeAccountDataChannelProps(config, exchangeConfig, context.self, publicDataInquirer),
         s"${exchangeConfig.name}.AccountDataChannel")
 
       if (tradeSimulationMode) {
-        tradeSimulator = Some(context.actorOf(TradeSimulator.props(config.global, exchangeConfig, self), s"TradeSimulator-$exchangeName"))
+        tradeSimulator = Some(context.spawn(
+          TradeSimulator(exchangeConfig, context.self),
+          s"TradeSimulator-$exchangeName"))
       }
     }
   }
 
   def initiatePioneerOrders(): Unit = {
-    pioneerOrderRunner = context.actorOf(
-      PioneerOrderRunner.props(
+    pioneerOrderRunner = context.spawn(
+      PioneerOrderRunner(
         config,
         exchangeConfig,
-        self),
+        context.self),
       s"PioneerOrderRunner-$exchangeName")
   }
 
@@ -213,12 +203,21 @@ case class Exchange(exchangeName: String,
     joinedTradeRoom.arrived()
   }
 
-  def switchToInitializedMode(): Unit = {
-    context.become(initializedModeReceive)
-    dataHouseKeepingSchedule = actorSystem.scheduler.scheduleAtFixedRate(20.seconds, 1.minute, self, DataHouseKeeping())
-    liquidityHouseKeepingSchedule = actorSystem.scheduler.scheduleWithFixedDelay(90.seconds, 30.seconds, self, LiquidityHouseKeeping())
-    log.info(s"${Emoji.Excited}  [$exchangeName] completely initialized and running")
+  def switchToInitializedMode(): Behavior[Message] = {
+    timers.startTimerAtFixedRate(DataHouseKeeping(), 1.minute)
+    Future {
+      concurrent.blocking {
+        Thread.sleep(90000) // delay start
+        timers.startTimerWithFixedDelay(LiquidityHouseKeeping(), 30.seconds)
+      }
+    }
+    context.log.info(s"${Emoji.Excited}  [$exchangeName] completely initialized and running")
+
     tradeRoom.get ! TradeRoomJoined(exchangeName)
+
+    Behaviors.receiveMessage[Message] {
+      message => initializedModeReceive(message)
+    }
   }
 
   val accountDataChannelInitialized: WaitingFor = WaitingFor()
@@ -227,12 +226,11 @@ case class Exchange(exchangeName: String,
   val pioneerOrdersSucceeded: WaitingFor = WaitingFor()
   val joinedTradeRoom: WaitingFor = WaitingFor()
 
-  def startStreaming(): Unit = {
-    val sendStreamingStartedResponseTo = sender()
+  def startStreaming(replyTo: ActorRef[TradeRoomInitCoordinator.Reply]): Unit = {
     val maxWaitTime = config.global.internalCommunicationTimeoutDuringInit.duration
     val pioneerOrderMaxWaitTime: FiniteDuration = maxWaitTime.plus(FiniteDuration(config.tradeRoom.maxOrderLifetime.toMillis, TimeUnit.MILLISECONDS))
     val initSequence = new InitSequence(
-      log,
+      context.log,
       exchangeName,
       List(
         InitStep("start account-data-manager", () => startAccountDataManager()),
@@ -247,69 +245,89 @@ case class Exchange(exchangeName: String,
         InitStep("warmup channels for 3 seconds", () => Thread.sleep(3000)),
         InitStep(s"initiate pioneers", () => initiatePioneerOrders()),
         InitStep("waiting for pioneer orders to succeed", () => pioneerOrdersSucceeded.await(pioneerOrderMaxWaitTime)),
-        InitStep("send streaming-started", () => sendStreamingStartedResponseTo ! StreamingStarted(exchangeName)),
+        InitStep("send streaming-started", () => replyTo ! StreamingStarted(exchangeName)),
         InitStep("wait until joined trade-room", () => joinedTradeRoom.await(maxWaitTime * 3))
       ))
 
     Future(initSequence.run()).onComplete {
-      case Success(_) => self ! SwitchToInitializedMode()
+      case Success(_) => switchToInitializedMode()
       case Failure(e) =>
-        log.error(e, s"[$exchangeName] Init sequence failed")
-        self ! PoisonPill // TODO coordinated shutdown
+        val msg = s"[$exchangeName] Init sequence failed"
+        context.log.error(msg, e)
+        throw new RuntimeException(msg, e)
     }
   }
 
   def setUsableTradePairs(tradePairs: Set[TradePair]): Unit = {
     usableTradePairs = tradePairs
-    log.info(s"""[$exchangeName] usable trade pairs: ${tradePairs.toSeq.sortBy(_.toString).mkString(", ")}""")
-    sender() ! Done
+    context.log.info(s"""[$exchangeName] usable trade pairs: ${tradePairs.toSeq.sortBy(_.toString).mkString(", ")}""")
   }
 
-  override def preStart(): Unit = {
-    try {
-      log.info(s"Initializing Exchange $exchangeName" +
-        s"${if (tradeSimulationMode) " in TRADE-SIMULATION mode" else ""}" +
-        s"${if (exchangeConfig.doNotTouchTheseAssets.nonEmpty) s" (DoNotTouch: ${exchangeConfig.doNotTouchTheseAssets.mkString(", ")})" else ""}")
+  def startPublicDataInquirer(): Unit = {
+    publicDataInquirer = context.spawn(
+      initStuff.exchangePublicDataInquirerProps(config.global, exchangeConfig),
+      s"PublicDataInquirer-$exchangeName")
 
-      startPublicDataInquirer()
+    publicDataInquirer ! PublicDataInquirer.GetAllTradePairs(context.self)
+  }
 
-    } catch {
-      case e: Exception => log.error(e, s"$exchangeName: preStart failed")
-      // TODO coordinated shutdown
+  override def onMessage(msg: Message): Behavior[Message] = {
+    context.log.info(s"Initializing Exchange $exchangeName" +
+      s"${if (tradeSimulationMode) " in TRADE-SIMULATION mode" else ""}" +
+      s"${if (exchangeConfig.doNotTouchTheseAssets.nonEmpty) s" (DoNotTouch: ${exchangeConfig.doNotTouchTheseAssets.mkString(", ")})" else ""}")
+
+    startPublicDataInquirer()
+
+    Behaviors.receiveMessage[Message] {
+      case AllTradePairs(pairs) =>
+        allTradePairs = pairs
+        context.log.info(s"""[$exchangeName] All trade pairs: ${allTradePairs.toSeq.sorted.mkString(", ")}""")
+        initMode()
     }
   }
 
-  // @formatter:off
-  override def receive: Receive = {
-    case IncomingPublicData(data)                 => applyPublicDataset(data)
-    case IncomingAccountData(data)                => data.foreach(applyAccountData)
-    case SimulatedAccountData(dataset)            => applySimulatedAccountData(dataset)
 
-    case o: NewLimitOrder                         => onNewLimitOrder(o) // needed for pioneer order runner
-    case c: CancelOrder                           => onCancelOrder(c) // needed for pioneer order runner
+  def initMode(): Behavior[Message] = {
+    Behaviors.receiveMessage[Message] {
+      // @formatter:off
+      case IncomingPublicData(data)                 => applyPublicDataset(data); Behaviors.same
+      case IncomingAccountData(data)                => data.foreach(applyAccountData); Behaviors.same
+      case SimulatedAccountData(dataset)            => applySimulatedAccountData(dataset); Behaviors.same
 
-    case WalletUpdateTrigger()                    => if (!walletInitialized.isArrived) walletInitialized.arrived()
+      case o: NewLimitOrder                         => onNewLimitOrder(o); Behaviors.same
+      case c: CancelOrder                           => onCancelOrder(c); Behaviors.same // needed for pioneer order runner
 
-    case SetUsableTradePairs(tradePairs)          => setUsableTradePairs(tradePairs)
-    case RemoveActiveOrder(ref)                   => accountData.activeOrders = accountData.activeOrders - ref
-    case StartStreaming()                         => startStreaming()
-    case AccountDataChannelInitialized()          => accountDataChannelInitialized.arrived()
-    case PioneerOrderSucceeded()                  => pioneerOrdersSucceeded.arrived()
-    case PioneerOrderFailed(e)                    => log.error(e, s"[$exchangeName] Pioneer order failed"); stop()
-    case j: JoinTradeRoom                         => joinTradeRoom(j)
+      case WalletUpdateTrigger()                    => if (!walletInitialized.isArrived) walletInitialized.arrived(); Behaviors.same
 
-    case GetAllTradePairs()                       => sender() ! allTradePairs
-    case GetActiveOrders()                        => sender() ! accountData.activeOrders
-    case GetPriceEstimate(tradePair)              => sender() ! publicData.ticker(tradePair).priceEstimate
-    case GetWalletLiquidCrypto()                  => sender() ! accountData.wallet.liquidCryptoValues(exchangeConfig.usdEquivalentCoin, publicData.ticker)
-    case ConvertValue(value, target)              => sender() ! value.convertTo(target, publicData.ticker)
-    case m:DetermineRealisticLimit                => sender() ! determineRealisticLimit(m)
+      case SetUsableTradePairs(tradePairs, replyTo) =>
+        setUsableTradePairs(tradePairs)
+        replyTo ! TradeRoomInitCoordinator.UsableTradePairsSet(exchangeName)
+        Behaviors.same
 
-    case Done                                     => // ignoring Done from cascaded JoinTradeRoom
-    case SwitchToInitializedMode()                => switchToInitializedMode()
-    case TradeRoom.Stop()                         => stop()
+      case RemoveActiveOrder(ref)                   => accountData.activeOrders = accountData.activeOrders - ref; Behaviors.same
+      case StartStreaming(replyTo)                  => startStreaming(replyTo); Behaviors.same
+      case AccountDataChannelInitialized()          => accountDataChannelInitialized.arrived(); Behaviors.same
+      case PioneerOrderSucceeded()                  => pioneerOrdersSucceeded.arrived(); Behaviors.same
+      case PioneerOrderFailed(e)                    => context.log.error(s"[$exchangeName] Pioneer order failed", e); stop()
+      case j: JoinTradeRoom                         => joinTradeRoom(j); Behaviors.same
+
+      case GetAllTradePairs(replyTo)                => replyTo ! TradeRoomInitCoordinator.AllTradePairs(exchangeName, allTradePairs); Behaviors.same
+      case GetActiveOrders(replyTo)                 => replyTo ! accountData.activeOrders; Behaviors.same
+      case GetPriceEstimate(tradePair, replyTo)     => replyTo ! publicData.ticker(tradePair).priceEstimate; Behaviors.same
+      case GetWalletLiquidCrypto(replyTo)           =>
+        replyTo ! PioneerOrderRunner.LiquidCryptoValues(accountData.wallet.liquidCryptoValues(exchangeConfig.usdEquivalentCoin, publicData.ticker))
+        Behaviors.same
+
+      case ConvertValue(value, target, replyTo)     =>
+        replyTo ! value.convertTo(target, publicData.ticker)
+        Behaviors.same
+
+      case DetermineRealisticLimit(pair, side, quantity, replyTo) =>
+        replyTo ! determineRealisticLimit(pair, side, quantity)
+        Behaviors.same
+      // @formatter:on
+    }
   }
-  // @formatter:on
 
   def checkValidity(o: OrderRequest): Unit = {
     if (exchangeConfig.doNotTouchTheseAssets.contains(o.pair.baseAsset)
@@ -319,43 +337,38 @@ case class Exchange(exchangeName: String,
 
   def onNewLimitOrder(o: NewLimitOrder): Unit = {
     if (shutdownInitiated) return
-
     checkValidity(o.orderRequest)
-    if (tradeSimulationMode) tradeSimulator.get.forward(o)
-    else accountDataChannel.forward(o)
+    val forwardMsg = AccountDataChannel.NewLimitOrder(o.orderRequest, o.replyTo)
+    if (tradeSimulationMode) tradeSimulator.get ! forwardMsg
+    else accountDataChannel ! forwardMsg
   }
 
-  def cancelOrderIfStillExist(c: CancelOrder): Unit = {
-    val cancelOrderOrigin = sender()
-    implicit val timeout: Timeout = config.global.internalCommunicationTimeout
-    if (accountData.activeOrders.contains(c.ref)) {
-      (accountDataChannel ? c).mapTo[CancelOrderResult].onComplete {
-        case Success(result) if result.orderUnknown =>
-          accountData.activeOrders = accountData.activeOrders - c.ref // when order did not exist on exchange, we remove it here too
-          cancelOrderOrigin ! result
-          log.debug(s"removed order ${c.ref} in activeOrders")
-        case Success(result) => cancelOrderOrigin ! result
-        case Failure(e) =>
-          log.error(e, "[houston, we...] CancelOrder failed")
-      }
-    }
-  }
-
+  // TODO remove order from accountData.activeOrders when order does not exist on exchange
+  //       case Success(result) if result.orderUnknown =>
+  //          accountData.activeOrders = accountData.activeOrders - c.ref // when order did not exist on exchange, we remove it here too
   def onCancelOrder(c: CancelOrder): Unit = {
-    if (tradeSimulationMode) tradeSimulator.get.forward(c)
-    else cancelOrderIfStillExist(c)
+    if (accountData.activeOrders.contains(c.ref)) {
+      val forwardMsg = AccountDataChannel.CancelOrder(c.ref, c.replyTo)
+      if (tradeSimulationMode) tradeSimulator.get ! forwardMsg
+      else accountDataChannel ! forwardMsg
+    } else {
+      context.log.debug(s"[$exchangeName] onCancelOrder($c): order already gone")
+    }
   }
 
   def guardedRetry(e: ExchangePublicStreamData): Unit = {
     if (e.applyDeadline.isEmpty) e.applyDeadline = Some(Instant.now.plus(e.MaxApplyDelay))
     if (Instant.now.isAfter(e.applyDeadline.get)) {
-      log.warning(s"ignoring update [timeout] $e")
+      context.log.warn(s"ignoring update [timeout] $e")
     } else {
-      log.debug(s"scheduling retry of $e")
-      Future(concurrent.blocking {
-        Thread.sleep(20)
-        self ! IncomingPublicData(Seq(e))
-      })
+      context.log.debug(s"scheduling retry of $e")
+      context.pipeToSelf(
+        Future {
+          concurrent.blocking {
+            Thread.sleep(20)
+            IncomingPublicData(Seq(e))
+          }
+        })(_)
     }
   }
 
@@ -393,18 +406,19 @@ case class Exchange(exchangeName: String,
   private def guardedRetry(e: ExchangeAccountStreamData): Unit = {
     if (e.applyDeadline.isEmpty) e.applyDeadline = Some(Instant.now.plus(e.MaxApplyDelay))
     if (Instant.now.isAfter(e.applyDeadline.get)) {
-      log.debug(s"ignoring update [timeout] $e")
+      context.log.debug(s"ignoring update [timeout] $e")
     } else {
-      log.debug(s"scheduling retry of $e")
-      Future(concurrent.blocking {
-        Thread.sleep(20)
-        self ! IncomingAccountData(Seq(e))
-      })
+      context.log.debug(s"scheduling retry of $e")
+      context.pipeToSelf(
+        Future(concurrent.blocking {
+          Thread.sleep(20)
+          IncomingAccountData(Seq(e))
+        }))(_)
     }
   }
 
   private def applyAccountData(data: ExchangeAccountStreamData): Unit = {
-    if (log.isDebugEnabled) log.debug(s"applying incoming $data")
+    if (context.log.isDebugEnabled) context.log.debug(s"applying incoming $data")
 
     data match {
       case w: WalletBalanceUpdate =>
@@ -415,14 +429,14 @@ case class Exchange(exchangeName: String,
         }.filterNot(e => e._2.amountAvailable == 0.0 && e._2.amountLocked == 0.0)
           .filterNot(e => exchangeConfig.assetBlocklist.contains(e._1))
         accountData.wallet = accountData.wallet.withBalance(balance)
-        self ! WalletUpdateTrigger()
+        context.self ! WalletUpdateTrigger()
 
       case w: WalletAssetUpdate =>
         val balance = (accountData.wallet.balance ++ w.balance)
           .filterNot(e => e._2.amountAvailable == 0.0 && e._2.amountLocked == 0.0)
           .filterNot(e => exchangeConfig.assetBlocklist.contains(e._1))
         accountData.wallet = accountData.wallet.withBalance(balance)
-        self ! WalletUpdateTrigger()
+        context.self ! WalletUpdateTrigger()
 
       case w: CompleteWalletUpdate =>
         val balance = w.balance
@@ -430,7 +444,7 @@ case class Exchange(exchangeName: String,
           .filterNot(e => exchangeConfig.assetBlocklist.contains(e._1))
         if (balance != accountData.wallet.balance) { // we get snapshots delivered here, so updates are needed only, when something changed
           accountData.wallet = accountData.wallet.withBalance(balance)
-          self ! WalletUpdateTrigger()
+          context.self ! WalletUpdateTrigger()
         }
 
       case o: OrderUpdate =>
@@ -454,23 +468,24 @@ case class Exchange(exchangeName: String,
 
   def applySimulatedAccountData(dataset: ExchangeAccountStreamData): Unit = {
     if (!config.tradeRoom.tradeSimulation) throw new RuntimeException
-    log.debug(s"Applying simulation data ...")
+    context.log.debug(s"Applying simulation data ...")
     applyAccountData(dataset)
   }
 
   /**
    * Will trigger a restart of the TradeRoom if stale data is found
    */
-  def stalePublicDataWatch(): Unit = {
+  def checkIfWeHaveStalePublicData(): Boolean = {
     val lastSeen: Instant = (publicData.heartbeatTS.toSeq ++ publicData.tickerTS.toSeq ++ publicData.orderBookTS.toSeq).max
     if (Duration.between(lastSeen, Instant.now).compareTo(config.tradeRoom.restarWhenDataStreamIsOlderThan) > 0) {
-      log.error(s"[$exchangeName] data is outdated!")
-      self ! Kill
-    }
+      val msg = s"[$exchangeName] public data is outdated!"
+      context.log.error(msg) // TODO check if we need to log here too. Better only the exception get caught and logged
+      throw new StaleDataException(msg)
+    } else false
   }
 
   def dataHouseKeeping(): Unit = {
-    stalePublicDataWatch()
+    checkIfWeHaveStalePublicData()
   }
 
   def liquidityHouseKeeping(): Unit = {
@@ -479,8 +494,8 @@ case class Exchange(exchangeName: String,
 
     implicit val timeout: Timeout = config.global.internalCommunicationTimeout
 
-    val f1 = (liquidityManager ? GetState()).mapTo[LiquidityManager.State]
-    val f2 = (tradeRoom.get ? GetReferenceTicker()).mapTo[TickerSnapshot]
+    val f1 = liquidityManager.ask(ref => LiquidityManager.GetState(ref))
+    val f2 = tradeRoom.get.ask(ref => TradeRoom.GetReferenceTicker(ref))
     (for {
       lmState <- f1
       referenceTicker <- f2
@@ -496,88 +511,86 @@ case class Exchange(exchangeName: String,
             lmState.liquidityDemand,
             lmState.liquidityLocks)
 
-        liquidityBalancerRunTempActor = context.actorOf(LiquidityBalancerRun.props(config, exchangeConfig, usableTradePairs, self, tradeRoom.get, wc),
+        liquidityBalancerRunTempActor = context.spawn(
+          LiquidityBalancerRun(config, exchangeConfig, usableTradePairs, context.self, tradeRoom.get, wc),
           s"${exchangeConfig.name}-liquidity-balancer-run")
 
-      case Failure(cause) => log.error(cause, s"[$exchangeName]  liquidityHouseKeeping()")
+      case Failure(cause) => context.log.error(s"[$exchangeName]  liquidityHouseKeeping()", cause)
     }
   }
 
-  def stop(): Unit = {
+  def stop(): Behavior[Message] = {
     shutdownInitiated = true
-    liquidityManager ! Stop()
-    self ! PoisonPill
+    Behaviors.stopped
   }
 
   def removeOrphanOrder(ref: OrderRef): Unit = {
     val order = accountData.activeOrders.get(ref)
     accountData.activeOrders = accountData.activeOrders - ref
     if (order.isDefined) {
-      log.info(s"[$exchangeName] cleaned up orphan finished order ${order.get}")
+      context.log.info(s"[$exchangeName] cleaned up orphan finished order ${order.get}")
     }
   }
 
-  def determineRealisticLimit(r: DetermineRealisticLimit): Double = {
+  def determineRealisticLimit(pair: TradePair, side: TradeSide, quantity: Double): Double = {
     exchange.determineRealisticLimit(
-      r.pair,
-      r.side,
-      r.quantity,
+      pair,
+      side,
+      quantity,
       config.liquidityManager.orderbookBasedTxLimitQuantityOverbooking,
       config.liquidityManager.tickerBasedTxLimitBeyondEdgeLimit,
       publicData.ticker,
       publicData.orderBook)
   }
 
-  def exchangeDataSnapshot: FullDataSnapshot = FullDataSnapshot(
-    exchangeName,
-    publicData.ticker,
-    publicData.orderBook,
-    publicData.heartbeatTS, publicData.tickerTS, publicData.orderBookTS,
-    accountData.wallet
-  )
+  def exchangeDataSnapshot: TradeRoom.FullDataSnapshot =
+    TradeRoom.FullDataSnapshot(
+      exchangeName,
+      publicData.ticker,
+      publicData.orderBook,
+      publicData.heartbeatTS, publicData.tickerTS, publicData.orderBookTS,
+      accountData.wallet
+    )
 
-  // @formatter:off
-  def initializedModeReceive: Receive = {
-    case IncomingPublicData(data)        => applyPublicDataset(data)
-    case IncomingAccountData(data)       => data.foreach(applyAccountData)
-    case SimulatedAccountData(dataset)   => applySimulatedAccountData(dataset)
 
-    case _: WalletUpdateTrigger          => // currently unused
-
-    case o: NewLimitOrder                => onNewLimitOrder(o)
-    case c: CancelOrder                  => onCancelOrder(c)
-    case l: LiquidityLockRequest         => liquidityManager.forward(l)
-    case c: LiquidityLockClearance       => liquidityManager.forward(c)
-    case RemoveActiveOrder(ref)          => accountData.activeOrders = accountData.activeOrders - ref
-    case RemoveOrphanOrder(ref)          => removeOrphanOrder(ref)
-
-    case GetTickerSnapshot()             => sender() ! TickerSnapshot(exchangeName, publicData.ticker)
-    case GetWallet()                     => sender() ! accountData.wallet
-    case GetActiveOrder(ref)             => sender() ! accountData.activeOrders.get(ref)
-    case GetActiveOrders()               => sender() ! accountData.activeOrders
-    case GetFullDataSnapshot()           => sender() ! exchangeDataSnapshot
-
-    case GetPriceEstimate(tradePair)     => sender() ! publicData.ticker(tradePair).priceEstimate
-    case m:DetermineRealisticLimit       => sender() ! determineRealisticLimit(m)
-    case ConvertValue(value, target)     => sender() ! value.convertTo(target, publicData.ticker)
-
-    case AccountDataChannelInitialized() => log.info(s"[$exchangeName] account data channel re-initialized")
-
-    case DataHouseKeeping()              => dataHouseKeeping()
-    case LiquidityHouseKeeping()         => liquidityHouseKeeping()
-    case LiquidityBalancerRun.Finished() => liquidityHouseKeepingRunning = false
-    case TradeRoom.Stop()                => stop()
-
-    case Failure(cause)                  => log.error(cause, s"[$exchangeName] failure received")
-  }
-  // @formatter:off
-
-  override val supervisorStrategy: OneForOneStrategy = {
-    OneForOneStrategy(maxNrOfRetries = 10, withinTimeRange = 5.minutes, loggingEnabled = true) {
+  def initializedModeReceive(message: Message): Behavior[Message] = {
+    message match {
       // @formatter:off
-      case _: ActorKilledException => Restart
-      case _: Exception            => Escalate
+      case IncomingPublicData(data)        => applyPublicDataset(data)
+      case IncomingAccountData(data)       => data.foreach(applyAccountData)
+      case SimulatedAccountData(dataset)   => applySimulatedAccountData(dataset)
+
+      case _: WalletUpdateTrigger          => // currently unused
+
+      case m: NewLimitOrder                => onNewLimitOrder(m)
+      case m: CancelOrder                  => onCancelOrder(m)
+      case m: LiquidityLockRequest         => liquidityManager ! m
+      case m: LiquidityLockClearance       => liquidityManager ! m
+      case RemoveActiveOrder(ref)          => accountData.activeOrders = accountData.activeOrders - ref
+      case RemoveOrphanOrder(ref)          => removeOrphanOrder(ref)
+
+      case GetTickerSnapshot(replyTo)      => replyTo ! TickerSnapshot(exchangeName, publicData.ticker)
+      case GetWallet(replyTo)              => replyTo ! accountData.wallet
+      case GetActiveOrders(replyTo)        => replyTo ! accountData.activeOrders
+      case GetFullDataSnapshot(replyTo)    => replyTo ! exchangeDataSnapshot
+
+      case AccountDataChannelInitialized() => context.log.info(s"[$exchangeName] account data channel re-initialized")
+
+      case DataHouseKeeping()              => dataHouseKeeping()
+      case LiquidityHouseKeeping()         => liquidityHouseKeeping()
+      case LiquidityBalancerRunFinished()  => liquidityHouseKeepingRunning = false
       // @formatter:on
     }
+    Behaviors.same
   }
+
+
+  //  override val supervisorStrategy: OneForOneStrategy = {
+  //    OneForOneStrategy(maxNrOfRetries = 10, withinTimeRange = 5.minutes, loggingEnabled = true) {
+  //      // @formatter:off
+//      case _: ActorKilledException => Restart
+//      case _: Exception            => Escalate
+//      // @formatter:on
+  //    }
+  //  }
 }

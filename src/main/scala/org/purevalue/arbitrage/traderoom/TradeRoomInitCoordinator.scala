@@ -1,19 +1,14 @@
 package org.purevalue.arbitrage.traderoom
 
-import akka.actor.SupervisorStrategy.Escalate
-import akka.actor.{Actor, ActorLogging, ActorRef, AllForOneStrategy, Props}
-import akka.pattern.ask
-import akka.util.Timeout
-import org.purevalue.arbitrage.Config
+import akka.actor.typed.scaladsl.{AbstractBehavior, ActorContext, Behaviors}
+import akka.actor.typed.{ActorRef, Behavior}
 import org.purevalue.arbitrage.adapter.binance.{BinanceAccountDataChannel, BinancePublicDataChannel, BinancePublicDataInquirer}
 import org.purevalue.arbitrage.adapter.bitfinex.{BitfinexAccountDataChannel, BitfinexPublicDataChannel, BitfinexPublicDataInquirer}
 import org.purevalue.arbitrage.adapter.coinbase.{CoinbaseAccountDataChannel, CoinbasePublicDataChannel, CoinbasePublicDataInquirer}
-import org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator.InitializedTradeRoom
+import org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator.{AllTradePairs, Reply, StreamingStarted, UsableTradePairsSet}
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.{Exchange, ExchangeAccountDataChannelInit, ExchangePublicDataChannelInit, ExchangePublicDataInquirerInit}
-
-import scala.concurrent.Await
-import scala.concurrent.duration.DurationInt
+import org.purevalue.arbitrage.{Config, UserRootGuardian}
 
 
 case class ExchangeInitStuff(exchangePublicDataInquirerProps: ExchangePublicDataInquirerInit,
@@ -21,47 +16,44 @@ case class ExchangeInitStuff(exchangePublicDataInquirerProps: ExchangePublicData
                              exchangeAccountDataChannelProps: ExchangeAccountDataChannelInit)
 
 object TradeRoomInitCoordinator {
-  case class InitializedTradeRoom(tradeRoom: ActorRef)
-  def props(config: Config,
-            parent: ActorRef): Props = Props(new TradeRoomInitCoordinator(config, parent))
+  def apply(config: Config,
+            parent: ActorRef[UserRootGuardian.Reply]):
+  Behavior[Reply] =
+    Behaviors.setup(context => new TradeRoomInitCoordinator(context, config, parent))
+
+  sealed trait Reply
+  case class AllTradePairs(exchange: String, pairs: Set[TradePair]) extends Reply
+  case class UsableTradePairsSet(exchange: String) extends Reply
+  case class StreamingStarted(exchange: String) extends Reply
 }
-class TradeRoomInitCoordinator(val config: Config,
-                               val parent: ActorRef) extends Actor with ActorLogging {
+class TradeRoomInitCoordinator(context: ActorContext[TradeRoomInitCoordinator.Reply],
+                               config: Config,
+                               parent: ActorRef[UserRootGuardian.Reply])
+  extends AbstractBehavior[TradeRoomInitCoordinator.Reply](context) {
 
   // @formatter:off
   var allTradePairs:      Map[String, Set[TradePair]] = Map()
   var usableTradePairs:   Map[String, Set[TradePair]] = Map()
-  var exchanges:          Map[String, ActorRef] = Map()
+  var exchanges:          Map[String, ActorRef[Exchange.Message]] = Map()
   // @formatter:on
 
   val AllExchanges: Map[String, ExchangeInitStuff] = Map(
     "binance" -> ExchangeInitStuff(
-      BinancePublicDataInquirer.props,
-      BinancePublicDataChannel.props,
-      BinanceAccountDataChannel.props
+      BinancePublicDataInquirer,
+      BinancePublicDataChannel,
+      BinanceAccountDataChannel
     ),
     "bitfinex" -> ExchangeInitStuff(
-      BitfinexPublicDataInquirer.props,
-      BitfinexPublicDataChannel.props,
-      BitfinexAccountDataChannel.props
+      BitfinexPublicDataInquirer,
+      BitfinexPublicDataChannel,
+      BitfinexAccountDataChannel
     ),
     "coinbase" -> ExchangeInitStuff(
-      CoinbasePublicDataInquirer.props,
-      CoinbasePublicDataChannel.props,
-      CoinbaseAccountDataChannel.props
+      CoinbasePublicDataInquirer,
+      CoinbasePublicDataChannel,
+      CoinbaseAccountDataChannel
     )
   )
-
-  def queryAllTradePairs(exchange: String): Set[TradePair] = {
-    implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
-    Await.result((exchanges(exchange) ? GetAllTradePairs()).mapTo[Set[TradePair]], timeout.duration.plus(500.millis))
-  }
-
-  def queryAllTradePairs(): Unit = {
-    for (exchange <- exchanges.keys) {
-      allTradePairs = allTradePairs + (exchange -> queryAllTradePairs(exchange))
-    }
-  }
 
   // we want to keep only trade pairs
   // - [1] which are NOT connected to Fiat money
@@ -92,26 +84,59 @@ class TradeRoomInitCoordinator(val config: Config,
         ))
 
     for (exchange <- exchanges.keySet) {
-      log.info(s"[$exchange] unusable trade pairs: ${(allTradePairs(exchange) -- usableTradePairs(exchange)).toSeq.sortBy(_.toString)}")
+      context.log.info(s"[$exchange] unusable trade pairs: ${(allTradePairs(exchange) -- usableTradePairs(exchange)).toSeq.sortBy(_.toString)}")
     }
   }
 
-  def pushUsableTradePairs(): Unit = {
-    implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
-    exchanges.foreach {
-      case (exchange, actor) => Await.ready(actor ? SetUsableTradePairs(usableTradePairs(exchange)), timeout.duration.plus(500.millis))
-    }
-  }
 
   def startExchange(exchangeName: String, exchangeInit: ExchangeInitStuff): Unit = {
     exchanges = exchanges +
-      (exchangeName -> context.actorOf(
-        Exchange.props(
+      (exchangeName -> context.spawn(
+        Exchange(
           exchangeName,
           config,
           config.exchanges(exchangeName),
           exchangeInit
         ), "Exchange-" + exchangeName))
+  }
+
+
+  def initialized(): Behavior[Reply] = {
+    context.log.debug("TradeRoom initialized")
+    val tradeRoom = context.spawn(TradeRoom(config, exchanges, usableTradePairs), "TradeRoom")
+    parent ! UserRootGuardian.TradeRoomInitialized(tradeRoom)
+    context.watch(tradeRoom)
+    Behaviors.empty
+  }
+
+  def sendStartStreaming(): Behavior[Reply] = {
+    var exchangesStreamingPending: Set[String] = exchanges.keySet
+
+    exchanges.values.foreach { exchange =>
+      exchange ! StartStreaming(context.self)
+    }
+
+    Behaviors.receiveMessage[Reply] {
+      case StreamingStarted(exchange) =>
+        exchangesStreamingPending -= exchange
+        context.log.debug(s"streaming started on $exchange. Still waiting for $exchangesStreamingPending")
+        if (exchangesStreamingPending.nonEmpty) Behaviors.same
+        else initialized()
+    }
+  }
+
+  def pushUsableTradePairs(): Behavior[Reply] = {
+    exchanges.foreach {
+      case (exchange, actor) => actor ! SetUsableTradePairs(usableTradePairs(exchange), context.self)
+    }
+    var exchangesReplied: Set[String] = Set()
+
+    Behaviors.receiveMessage[Reply] {
+      case UsableTradePairsSet(exchange) =>
+        exchangesReplied += exchange
+        if (exchangesReplied != exchanges.keySet) Behaviors.same
+        else sendStartStreaming()
+    }
   }
 
   def startExchanges(): Unit = {
@@ -120,49 +145,45 @@ class TradeRoomInitCoordinator(val config: Config,
     }
   }
 
-  var exchangesStreamingPending: Set[String] = _
-
-  def sendStartStreaming(): Unit = {
-    exchangesStreamingPending = exchanges.keySet
-    exchanges.values.foreach { exchange =>
-      exchange ! StartStreaming()
+  override def onMessage(msg: Reply): Behavior[Reply] = {
+    msg match {
+      case AllTradePairs(exchange, pairs) =>
+        allTradePairs = allTradePairs + (exchange -> pairs)
+        if (allTradePairs.keySet != exchanges.keySet) {
+          Behaviors.same
+        } else {
+          determineUsableTradepairs()
+          pushUsableTradePairs()
+        }
     }
   }
 
-  def onInitialized(): Unit = {
-    log.debug("TradeRoom initialized")
-    val tradeRoom = context.actorOf(TradeRoom.props(config, exchanges, usableTradePairs), "TradeRoom")
-    parent ! InitializedTradeRoom(tradeRoom)
-    context.watch(tradeRoom)
-  }
-
-  def onStreamingStarted(exchange: String): Unit = {
-    exchangesStreamingPending = exchangesStreamingPending - exchange
-    log.debug(s"streaming started on $exchange. Still waiting for $exchangesStreamingPending")
-    if (exchangesStreamingPending.isEmpty) {
-      onInitialized()
-    }
-  }
-
-  override def preStart(): Unit = {
-    startExchanges() // parallel
-    queryAllTradePairs()
-    determineUsableTradepairs()
-    pushUsableTradePairs()
-    sendStartStreaming()
-  }
-
-  override def receive: Receive = {
-    // @formatter:off
-    case Exchange.StreamingStarted(exchange) => onStreamingStarted(exchange)
-    case akka.actor.Status.Failure(cause)    => log.error(cause, "Failure received")
-    case msg                                 => log.error(s"unexpected message: $msg")
-    // @formatter:on
-  }
-
-  override val supervisorStrategy: AllForOneStrategy = {
-    AllForOneStrategy() {
-      case _: Exception => Escalate
-    }
-  }
+  startExchanges() // parallel
+  exchanges.keys.foreach(exchange =>
+    exchanges(exchange) ! GetAllTradePairs(context.self)
+  )
 }
+
+//  override def preStart(): Unit = {
+//    startExchanges() // parallel
+//    queryAllTradePairs()
+//    determineUsableTradepairs()
+//    pushUsableTradePairs()
+//    sendStartStreaming()
+//  }
+//
+//  override def receive: Receive = {
+//    // @formatter:off
+//
+//    case Exchange.StreamingStarted(exchange) => onStreamingStarted(exchange)
+//    case akka.actor.Status.Failure(cause)    => log.error(cause, "Failure received")
+//    case msg                                 => log.error(s"unexpected message: $msg")
+//    // @formatter:on
+//  }
+
+
+// TODO
+//  override val supervisorStrategy: AllForOneStrategy = {
+//    AllForOneStrategy() {
+//      case _: Exception => Escalate
+//    }

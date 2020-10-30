@@ -1,5 +1,6 @@
 package org.purevalue.arbitrage.adapter.binance
 
+import akka.actor.typed.ActorRef
 import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer._
@@ -66,7 +67,9 @@ private[binance] case class BinanceTradePair(baseAsset: Asset,
 }
 
 object BinancePublicDataInquirer {
-  case class GetBinanceTradePairs()
+
+  sealed trait Command
+  case class GetBinanceTradePairs(replyTo: ActorRef[_]) extends Command
 
   def toBid(e: Seq[String]): Bid = {
     if (e.length != 2) throw new IllegalArgumentException(e.toString())

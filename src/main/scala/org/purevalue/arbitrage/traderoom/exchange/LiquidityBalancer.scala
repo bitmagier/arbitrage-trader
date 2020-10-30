@@ -2,9 +2,7 @@ package org.purevalue.arbitrage.traderoom.exchange
 
 import java.util.UUID
 
-import akka.event.Logging
 import org.purevalue.arbitrage.Main.actorSystem
-import org.purevalue.arbitrage.traderoom.TradeRoom.NewLiquidityTransformationOrder
 import org.purevalue.arbitrage.traderoom.TradeSide.{Buy, Sell}
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer.{LiquidityTransfer, WorkingContext}
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLock, UniqueDemand}
@@ -80,10 +78,9 @@ class LiquidityBalancer(val config: Config,
     (amount / bucketSize(asset)).floor.toInt
   }
 
-  def createOrders(transfers: Iterable[LiquidityTransfer]): Iterable[NewLiquidityTransformationOrder] = {
-    transfers.map(e => NewLiquidityTransformationOrder(
+  def createOrders(transfers: Iterable[LiquidityTransfer]): Iterable[OrderRequest] = {
+    transfers.map(e =>
       OrderRequest(UUID.randomUUID(), None, exchangeConfig.name, e.pair, e.side, exchangeConfig.feeRate, e.quantity, e.limit))
-    )
   }
 
   // (demand - supply) & greater than zero
@@ -339,7 +336,7 @@ class LiquidityBalancer(val config: Config,
       }
   }
 
-  def calculateOrders(): Iterable[NewLiquidityTransformationOrder] = {
+  def calculateOrders(): Iterable[OrderRequest] = {
     try {
       // satisfy noticed liquidity demand
       val unsatisfiedDemand: List[(Asset, Int)] = calcUnsatisfiedDemand.toList.sortBy(_._2)

@@ -1,22 +1,21 @@
 package org.purevalue.arbitrage.util
 
-import akka.actor.ActorSystem
-import akka.event.Logging
+import akka.actor.typed.ActorSystem
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model._
 import akka.stream.Materializer
-import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.{GlobalConfig, Main}
+import org.slf4j.LoggerFactory
 import spray.json.{JsValue, JsonParser, JsonReader}
 
 import scala.concurrent.{ExecutionContext, Future}
 
 object HttpUtil {
-  private val log = Logging(actorSystem.eventStream, getClass)
+  private val log = LoggerFactory.getLogger(getClass)
   private val globalConfig: GlobalConfig = Main.config().global
 
   def httpGet(uri: String)
-             (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[HttpResponse] = {
+             (implicit system: ActorSystem[_], fm: Materializer, executor: ExecutionContext): Future[HttpResponse] = {
     Http().singleRequest(
       HttpRequest(
         method = HttpMethods.GET,
@@ -45,11 +44,11 @@ object HttpUtil {
 
 
   def httpGetPureJson(uri: String)
-                     (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[(StatusCode, JsValue)] = {
+                     (implicit system: ActorSystem[_], fm: Materializer, executor: ExecutionContext): Future[(StatusCode, JsValue)] = {
     httpGet(uri)
       .flatMap {
         response: HttpResponse =>
-          if (!response.status.isSuccess()) log.warning(s"$response")
+          if (!response.status.isSuccess()) log.warn(s"$response")
           response.entity.toStrict(globalConfig.httpTimeout)
             .map { r =>
               r.contentType match {
@@ -62,7 +61,11 @@ object HttpUtil {
 
 
   def httpGetJson[T, E](uri: String)
-                       (implicit evidence1: JsonReader[T], evidence2: JsonReader[E], system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[Either[T, E]] = {
+                       (implicit evidence1: JsonReader[T],
+                        evidence2: JsonReader[E],
+                        system: ActorSystem[_],
+                        fm: Materializer,
+                        executor: ExecutionContext): Future[Either[T, E]] = {
     httpGetPureJson(uri).map {
       case (statusCode, j) =>
         try {

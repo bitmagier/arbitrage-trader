@@ -3,16 +3,14 @@ package org.purevalue.arbitrage.traderoom.exchange
 import java.time.Instant
 import java.util.UUID
 
-import akka.actor.{Actor, ActorLogging, ActorRef, PoisonPill, Props}
-import akka.pattern.{ask, pipe}
-import akka.util.Timeout
+import akka.actor.typed.scaladsl.{AbstractBehavior, ActorContext, Behaviors}
+import akka.actor.typed.{ActorRef, Behavior}
 import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.traderoom._
-import org.purevalue.arbitrage.traderoom.exchange.Exchange.GetWallet
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager._
 import org.purevalue.arbitrage.{Config, ExchangeConfig}
 
-import scala.concurrent.{ExecutionContextExecutor, Future}
+import scala.concurrent.ExecutionContextExecutor
 
 /*
 - The LiquidityManager is responsible for providing the Assets which are requested by Traders.
@@ -48,6 +46,12 @@ import scala.concurrent.{ExecutionContextExecutor, Future}
 */
 
 object LiquidityManager {
+  def apply(config: Config,
+            exchangeConfig: ExchangeConfig):
+  Behavior[Command] =
+    Behaviors.setup(context => new LiquidityManager(context, config, exchangeConfig))
+
+  sealed trait Command extends Exchange.Message
   /**
    * UniqueDemand
    * A unique demand is characterized by an asset name and a trade-pattern.
@@ -63,10 +67,9 @@ object LiquidityManager {
     def uk: String = tradePattern + asset.officialSymbol
   }
 
+  case class GetState(replyTo: ActorRef[State]) extends Command
   case class State(liquidityDemand: Map[String, UniqueDemand],
                    liquidityLocks: Map[UUID, LiquidityLock])
-
-  case class GetState()
 
   case class LiquidityLockRequest(id: UUID,
                                   createTime: Instant,
@@ -74,29 +77,23 @@ object LiquidityManager {
                                   tradePattern: String,
                                   coins: Seq[CryptoValue],
                                   isForLiquidityTx: Boolean,
-                                  dontUseTheseReserveAssets: Set[Asset])
+                                  dontUseTheseReserveAssets: Set[Asset],
+                                  wallet: Wallet,
+                                  replyTo: ActorRef[Option[LiquidityLock]]) extends Command
   case class LiquidityLock(exchange: String,
                            liquidityRequestId: UUID,
                            coins: Seq[CryptoValue],
                            createTime: Instant)
-  case class LiquidityLockClearance(liquidityRequestId: UUID)
+  case class LiquidityLockClearance(liquidityRequestId: UUID) extends Command
 
   class OrderBookTooFlatException(val tradePair: TradePair, val side: TradeSide) extends Exception
-
-  def props(config: Config,
-            exchangeConfig: ExchangeConfig,
-            tradePairs: Set[TradePair],
-            tradeRoom: ActorRef,
-            exchange: ActorRef
-           ): Props =
-    Props(new LiquidityManager(config, exchangeConfig, tradePairs, tradeRoom, exchange))
 }
-class LiquidityManager(val config: Config,
-                       val exchangeConfig: ExchangeConfig,
-                       val tradePairs: Set[TradePair],
-                       val tradeRoom: ActorRef,
-                       val exchange: ActorRef
-                      ) extends Actor with ActorLogging {
+class LiquidityManager(context: ActorContext[Command],
+                       config: Config,
+                       exchangeConfig: ExchangeConfig
+                      ) extends AbstractBehavior[Command](context) {
+
+  import LiquidityManager._
 
   case class LiquidityDemand(exchange: String,
                              tradePattern: String,
@@ -110,7 +107,7 @@ class LiquidityManager(val config: Config,
       LiquidityDemand(r.exchange, r.tradePattern, r.coins, r.dontUseTheseReserveAssets)
   }
 
-  private implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
+  private implicit val executionContext: ExecutionContextExecutor = actorSystem.executionContext
 
   private var shutdownInitiated: Boolean = false
 
@@ -119,7 +116,7 @@ class LiquidityManager(val config: Config,
   private var liquidityLocks: Map[UUID, LiquidityLock] = Map()
 
   def noticeUniqueDemand(d: UniqueDemand): Unit = {
-    if (log.isDebugEnabled) log.debug(s"noticed $d")
+    if (context.log.isDebugEnabled) context.log.debug(s"noticed $d")
     liquidityDemand = liquidityDemand + (d.uk -> d)
   }
 
@@ -131,12 +128,12 @@ class LiquidityManager(val config: Config,
 
   def clearLock(id: UUID): Unit = {
     liquidityLocks = liquidityLocks - id
-    if (log.isDebugEnabled) log.debug(s"Liquidity lock with ID $id cleared")
+    if (context.log.isDebugEnabled) context.log.debug(s"Liquidity lock with ID $id cleared")
   }
 
   def addLock(l: LiquidityLock): Unit = {
     liquidityLocks = liquidityLocks + (l.liquidityRequestId -> l)
-    if (log.isDebugEnabled) log.debug(s"Liquidity locked: $l")
+    if (context.log.isDebugEnabled) context.log.debug(s"Liquidity locked: $l")
   }
 
   def clearObsoleteDemands(): Unit = {
@@ -149,21 +146,17 @@ class LiquidityManager(val config: Config,
     liquidityLocks = liquidityLocks.filter(_._2.createTime.isAfter(limit))
   }
 
-  def determineUnlockedBalance: Future[Map[Asset, Double]] = {
+  def determineUnlockedBalance(wallet: Wallet): Map[Asset, Double] = {
     val lockedLiquidity: Map[Asset, Double] = liquidityLocks
       .values
       .flatMap(_.coins) // all locked values
       .groupBy(_.asset) // group by asset
       .map(e => (e._1, e._2.map(_.amount).sum)) // sum up values of same asset
 
-    implicit val timeout: Timeout = config.global.internalCommunicationTimeout
-    (exchange ? GetWallet()).mapTo[Wallet].map { wallet =>
-      wallet.balance
-        .filterNot(_._1.isFiat)
-        .filterNot(e => exchangeConfig.doNotTouchTheseAssets.contains(e._1))
-        .map(e => (e._1, Math.max(0.0, e._2.amountAvailable - lockedLiquidity.getOrElse(e._1, 0.0)))
-        )
-    }
+    wallet.balance
+      .filterNot(_._1.isFiat)
+      .filterNot(e => exchangeConfig.doNotTouchTheseAssets.contains(e._1))
+      .map(e => (e._1, Math.max(0.0, e._2.amountAvailable - lockedLiquidity.getOrElse(e._1, 0.0))))
   }
 
 
@@ -174,23 +167,22 @@ class LiquidityManager(val config: Config,
   }
 
   // Accept, if free (not locked) coins are available.
-  def lockLiquidity(r: LiquidityLockRequest): Future[Option[LiquidityLock]] = {
+  def lockLiquidity(r: LiquidityLockRequest): Option[LiquidityLock] = {
     if (r.coins.exists(e => exchangeConfig.doNotTouchTheseAssets.contains(e.asset))) throw new IllegalArgumentException
     if (r.coins.exists(_.asset.isFiat)) throw new IllegalArgumentException
 
-    determineUnlockedBalance.map { unlockedBalances =>
-      val sumCoinsPerAsset = r.coins // coins should contain already only values of different assets, but we need to be 100% sure, that we do not work with multiple requests for the same coin
-        .groupBy(_.asset)
-        .map(x => CryptoValue(x._1, x._2.map(_.amount).sum))
+    val unlockedBalances = determineUnlockedBalance(r.wallet)
+    val sumCoinsPerAsset = r.coins // coins should contain already only values of different assets, but we need to be 100% sure, that we do not work with multiple requests for the same coin
+      .groupBy(_.asset)
+      .map(x => CryptoValue(x._1, x._2.map(_.amount).sum))
 
-      if (sumCoinsPerAsset.forall(c => unlockedBalances.getOrElse(c.asset, 0.0) >= c.amount)) {
-        val lock = LiquidityLock(r.exchange, r.id, r.coins, Instant.now)
-        addLock(lock)
-        Some(lock)
-      } else {
-        log.debug(s"refused liquidity-lock request on ${r.exchange} for ${r.coins.mkString(" ,")} (don't use: ${r.dontUseTheseReserveAssets})")
-        None
-      }
+    if (sumCoinsPerAsset.forall(c => unlockedBalances.getOrElse(c.asset, 0.0) >= c.amount)) {
+      val lock = LiquidityLock(r.exchange, r.id, r.coins, Instant.now)
+      addLock(lock)
+      Some(lock)
+    } else {
+      context.log.debug(s"refused liquidity-lock request on ${r.exchange} for ${r.coins.mkString(" ,")} (don't use: ${r.dontUseTheseReserveAssets})")
+      None
     }
   }
 
@@ -199,30 +191,26 @@ class LiquidityManager(val config: Config,
     if (r.coins.exists(c => exchangeConfig.doNotTouchTheseAssets.contains(c.asset))) throw new IllegalArgumentException("liquidity request for a DO-NOT-TOUCH asset")
   }
 
-  def liquidityLockRequest(r: LiquidityLockRequest): Unit = {
-    if (shutdownInitiated) sender ! None
+  def liquidityLockRequest(r: LiquidityLockRequest): Option[LiquidityLock] = {
+    if (shutdownInitiated) None
     else {
       houseKeeping()
       checkValidity(r)
       if (!r.isForLiquidityTx) {
         noticeDemand(LiquidityDemand(r)) // notice/refresh the demand, when 'someone' wants to lock liquidity for trading
       }
-      lockLiquidity(r).pipeTo(sender())
+      lockLiquidity(r)
     }
   }
 
-  def stop(): Unit = {
-    shutdownInitiated = true
-    self ! PoisonPill
-  }
-
-  override def receive: Receive = {
-    // @formatter:off
-    case r: LiquidityLockRequest      => liquidityLockRequest(r)
-    case LiquidityLockClearance(id)   => clearLock(id)
-    case GetState()                   => houseKeeping(); sender() ! State(liquidityDemand, liquidityLocks)
-    case TradeRoom.Stop()             => stop()
-    // @formatter:off
+  override def onMessage(message: Command): Behavior[Command] = {
+    message match {
+      // @formatter:off
+      case r: LiquidityLockRequest      => r.replyTo ! liquidityLockRequest(r); this
+      case LiquidityLockClearance(id)   => clearLock(id); this
+      case GetState(replyTo)            => houseKeeping(); replyTo ! State(liquidityDemand, liquidityLocks); this
+      // @formatter:off
+    }
   }
 }
 

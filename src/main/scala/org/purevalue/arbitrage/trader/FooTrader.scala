@@ -14,6 +14,9 @@ import scala.concurrent.ExecutionContextExecutor
 
 object FooTrader {
   def props(traderConfig: Config, tradeRoom: ActorRef): Props = Props(new FooTrader(traderConfig, tradeRoom))
+
+  sealed trait Command
+  case class SearchRun(tc: TradeContext) extends Command
 }
 
 /**
@@ -188,7 +191,7 @@ class FooTrader(traderConfig: Config, tradeRoom: ActorRef) extends Actor with Ac
   }
 
   override def receive: Receive = {
-    case tc: TradeContext =>
+    case SearchRun(tc) =>
       lifeSign()
       numSearchesDiff += 1
       numSearchesTotal += 1

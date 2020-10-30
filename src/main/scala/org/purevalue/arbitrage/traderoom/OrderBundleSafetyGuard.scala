@@ -2,7 +2,6 @@ package org.purevalue.arbitrage.traderoom
 
 import java.time.{Duration, Instant}
 
-import akka.event.Logging
 import org.purevalue.arbitrage.Config
 import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.OrderBookTooFlatException
@@ -212,8 +211,7 @@ class OrderBundleSafetyGuard(val config: Config) {
     } else if (!bundle.orderRequests.forall(dataUpToDate)) {
       unsafe(TickerOutdated)
     } else if (bundle.bill.sumUSDAtCalcTime >= config.tradeRoom.orderBundleSafetyGuard.maximumReasonableWinPerOrderBundleUSD) {
-      log.warning(s"${Emoji.Disagree}  Got OrderBundle with unbelievable high estimated win of ${formatDecimal(bundle.bill.sumUSDAtCalcTime)} USD. I will rather not execute that one - seem to be a bug!")
-      log.debug(s"${Emoji.Disagree}  $bundle")
+      log.warning(s"${Emoji.Disagree}  Got OrderBundle with unbelievable high estimated win of ${formatDecimal(bundle.bill.sumUSDAtCalcTime)} USD. I will rather not execute that one - seem to be a bug!\n$bundle")
       unsafe(TooFantasticWin)
     } else if (!bundle.orderRequests.forall(orderLimitCloseToTicker))
       unsafe(OrderLimitFarAwayFromTicker)

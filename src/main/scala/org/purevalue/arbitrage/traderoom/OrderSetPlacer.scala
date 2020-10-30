@@ -2,16 +2,19 @@ package org.purevalue.arbitrage.traderoom
 
 import akka.actor.{Actor, ActorLogging, ActorRef, PoisonPill, Props, Status}
 import org.purevalue.arbitrage.traderoom.OrderSetPlacer.NewOrderSet
-import org.purevalue.arbitrage.traderoom.exchange.Exchange.{CancelOrder, CancelOrderResult, NewLimitOrder, NewOrderAck}
+import org.purevalue.arbitrage.traderoom.exchange.Exchange.{CancelOrderResult, NewLimitOrder, NewOrderAck}
 
 /**
  * Places all orders in parallel.
  * If one order placement fails, it tries to immediately cancel the successful ones
  */
 object OrderSetPlacer {
-  case class NewOrderSet(orders: Seq[NewLimitOrder])
+
 
   def props(exchanges: Map[String, ActorRef]): Props = Props(new OrderSetPlacer(exchanges))
+
+  sealed trait Message
+  case class NewOrderSet(orders: Seq[NewLimitOrder])
 }
 case class OrderSetPlacer(exchanges: Map[String, ActorRef]) extends Actor with ActorLogging {
   private var numRequests: Int = _

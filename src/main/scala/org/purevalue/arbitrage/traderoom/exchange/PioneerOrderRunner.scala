@@ -4,16 +4,17 @@ import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
 
-import akka.actor.{Actor, ActorLogging, ActorRef, ActorSystem, Cancellable, PoisonPill, Props}
-import akka.pattern.ask
+import akka.actor.typed.scaladsl.AskPattern._
+import akka.actor.typed.scaladsl.{AbstractBehavior, ActorContext, Behaviors, TimerScheduler}
+import akka.actor.typed.{ActorRef, ActorSystem, Behavior}
 import akka.util.Timeout
 import org.purevalue.arbitrage.traderoom.TradeRoom._
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
-import org.purevalue.arbitrage.traderoom.exchange.PioneerOrderRunner.{PioneerOrder, PioneerOrderFailed, PioneerOrderSucceeded, Watch}
+import org.purevalue.arbitrage.traderoom.exchange.PioneerOrderRunner.Message
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.util.{InitSequence, InitStep, Util, WaitingFor}
-import org.purevalue.arbitrage.{Config, ExchangeConfig, Main}
+import org.purevalue.arbitrage.{Config, ExchangeConfig, Main, UserRootGuardian}
 
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor, Future}
@@ -22,24 +23,32 @@ import scala.util.{Failure, Success}
 
 // run some validated pioneer orders before the exchange gets available for further orders
 object PioneerOrderRunner {
-  case class Watch()
-  case class PioneerOrderSucceeded()
-  case class PioneerOrderFailed(exception: Throwable)
+  def apply(config: Config,
+            exchangeConfig: ExchangeConfig,
+            exchange: ActorRef[Exchange.Message]):
+  Behavior[Message] = {
+    Behaviors.withTimers(timers =>
+      Behaviors.setup(context => new PioneerOrderRunner(context, timers, config, exchangeConfig, exchange)))
+  }
+
+  sealed trait Message
+  case class Watch() extends Message
+  case class Finished() extends Message
+  case class PriceEstimate(price:Double) extends Message
+  case class LiquidCryptoValues(values: Seq[CryptoValue]) extends Message
+}
+class PioneerOrderRunner(context: ActorContext[Message],
+                         timers: TimerScheduler[Message],
+                         config: Config,
+                         exchangeConfig: ExchangeConfig,
+                         exchange: ActorRef[Exchange.Message]) extends AbstractBehavior[Message](context) {
+  import PioneerOrderRunner._
 
   case class PioneerOrder(request: OrderRequest, ref: OrderRef)
 
-  def props(config: Config,
-            exchangeConfig: ExchangeConfig,
-            exchange: ActorRef): Props =
-    Props(new PioneerOrderRunner(config, exchangeConfig, exchange))
-}
-class PioneerOrderRunner(config: Config,
-                         exchangeConfig: ExchangeConfig,
-                         exchange: ActorRef) extends Actor with ActorLogging {
-  implicit val actorSystem: ActorSystem = Main.actorSystem
-  implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
+  private implicit val actorSystem: ActorSystem[UserRootGuardian.Reply] = Main.actorSystem
+  private implicit val executionContext: ExecutionContextExecutor = actorSystem.executionContext
 
-  private val watchSchedule: Cancellable = actorSystem.scheduler.scheduleWithFixedDelay(0.seconds, 200.millis, self, Watch())
   private val deadline: Instant = Instant.now.plusMillis(config.global.internalCommunicationTimeoutDuringInit.duration.toMillis * 3)
 
   private val exchangeName = exchangeConfig.name
@@ -67,9 +76,9 @@ class PioneerOrderRunner(config: Config,
   def getPriceEstimate(pair: TradePair): Double = {
     implicit val timeout: Timeout = config.global.internalCommunicationTimeout
     Await.result(
-      (exchange ? GetPriceEstimate(pair)).mapTo[Double],
+      exchange.ask(ref => Exchange.GetPriceEstimate(pair, ref)).mapTo[PriceEstimate],
       timeout.duration.plus(500.millis)
-    )
+    ).price
   }
 
   def diffMoreThan(a: Double, b: Double, maxDiffRate: Double): Boolean = ((a - b).abs / a.abs) > maxDiffRate
@@ -157,18 +166,17 @@ class PioneerOrderRunner(config: Config,
     }
 
     implicit val timeout: Timeout = config.global.internalCommunicationTimeout
-    (exchange ? GetActiveOrders()).mapTo[Map[OrderRef, Order]].foreach { activeOrders =>
-
+    exchange.ask(ref => Exchange.GetActiveOrders(ref)).mapTo[Map[OrderRef, Order]].foreach { activeOrders =>
       try {
         activeOrders.get(o.ref) match {
           case Some(order) if order.orderStatus.isFinal =>
             validationMethod(o.request, order)
-            log.info(s"[$exchangeName]  pioneer order ${o.request.shortDesc} successfully validated")
+            context.log.info(s"[$exchangeName]  pioneer order ${o.request.shortDesc} successfully validated")
             arrival.arrived()
             exchange ! RemoveActiveOrder(o.ref)
 
           case Some(order) =>
-            log.debug(s"[$exchangeName] pioneer order in progress: $order")
+            context.log.debug(s"[$exchangeName] pioneer order in progress: $order")
             validationMethod(o.request, order)
 
           case None => // nop
@@ -176,18 +184,20 @@ class PioneerOrderRunner(config: Config,
       } catch {
         case e:Exception =>
           exchange ! PioneerOrderFailed(e)
-          self ! PoisonPill
+          context.self ! Finished()
       }
     }
   }
 
   def walletLiquidCryptoValues(): Future[Iterable[CryptoValue]] = {
     implicit val timeout: Timeout = config.global.internalCommunicationTimeout
-    (exchange ? GetWalletLiquidCrypto()).mapTo[Iterable[CryptoValue]]
+    exchange.ask(ref => GetWalletLiquidCrypto(ref))
+      .mapTo[LiquidCryptoValues]
+      .map(_.values)
   }
 
   def convert(value: CryptoValue, targetAsset: Asset)(implicit timeout: Timeout): Future[CryptoValue] = {
-    (exchange ? ConvertValue(value, targetAsset)).mapTo[CryptoValue]
+    exchange.ask(ref => Exchange.ConvertValue(value, targetAsset, ref)).mapTo[CryptoValue]
   }
 
   def watchBalance(expectedBalance: Iterable[CryptoValue], arrival: WaitingFor): Unit = {
@@ -208,10 +218,10 @@ class PioneerOrderRunner(config: Config,
           .map(e => convert(e, exchangeConfig.usdEquivalentCoin))
       ).foreach { balanceDiffInUSD =>
         if (!balanceDiffInUSD.exists(_.amount > SignificantBalanceDeviationInUSD)) {
-          log.debug(s"[$exchangeName] expected wallet balance arrived")
+          context.log.debug(s"[$exchangeName] expected wallet balance arrived")
           arrival.arrived()
         } else {
-          log.debug(s"diff between expected minus actual balance is $balanceDiffInUSD")
+          context.log.debug(s"diff between expected minus actual balance is $balanceDiffInUSD")
         }
       }
     }
@@ -231,13 +241,13 @@ class PioneerOrderRunner(config: Config,
       else if (pioneerOrder3.get().isDefined && !order3Validated.isArrived)
         watchOrder(pioneerOrder3.get().get, (r, o) => validateCanceledPioneerOrder(r, o), order3Validated)
       else
-        log.debug(s"nothing to watch: orders: [\n${pioneerOrder1.get()}, \n${pioneerOrder2.get()}, \n${pioneerOrder3.get()}] \n" +
+        context.log.debug(s"nothing to watch: orders: [\n${pioneerOrder1.get()}, \n${pioneerOrder2.get()}, \n${pioneerOrder3.get()}] \n" +
           s"validated: [${order1Validated.isArrived}, ${order2Validated.isArrived}, ${order3Validated.isArrived}]")
     } catch {
       case e: Throwable =>
-        log.debug(s"[$exchangeName] PioneerOrderRunner failed", e)
+        context.log.debug(s"[$exchangeName] PioneerOrderRunner failed", e)
         exchange ! PioneerOrderFailed(e)
-        stop()
+        context.self ! Finished()
     }
   }
 
@@ -245,7 +255,7 @@ class PioneerOrderRunner(config: Config,
   def submitPioneerOrder(pair: TradePair, side: TradeSide, amountBaseAsset: Double, unrealisticGoodlimit: Boolean): Future[PioneerOrder] = {
     implicit val timeout: Timeout = config.global.internalCommunicationTimeout
 
-    (exchange ? DetermineRealisticLimit(pair, side, amountBaseAsset))
+    exchange.ask(ref => Exchange.DetermineRealisticLimit(pair, side, amountBaseAsset, ref))
       .mapTo[Double]
       .flatMap {
         realisticLimit =>
@@ -260,20 +270,20 @@ class PioneerOrderRunner(config: Config,
 
           val orderRequest = OrderRequest(UUID.randomUUID(), None, exchangeName, pair, side, exchangeConfig.feeRate, amountBaseAsset, limit)
 
-          log.debug(s"[$exchangeName] pioneer order: ${orderRequest.shortDesc}")
+          context.log.debug(s"[$exchangeName] pioneer order: ${orderRequest.shortDesc}")
 
-          (exchange ? NewLimitOrder(orderRequest)).mapTo[NewOrderAck]
+          exchange.ask(ref => Exchange.NewLimitOrder(orderRequest, ref)).mapTo[NewOrderAck]
             .map(_.toOrderRef)
             .map(PioneerOrder(orderRequest, _))
       }
   }
 
   def cancelPioneerOrder(o: PioneerOrder): Unit = {
-    log.debug(s"[$exchangeName] performing intended cancel of ${o.request.shortDesc}")
+    context.log.debug(s"[$exchangeName] performing intended cancel of ${o.request.shortDesc}")
     implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
 
     val cancelOrderResult = Await.result(
-      (exchange ? CancelOrder(o.ref)).mapTo[CancelOrderResult],
+      exchange.ask(ref => CancelOrder(o.ref, ref)).mapTo[CancelOrderResult],
       timeout.duration.plus(1.second))
 
     if (!cancelOrderResult.success) {
@@ -350,11 +360,11 @@ class PioneerOrderRunner(config: Config,
     cancelPioneerOrder(pioneerOrder3.get().get)
   }
 
-  override def preStart(): Unit = {
-    log.info(s"running pioneer order for $exchangeName")
+  def setup(): Unit = {
+    context.log.info(s"running pioneer order for $exchangeName")
 
     val maxWaitTime = config.global.internalCommunicationTimeoutDuringInit.duration
-    val InitSequence = new InitSequence(log, s"$exchangeName  PioneerOrderRunner",
+    val InitSequence = new InitSequence(context.log, s"$exchangeName  PioneerOrderRunner",
       List(
         InitStep(s"Submit pioneer order 1 (buy ${secondaryReserveAsset.officialSymbol} from ${primaryReserveAsset.officialSymbol})", () => submitFirstPioneerOrder()),
         InitStep("Waiting until Pioneer order 1 is validated", () => order1Validated.await(maxWaitTime)),
@@ -368,26 +378,26 @@ class PioneerOrderRunner(config: Config,
 
     Future(InitSequence.run()).onComplete {
       case Success(_) =>
-        log.info(s"[$exchangeName] PioneerOrderRunner successful completed")
+        context.log.info(s"[$exchangeName] PioneerOrderRunner successful completed")
         exchange ! PioneerOrderSucceeded()
-        stop()
+        context.self ! Finished()
+
       case Failure(e) =>
-        log.error(e, s"[$exchangeName] PioneerOrderRunner failed")
+        context.log.error(s"[$exchangeName] PioneerOrderRunner failed", e)
         exchange ! PioneerOrderFailed(e)
-        stop()
+        context.self ! Finished()
     }
   }
 
-  def stop(): Unit = {
-    watchSchedule.cancel()
-    self ! PoisonPill
+  override def onMessage(message: Message): Behavior[Message] = {
+    Behaviors.receiveMessage[Message] {
+      // @formatter:off
+      case Watch()    => watchNextEvent(); this
+      case Finished() => Behaviors.stopped
+      // @formatter:on
+    }
   }
 
-  override def receive: Receive = {
-    case Watch() => watchNextEvent()
-    case Failure(e) => // TODO
-      log.error(e, s"PioneerOrderRunner failed")
-      exchange ! PioneerOrderFailed(e)
-      stop()
-  }
+  timers.startTimerWithFixedDelay(Watch(), 200.millis)
+  setup()
 }

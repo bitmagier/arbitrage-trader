@@ -2,15 +2,16 @@ package org.purevalue.arbitrage.traderoom
 
 import java.time.{Duration, Instant}
 
-import akka.actor.{ActorRef, Props}
+import akka.actor.typed.{ActorRef, Behavior}
+import org.purevalue.arbitrage.adapter.{AccountDataChannel, PublicDataChannel, PublicDataInquirer}
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.OrderBookTooFlatException
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.{Config, ExchangeConfig, GlobalConfig}
 
 package object exchange {
-  type ExchangePublicDataInquirerInit = Function2[GlobalConfig, ExchangeConfig, Props]
-  type ExchangePublicDataChannelInit = Function5[GlobalConfig, ExchangeConfig, Set[TradePair], ActorRef, ActorRef, Props]
-  type ExchangeAccountDataChannelInit = Function4[Config, ExchangeConfig, ActorRef, ActorRef, Props]
+  type ExchangePublicDataInquirerInit = Function2[GlobalConfig, ExchangeConfig, Behavior[PublicDataInquirer.Command]]
+  type ExchangePublicDataChannelInit = Function5[GlobalConfig, ExchangeConfig, Set[TradePair], ActorRef[Exchange.Message], ActorRef[PublicDataInquirer.Command], Behavior[PublicDataChannel.Command]]
+  type ExchangeAccountDataChannelInit = Function4[Config, ExchangeConfig, ActorRef[Exchange.Message], ActorRef[PublicDataInquirer.Command], Behavior[AccountDataChannel.Command]]
 
   trait ExchangePublicStreamData extends Retryable
 
@@ -143,8 +144,6 @@ package object exchange {
         .foldLeft(CryptoValue(aggregateAsset, 0.0))((a, x) => CryptoValue(a.asset, a.amount + x.amount))
     }
   }
-
-  case class SimulatedAccountData(dataset: ExchangeAccountStreamData)
 
   case class CompleteWalletUpdate(balance: Map[Asset, Balance]) extends ExchangeAccountStreamData
   case class WalletAssetUpdate(balance: Map[Asset, Balance]) extends ExchangeAccountStreamData
