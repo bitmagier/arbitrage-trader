@@ -15,8 +15,8 @@ import org.purevalue.arbitrage.trader.FooTrader.SearchRun
 import org.purevalue.arbitrage.traderoom.OrderSetPlacer.NewOrderSet
 import org.purevalue.arbitrage.traderoom.TradeRoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
-import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLock, LiquidityLockClearance}
-import org.purevalue.arbitrage.traderoom.exchange.{Exchange, LiquidityBalancerStats, OrderBook, Ticker, TickerSnapshot, Wallet}
+import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityLockRequest}
+import org.purevalue.arbitrage.traderoom.exchange.{Exchange, LiquidityBalancerStats, LiquidityManager, OrderBook, Ticker, TickerSnapshot, Wallet}
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.util.{Emoji, WrongAssumption}
 
@@ -50,7 +50,7 @@ object TradeRoom {
   }
 
   sealed trait Message
-  final case class OrderRef(exchange: String, tradePair: TradePair, externalOrderId: String)
+  final case class OrderRef(exchange: String, pair: TradePair, externalOrderId: String)
   final case class OrderBundle(orderRequestBundle: OrderRequestBundle,
                                lockedLiquidity: Seq[LiquidityLock],
                                orderRefs: Seq[OrderRef]) {
@@ -80,7 +80,7 @@ object TradeRoom {
                               wallet: Wallet) extends Message
 
   // communication
-  case class GetReferenceTicker(replyTo:ActorRef[TickerSnapshot]) extends Message
+  case class GetReferenceTicker(replyTo: ActorRef[TickerSnapshot]) extends Message
   case class LogStats() extends Message
   case class HouseKeeping() extends Message
   case class OrderUpdateTrigger(ref: OrderRef, resendCounter: Int = 0) extends Message // status of an order has changed
@@ -88,7 +88,7 @@ object TradeRoom {
   case class PlaceLiquidityTransformationOrder(orderRequest: OrderRequest, replyTo: ActorRef[Option[OrderRef]]) extends Message
   case class GetFinishedLiquidityTxs(replyTo: ActorRef[Set[OrderRef]]) extends Message
   case class TradeRoomJoined(exchange: String) extends Message
-  case class PlaceOrderRequestBundle(bundle:OrderRequestBundle) extends Message
+  case class PlaceOrderRequestBundle(bundle: OrderRequestBundle) extends Message
 }
 
 /**
@@ -103,6 +103,7 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
                 exchanges: Map[String, ActorRef[Exchange.Message]],
                 usableTradePairs: Map[String, Set[TradePair]])
   extends AbstractBehavior[TradeRoom.Message](context) {
+
   import TradeRoom._
 
   private implicit val system: ActorSystem[UserRootGuardian.Reply] = Main.actorSystem
@@ -163,7 +164,7 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
       coins
         .groupBy(_.exchange)
         .map { x =>
-          (exchanges(x._1) ?
+          exchanges(x._1).ask(ref =>
             LiquidityLockRequest(
               UUID.randomUUID(),
               Instant.now(),
@@ -171,8 +172,10 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
               tradePattern,
               x._2.map(c => CryptoValue(c.asset, c.amount)),
               isForLiquidityTx = false,
-              dontUseTheseReserveAssets))
-            .mapTo[Option[LiquidityLock]]
+              dontUseTheseReserveAssets,
+              None,
+              ref
+            ))
         }
     ).map {
       case x if x.forall(_.isDefined) =>
@@ -189,11 +192,10 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
     }
   }
 
-  def placeOrders(orderRequests: List[OrderRequest]): Future[List[OrderRef]] = {
+  def placeOrders(orderRequests: Seq[OrderRequest]): Future[Seq[OrderRef]] = {
     implicit val timeout: Timeout = config.global.httpTimeout.mul(2) // covers parallel order request + possible order cancel operations
 
-    (context.actorOf(OrderSetPlacer.props(exchanges)) ? NewOrderSet(orderRequests.map(o => NewLimitOrder(o))))
-      .mapTo[List[NewOrderAck]]
+    context.spawn(OrderSetPlacer(config.global, exchanges), s"OrderSetPlacer-${UUID.randomUUID()}").ask(ref => NewOrderSet(orderRequests, ref))
       .map(_.map(_.toOrderRef))
   }
 
@@ -202,37 +204,37 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
     if (doNotTouchAssets(request.exchange).intersect(request.pair.involvedAssets).nonEmpty) return Future.failed(new IllegalArgumentException)
 
     // this should not occur - but here is a last guard
-    if (activeLiquidityTx.keys.exists(ref => ref.exchange == request.exchange && ref.tradePair == request.pair)) {
+    if (activeLiquidityTx.keys.exists(ref => ref.exchange == request.exchange && ref.pair == request.pair)) {
       context.log.warn(s"Ignoring liquidity tx because a similar one (same trade pair on same exchange) is still in place: $request")
       return Future.successful(None)
     }
 
+    implicit val timeout: Timeout = config.global.httpTimeout.plus(config.global.internalCommunicationTimeout.duration)
     val tradePattern = s"${request.exchange}-liquidityTx"
-    val liquidityRequest =
-      LiquidityLockRequest(
+    exchanges(request.exchange).ask(ref =>
+      LiquidityManager.LiquidityLockRequest(
         UUID.randomUUID(),
         Instant.now,
         request.exchange,
         tradePattern,
         Seq(request.calcOutgoingLiquidity.cryptoValue),
         isForLiquidityTx = true,
-        Set())
-
-    implicit val timeout: Timeout = config.global.httpTimeout.plus(config.global.internalCommunicationTimeout.duration)
-    (exchanges(request.exchange) ? liquidityRequest).mapTo[Option[LiquidityLock]].flatMap {
-
-      case Some(lock) => (exchanges(request.exchange) ? NewLimitOrder(request)).mapTo[NewOrderAck].map {
-        newOrderAck =>
+        Set(),
+        None,
+        ref
+      )).flatMap {
+      case Some(lock) =>
+        exchanges(request.exchange).ask(ref => NewLimitOrder(request, ref)).map { newOrderAck =>
           val ref: OrderRef = newOrderAck.toOrderRef
           activeLiquidityTx.update(ref, LiquidityTx(request, ref, lock, Instant.now))
           context.log.debug(s"successfully placed liquidity tx order $newOrderAck")
           Some(ref)
-      } recover {
-        case e: Exception =>
-          context.log.error(s"failed to place new liquidity tx $request", e)
-          exchanges(request.exchange) ? LiquidityLockClearance(lock.liquidityRequestId)
-          None
-      }
+        } recover {
+          case e: Exception =>
+            context.log.error(s"failed to place new liquidity tx $request", e)
+            exchanges(request.exchange) ! LiquidityLockClearance(lock.liquidityRequestId)
+            None
+        }
 
       case None =>
         context.log.debug(s"could not acquire lock for liquidity tx")
@@ -263,7 +265,7 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
 
             case Success(Some(lockedLiquidity)) =>
               placeOrders(bundle.orderRequests) onComplete {
-                case Success(orderRefs: List[OrderRef]) =>
+                case Success(orderRefs: Seq[OrderRef]) =>
                   registerOrderBundle(bundle, lockedLiquidity, orderRefs)
                   context.log.info(s"${Emoji.Excited}  Placed checked $bundle (estimated total win: ${formatDecimal(totalWin, 2)})")
 
@@ -536,7 +538,7 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
         }
 
         context.log.warn(s"${Emoji.Judgemental}  Canceling aged order ${o.shortDesc} $source")
-        exchanges(o.exchange) ! CancelOrder(o.ref)
+        exchanges(o.exchange) ! CancelOrder(o.ref, None)
       }
     }
   }

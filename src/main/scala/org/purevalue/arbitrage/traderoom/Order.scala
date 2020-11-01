@@ -3,12 +3,11 @@ package org.purevalue.arbitrage.traderoom
 import java.time.Instant
 import java.util.UUID
 
-import akka.event.Logging
-import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.traderoom.TradeRoom.OrderRef
 import org.purevalue.arbitrage.traderoom.exchange.{ExchangeAccountStreamData, Ticker}
 import org.purevalue.arbitrage.util.IncomingDataError
 import org.purevalue.arbitrage.util.Util.formatDecimal
+import org.slf4j.LoggerFactory
 
 
 /**
@@ -30,7 +29,7 @@ case class Order(externalId: String,
                  @volatile var cumulativeFilledQuantity: Option[Double],
                  @volatile var priceAverage: Option[Double],
                  @volatile var lastUpdateTime: Instant) {
-  private val log = Logging(actorSystem.eventStream, getClass)
+  private val log = LoggerFactory.getLogger(getClass)
 
   def shortDesc: String = {
     val direction: String = side match {

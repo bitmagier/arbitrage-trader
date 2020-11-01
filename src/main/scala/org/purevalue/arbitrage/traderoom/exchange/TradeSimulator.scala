@@ -3,42 +3,45 @@ package org.purevalue.arbitrage.traderoom.exchange
 import java.time.Instant
 import java.util.UUID
 
-import akka.actor.typed.scaladsl.{AbstractBehavior, ActorContext, Behaviors}
+import akka.actor.typed.scaladsl.AskPattern.{Askable, schedulerFromActorSystem}
+import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
 import akka.actor.typed.{ActorRef, Behavior}
-import org.purevalue.arbitrage.ExchangeConfig
-import org.purevalue.arbitrage.Main.actorSystem
+import akka.util.Timeout
 import org.purevalue.arbitrage.adapter.AccountDataChannel
-import org.purevalue.arbitrage.traderoom.exchange.Exchange.CancelOrderResult
-import org.purevalue.arbitrage.traderoom.{LocalCryptoValue, Order, OrderRequest, OrderSetPlacer, OrderStatus, OrderType, OrderUpdate, TradePair}
+import org.purevalue.arbitrage.traderoom.exchange.Exchange.{CancelOrderResult, GetTickerSnapshot}
+import org.purevalue.arbitrage.traderoom.{LocalCryptoValue, Order, OrderRequest, OrderStatus, OrderType, OrderUpdate, TradePair}
+import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig}
 
 import scala.collection.concurrent.TrieMap
-import scala.concurrent.ExecutionContextExecutor
+import scala.concurrent.Future
 
 object TradeSimulator {
-  def apply(exchangeConfig: ExchangeConfig,
+  def apply(globalConfig: GlobalConfig,
+            exchangeConfig: ExchangeConfig,
             exchange: ActorRef[Exchange.Message]):
   Behavior[AccountDataChannel.Command] =
-    Behaviors.setup(context => new TradeSimulator(context, exchangeConfig, exchange))
+    Behaviors.setup(context => new TradeSimulator(context, globalConfig, exchangeConfig, exchange))
 }
 class TradeSimulator(context: ActorContext[AccountDataChannel.Command],
+                     globalConfig: GlobalConfig,
                      exchangeConfig: ExchangeConfig,
                      exchange: ActorRef[Exchange.Message])
-  extends AbstractBehavior[AccountDataChannel.Command](context) {
-
-  implicit val executionContext: ExecutionContextExecutor = actorSystem.executionContext
+  extends AccountDataChannel[AccountDataChannel.Command](context) {
 
   val activeOrders: collection.concurrent.Map[String, Order] = TrieMap() // external-order-id -> Order
 
-  def cancelOrder(tradePair: TradePair, externalOrderId: String): Exchange.CancelOrderResult = {
-    if (activeOrders.contains(externalOrderId)) {
-      val o = activeOrders(externalOrderId)
-      exchange ! Exchange.IncomingAccountData(
-        Seq(OrderUpdate(externalOrderId, exchangeConfig.name, tradePair, o.side, None, None, None, None, None, Some(OrderStatus.CANCELED), None, None, None, Instant.now))
-      )
-      activeOrders.remove(externalOrderId)
-      CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId, success = true, orderUnknown = false, None)
-    } else {
-      CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId, success = false, orderUnknown = false, Some("failed because we assume the order is already filled"))
+  override def cancelOrder(pair: TradePair, externalOrderId: String): Future[Exchange.CancelOrderResult] = {
+    Future.successful {
+      if (activeOrders.contains(externalOrderId)) {
+        val o = activeOrders(externalOrderId)
+        exchange ! Exchange.IncomingAccountData(
+          Seq(OrderUpdate(externalOrderId, exchangeConfig.name, pair, o.side, None, None, None, None, None, Some(OrderStatus.CANCELED), None, None, None, Instant.now))
+        )
+        activeOrders.remove(externalOrderId)
+        CancelOrderResult(exchangeConfig.name, pair, externalOrderId, success = true, orderUnknown = false, None)
+      } else {
+        CancelOrderResult(exchangeConfig.name, pair, externalOrderId, success = false, orderUnknown = false, Some("failed because we assume the order is already filled"))
+      }
     }
   }
 
@@ -85,20 +88,24 @@ class TradeSimulator(context: ActorContext[AccountDataChannel.Command],
     }
   }
 
-  def newLimitOrder(o: OrderRequest, ticker: Map[TradePair, Ticker]): OrderSetPlacer.NewOrderAck = {
+  def newLimitOrder(o: OrderRequest, ticker: Map[TradePair, Ticker]): Exchange.NewOrderAck = {
     val externalOrderId = s"external-${UUID.randomUUID()}"
 
     executionContext.execute(() => simulateOrderLifetime(externalOrderId, o, ticker))
 
-    OrderSetPlacer.NewOrderAck(exchangeConfig.name, o.pair, externalOrderId, o.id)
+    Exchange.NewOrderAck(exchangeConfig.name, o.pair, externalOrderId, o.id)
   }
 
   override def onMessage(msg: AccountDataChannel.Command): Behavior[AccountDataChannel.Command] = {
-    case AccountDataChannel.CancelOrder(ref, replyTo) =>
-      replyTo ! cancelOrder(ref.tradePair, ref.externalOrderId)
+    case c: AccountDataChannel.CancelOrder =>
+      handleCancelOrder(c)
       Behaviors.same
-    case NewLimitOrder(orderRequest, ticker, replyTo) =>
-      replyTo ! newLimitOrder(orderRequest, ticker)
+
+    case AccountDataChannel.NewLimitOrder(orderRequest, replyTo) =>
+      implicit val timeout: Timeout = globalConfig.internalCommunicationTimeout
+      exchange.ask(ref => GetTickerSnapshot(ref)).foreach { s =>
+        replyTo ! newLimitOrder(orderRequest, s.ticker)
+      }
       Behaviors.same
   }
 }

@@ -46,7 +46,7 @@ object Exchange {
   case class GetWallet(replyTo: ActorRef[Wallet]) extends Message
   case class GetFullDataSnapshot(replyTo: ActorRef[TradeRoom.Message]) extends Message
   case class GetActiveOrders(replyTo: ActorRef[Map[OrderRef, Order]]) extends Message
-  case class GetWalletLiquidCrypto(replyTo: ActorRef[PioneerOrderRunner.Message]) extends Message
+  case class GetWalletLiquidCrypto(replyTo: ActorRef[Seq[CryptoValue]]) extends Message
 
   case class SetUsableTradePairs(tradeable: Set[TradePair], replyTo: ActorRef[TradeRoomInitCoordinator.Reply]) extends Message
   case class JoinTradeRoom(tradeRoom: ActorRef[TradeRoom.Message]) extends Message
@@ -62,7 +62,7 @@ object Exchange {
   case class LiquidityHouseKeeping() extends Message
   case class LiquidityBalancerRunFinished() extends Message
 
-  case class CancelOrder(ref: OrderRef, replyTo: ActorRef[CancelOrderResult]) extends Message
+  case class CancelOrder(ref: OrderRef, replyTo: Option[ActorRef[CancelOrderResult]]) extends Message
   case class CancelOrderResult(exchange: String,
                                tradePair: TradePair,
                                externalOrderId: String,
@@ -79,11 +79,11 @@ object Exchange {
 }
 
 class Exchange(context: ActorContext[Exchange.Message],
-               timers: TimerScheduler[Exchange.Message],
-               exchangeName: String,
-               config: Config,
-               exchangeConfig: ExchangeConfig,
-               initStuff: ExchangeInitStuff) extends AbstractBehavior[Exchange.Message](context) {
+                 timers: TimerScheduler[Exchange.Message],
+                 exchangeName: String,
+                 config: Config,
+                 exchangeConfig: ExchangeConfig,
+                 initStuff: ExchangeInitStuff) extends AbstractBehavior[Exchange.Message](context) {
 
   import Exchange._
 
@@ -119,7 +119,7 @@ class Exchange(context: ActorContext[Exchange.Message],
 
   private var liquidityManager: ActorRef[LiquidityManager.Command] = _
   private var tradeSimulator: Option[ActorRef[AccountDataChannel.Command]] = None
-  private var publicDataChannel: ActorRef[PublicDataChannel.Command] = _
+  private var publicDataChannel: ActorRef[PublicDataChannel.Event] = _
   private var accountDataChannel: ActorRef[AccountDataChannel.Command] = _
   private var pioneerOrderRunner: ActorRef[PioneerOrderRunner.Message] = _
 
@@ -182,7 +182,7 @@ class Exchange(context: ActorContext[Exchange.Message],
 
       if (tradeSimulationMode) {
         tradeSimulator = Some(context.spawn(
-          TradeSimulator(exchangeConfig, context.self),
+          TradeSimulator(config.global, exchangeConfig, context.self),
           s"TradeSimulator-$exchangeName"))
       }
     }
@@ -263,20 +263,16 @@ class Exchange(context: ActorContext[Exchange.Message],
     context.log.info(s"""[$exchangeName] usable trade pairs: ${tradePairs.toSeq.sortBy(_.toString).mkString(", ")}""")
   }
 
-  def startPublicDataInquirer(): Unit = {
-    publicDataInquirer = context.spawn(
-      initStuff.exchangePublicDataInquirerProps(config.global, exchangeConfig),
-      s"PublicDataInquirer-$exchangeName")
-
-    publicDataInquirer ! PublicDataInquirer.GetAllTradePairs(context.self)
-  }
-
   override def onMessage(msg: Message): Behavior[Message] = {
     context.log.info(s"Initializing Exchange $exchangeName" +
       s"${if (tradeSimulationMode) " in TRADE-SIMULATION mode" else ""}" +
       s"${if (exchangeConfig.doNotTouchTheseAssets.nonEmpty) s" (DoNotTouch: ${exchangeConfig.doNotTouchTheseAssets.mkString(", ")})" else ""}")
 
-    startPublicDataInquirer()
+    publicDataInquirer = context.spawn(
+      initStuff.exchangePublicDataInquirerProps(config.global, exchangeConfig),
+      s"PublicDataInquirer-$exchangeName")
+
+    publicDataInquirer ! PublicDataInquirer.GetAllTradePairs(context.self)
 
     Behaviors.receiveMessage[Message] {
       case AllTradePairs(pairs) =>
@@ -287,7 +283,7 @@ class Exchange(context: ActorContext[Exchange.Message],
   }
 
 
-  def initMode(): Behavior[Message] = {
+  def initMode(): Behavior[Message] =
     Behaviors.receiveMessage[Message] {
       // @formatter:off
       case IncomingPublicData(data)                 => applyPublicDataset(data); Behaviors.same
@@ -315,7 +311,7 @@ class Exchange(context: ActorContext[Exchange.Message],
       case GetActiveOrders(replyTo)                 => replyTo ! accountData.activeOrders; Behaviors.same
       case GetPriceEstimate(tradePair, replyTo)     => replyTo ! publicData.ticker(tradePair).priceEstimate; Behaviors.same
       case GetWalletLiquidCrypto(replyTo)           =>
-        replyTo ! PioneerOrderRunner.LiquidCryptoValues(accountData.wallet.liquidCryptoValues(exchangeConfig.usdEquivalentCoin, publicData.ticker))
+        replyTo ! accountData.wallet.liquidCryptoValues(exchangeConfig.usdEquivalentCoin, publicData.ticker)
         Behaviors.same
 
       case ConvertValue(value, target, replyTo)     =>
@@ -327,7 +323,6 @@ class Exchange(context: ActorContext[Exchange.Message],
         Behaviors.same
       // @formatter:on
     }
-  }
 
   def checkValidity(o: OrderRequest): Unit = {
     if (exchangeConfig.doNotTouchTheseAssets.contains(o.pair.baseAsset)
@@ -564,7 +559,7 @@ class Exchange(context: ActorContext[Exchange.Message],
 
       case m: NewLimitOrder                => onNewLimitOrder(m)
       case m: CancelOrder                  => onCancelOrder(m)
-      case m: LiquidityLockRequest         => liquidityManager ! m
+      case m: LiquidityLockRequest         => liquidityManager ! m.withWallet(accountData.wallet)
       case m: LiquidityLockClearance       => liquidityManager ! m
       case RemoveActiveOrder(ref)          => accountData.activeOrders = accountData.activeOrders - ref
       case RemoveOrphanOrder(ref)          => removeOrphanOrder(ref)
@@ -581,6 +576,7 @@ class Exchange(context: ActorContext[Exchange.Message],
       case LiquidityBalancerRunFinished()  => liquidityHouseKeepingRunning = false
       // @formatter:on
     }
+
     Behaviors.same
   }
 

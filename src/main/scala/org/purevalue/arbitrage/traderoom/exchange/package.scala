@@ -10,7 +10,7 @@ import org.purevalue.arbitrage.{Config, ExchangeConfig, GlobalConfig}
 
 package object exchange {
   type ExchangePublicDataInquirerInit = Function2[GlobalConfig, ExchangeConfig, Behavior[PublicDataInquirer.Command]]
-  type ExchangePublicDataChannelInit = Function5[GlobalConfig, ExchangeConfig, Set[TradePair], ActorRef[Exchange.Message], ActorRef[PublicDataInquirer.Command], Behavior[PublicDataChannel.Command]]
+  type ExchangePublicDataChannelInit = Function5[GlobalConfig, ExchangeConfig, Set[TradePair], ActorRef[Exchange.Message], ActorRef[PublicDataInquirer.Command], Behavior[PublicDataChannel.Event]]
   type ExchangeAccountDataChannelInit = Function4[Config, ExchangeConfig, ActorRef[Exchange.Message], ActorRef[PublicDataInquirer.Command], Behavior[AccountDataChannel.Command]]
 
   trait ExchangePublicStreamData extends Retryable

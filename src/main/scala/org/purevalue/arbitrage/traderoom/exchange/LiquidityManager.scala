@@ -78,8 +78,13 @@ object LiquidityManager {
                                   coins: Seq[CryptoValue],
                                   isForLiquidityTx: Boolean,
                                   dontUseTheseReserveAssets: Set[Asset],
-                                  wallet: Wallet,
-                                  replyTo: ActorRef[Option[LiquidityLock]]) extends Command
+                                  wallet: Option[Wallet], // is filled in by exchange actor, which forwards this message
+                                  replyTo: ActorRef[Option[LiquidityLock]]) extends Command {
+    def withWallet(wallet: Wallet): LiquidityLockRequest = LiquidityLockRequest(
+      id, createTime, exchange, tradePattern, coins, isForLiquidityTx, dontUseTheseReserveAssets, Some(wallet), replyTo
+    )
+  }
+
   case class LiquidityLock(exchange: String,
                            liquidityRequestId: UUID,
                            coins: Seq[CryptoValue],
@@ -171,7 +176,7 @@ class LiquidityManager(context: ActorContext[Command],
     if (r.coins.exists(e => exchangeConfig.doNotTouchTheseAssets.contains(e.asset))) throw new IllegalArgumentException
     if (r.coins.exists(_.asset.isFiat)) throw new IllegalArgumentException
 
-    val unlockedBalances = determineUnlockedBalance(r.wallet)
+    val unlockedBalances = determineUnlockedBalance(r.wallet.get)
     val sumCoinsPerAsset = r.coins // coins should contain already only values of different assets, but we need to be 100% sure, that we do not work with multiple requests for the same coin
       .groupBy(_.asset)
       .map(x => CryptoValue(x._1, x._2.map(_.amount).sum))

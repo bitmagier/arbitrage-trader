@@ -34,14 +34,13 @@ object PioneerOrderRunner {
   sealed trait Message
   case class Watch() extends Message
   case class Finished() extends Message
-  case class PriceEstimate(price:Double) extends Message
-  case class LiquidCryptoValues(values: Seq[CryptoValue]) extends Message
 }
 class PioneerOrderRunner(context: ActorContext[Message],
                          timers: TimerScheduler[Message],
                          config: Config,
                          exchangeConfig: ExchangeConfig,
                          exchange: ActorRef[Exchange.Message]) extends AbstractBehavior[Message](context) {
+
   import PioneerOrderRunner._
 
   case class PioneerOrder(request: OrderRequest, ref: OrderRef)
@@ -76,9 +75,9 @@ class PioneerOrderRunner(context: ActorContext[Message],
   def getPriceEstimate(pair: TradePair): Double = {
     implicit val timeout: Timeout = config.global.internalCommunicationTimeout
     Await.result(
-      exchange.ask(ref => Exchange.GetPriceEstimate(pair, ref)).mapTo[PriceEstimate],
+      exchange.ask(ref => Exchange.GetPriceEstimate(pair, ref)),
       timeout.duration.plus(500.millis)
-    ).price
+    )
   }
 
   def diffMoreThan(a: Double, b: Double, maxDiffRate: Double): Boolean = ((a - b).abs / a.abs) > maxDiffRate
@@ -182,7 +181,7 @@ class PioneerOrderRunner(context: ActorContext[Message],
           case None => // nop
         }
       } catch {
-        case e:Exception =>
+        case e: Exception =>
           exchange ! PioneerOrderFailed(e)
           context.self ! Finished()
       }
@@ -192,8 +191,6 @@ class PioneerOrderRunner(context: ActorContext[Message],
   def walletLiquidCryptoValues(): Future[Iterable[CryptoValue]] = {
     implicit val timeout: Timeout = config.global.internalCommunicationTimeout
     exchange.ask(ref => GetWalletLiquidCrypto(ref))
-      .mapTo[LiquidCryptoValues]
-      .map(_.values)
   }
 
   def convert(value: CryptoValue, targetAsset: Asset)(implicit timeout: Timeout): Future[CryptoValue] = {
@@ -281,13 +278,17 @@ class PioneerOrderRunner(context: ActorContext[Message],
   def cancelPioneerOrder(o: PioneerOrder): Unit = {
     context.log.debug(s"[$exchangeName] performing intended cancel of ${o.request.shortDesc}")
     implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
-
-    val cancelOrderResult = Await.result(
-      exchange.ask(ref => CancelOrder(o.ref, ref)).mapTo[CancelOrderResult],
-      timeout.duration.plus(1.second))
-
-    if (!cancelOrderResult.success) {
-      throw new RuntimeException(s"Intended cancel of PioneerOrder ${o.request.shortDesc} failed: $cancelOrderResult")
+    exchange.ask((ref: ActorRef[CancelOrderResult]) => Exchange.CancelOrder(o.ref, Some(ref))).foreach { result =>
+      if (result.success) {
+        context.log.info(s"Intended cancel of PioneerOrder $o ${o.request.shortDesc} succeeded")
+      } else {
+        context.log.error(s"Intended cancel of PioneerOrder ${o.request.shortDesc} failed: {} {}",
+          if (result.orderUnknown) "(order unknown)" else "",
+          result.text match {
+            case Some(text) => text
+            case None => ""
+          })
+      }
     }
   }
 

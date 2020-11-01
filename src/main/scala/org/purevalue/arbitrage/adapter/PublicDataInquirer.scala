@@ -1,11 +1,17 @@
 package org.purevalue.arbitrage.adapter
 
-import akka.actor.typed.ActorRef
+import akka.actor.typed.scaladsl.{AbstractBehavior, ActorContext}
+import akka.actor.typed.{ActorRef, ActorSystem}
 import org.purevalue.arbitrage.traderoom.exchange.Exchange
+import org.purevalue.arbitrage.{Main, UserRootGuardian}
+
+import scala.concurrent.ExecutionContext
 
 object PublicDataInquirer {
-  sealed trait Command
-  case class GetAllTradePairs(replyTo: ActorRef[Exchange.Message]) extends Command
+  trait Command
+  case class GetAllTradePairs(replyTo: ActorRef[Exchange.AllTradePairs]) extends Command
 }
-abstract class PublicDataInquirer {
+abstract class PublicDataInquirer(context: ActorContext[PublicDataInquirer.Command]) extends AbstractBehavior[PublicDataInquirer.Command](context) {
+  implicit val system: ActorSystem[UserRootGuardian.Reply] = Main.actorSystem
+  implicit val executionContext: ExecutionContext = system.executionContext
 }

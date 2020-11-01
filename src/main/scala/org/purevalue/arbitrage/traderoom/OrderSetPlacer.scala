@@ -1,62 +1,97 @@
 package org.purevalue.arbitrage.traderoom
 
-import akka.actor.{Actor, ActorLogging, ActorRef, PoisonPill, Props, Status}
+import akka.actor.typed.scaladsl.{AbstractBehavior, ActorContext, Behaviors}
+import akka.actor.typed.{ActorRef, ActorSystem, Behavior, MessageAdaptionFailure, Signal, Terminated}
+import akka.util.Timeout
 import org.purevalue.arbitrage.traderoom.OrderSetPlacer.NewOrderSet
-import org.purevalue.arbitrage.traderoom.exchange.Exchange.{CancelOrderResult, NewLimitOrder, NewOrderAck}
+import org.purevalue.arbitrage.traderoom.exchange.Exchange
+import org.purevalue.arbitrage.traderoom.exchange.Exchange.{CancelOrder, NewLimitOrder, NewOrderAck}
+import org.purevalue.arbitrage.{GlobalConfig, Main, UserRootGuardian}
+
+import scala.concurrent.ExecutionContext
+import scala.concurrent.duration.DurationInt
 
 /**
  * Places all orders in parallel.
  * If one order placement fails, it tries to immediately cancel the successful ones
  */
 object OrderSetPlacer {
-
-
-  def props(exchanges: Map[String, ActorRef]): Props = Props(new OrderSetPlacer(exchanges))
+  def apply(globalConfig: GlobalConfig,
+            exchanges: Map[String, ActorRef[Exchange.Message]]):
+  Behavior[NewOrderSet] =
+    Behaviors.setup(context => new OrderSetPlacer(context, globalConfig, exchanges))
 
   sealed trait Message
-  case class NewOrderSet(orders: Seq[NewLimitOrder])
+  case class NewOrderSet(orders: Seq[OrderRequest], replyTo: ActorRef[Seq[NewOrderAck]]) extends Message
 }
-case class OrderSetPlacer(exchanges: Map[String, ActorRef]) extends Actor with ActorLogging {
-  private var numRequests: Int = _
-  private var numFailures: Int = 0
-  private var answers: List[NewOrderAck] = List()
-  private var requestSender: ActorRef = _
-  private var expectedCancelOrderResults: Int = 0
+class OrderSetPlacer(context: ActorContext[NewOrderSet],
+                     globalConfig: GlobalConfig,
+                     exchanges: Map[String, ActorRef[Exchange.Message]]) extends AbstractBehavior[NewOrderSet](context) {
+  private var ackCollector: Option[ActorRef[NewOrderAck]] = None
 
-  override def receive: Receive = {
+  override def onMessage(message: NewOrderSet): Behavior[NewOrderSet] = {
     case request: NewOrderSet =>
-      requestSender = sender()
-      numRequests = request.orders.length
+      val numRequests = request.orders.length
+      ackCollector = Some(context.spawn(AckCollector(globalConfig, exchanges, numRequests, request.replyTo), s"${context.self.path.name}-AckCollector"))
       request.orders.foreach { o =>
-        exchanges(o.orderRequest.exchange) ! o
+        exchanges(o.exchange) ! NewLimitOrder(o, ackCollector.get)
       }
+      context.watch(ackCollector.get)
+      Behaviors.unhandled
+  }
 
+  override def onSignal: PartialFunction[Signal, Behavior[NewOrderSet]] = {
+    case Terminated(_) =>
+      Behaviors.stopped
+  }
+}
+
+object AckCollector {
+  def apply(globalConfig: GlobalConfig,
+            exchanges: Map[String, ActorRef[Exchange.Message]],
+            numRequests: Int,
+            reportTo: ActorRef[Seq[NewOrderAck]]):
+  Behavior[NewOrderAck] =
+    Behaviors.setup(context => new AckCollector(context, globalConfig, exchanges, numRequests, reportTo))
+}
+class AckCollector(context: ActorContext[NewOrderAck],
+                   globalConfig: GlobalConfig,
+                   exchanges: Map[String, ActorRef[Exchange.Message]],
+                   numRequests: Int,
+                   reportTo: ActorRef[Seq[NewOrderAck]]) extends AbstractBehavior[NewOrderAck](context) {
+  implicit val system: ActorSystem[UserRootGuardian.Reply] = Main.actorSystem
+  implicit val executionContext: ExecutionContext = system.executionContext
+  private var answers: List[NewOrderAck] = List()
+  private var numFailures: Int = 0
+
+
+  def onResponse(): Behavior[NewOrderAck] = {
+    if (answers.length + numFailures < numRequests) {
+      Behaviors.same
+    } else {
+      if (numFailures == 0) {
+        reportTo ! answers
+      } else { // try to cancel the other orders
+        implicit val timeout: Timeout = globalConfig.httpTimeout.plus(500.millis)
+        answers.foreach { e =>
+          exchanges(e.exchange) ! CancelOrder(e.toOrderRef, None)
+        }
+        reportTo ! answers
+      }
+      Behaviors.stopped
+    }
+  }
+
+  override def onMessage(message: NewOrderAck): Behavior[NewOrderAck] = {
     case a: NewOrderAck =>
       answers = a :: answers
-      if (answers.length + numFailures == numRequests) {
-        if (numFailures == 0) {
-          requestSender ! answers
-        } else { // try to cancel the other orders
-          answers.foreach { e =>
-            exchanges(e.exchange) ! CancelOrder(e.toOrderRef)
-          }
-          expectedCancelOrderResults = answers.size
-          requestSender ! answers
-        }
-        if (expectedCancelOrderResults == 0) { // nothing more to do here
-          self ! PoisonPill
-        }
-      }
+      onResponse()
+  }
 
-    case c: CancelOrderResult =>
-      expectedCancelOrderResults -= 1
-      if (c.success) log.info(s"$c") else log.warning(s"$c")
-      if (expectedCancelOrderResults == 0) { // nothing more to do here
-        self ! PoisonPill
-      }
-
-    case Status.Failure(e) =>
-      log.warning(s"OrderSetPlacer received a failure: ${e.getMessage}")
+  override def onSignal: PartialFunction[Signal, Behavior[NewOrderAck]] = {
+    case MessageAdaptionFailure(exception) =>
+      context.log.warn(s"OrderSetPlacer received a failure: ${exception.getMessage}")
       numFailures += 1
+      onResponse()
   }
 }

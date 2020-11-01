@@ -421,7 +421,7 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
   def cancelOrder(ref: OrderRef): Future[CancelOrderResult] = {
 
     def cancelOrder(ref: OrderRef, serverTime: Double): Future[CancelOrderResult] = {
-      val productId: String = coinbaseTradePairsByTradePair(ref.tradePair).id
+      val productId: String = coinbaseTradePairsByTradePair(ref.pair).id
       val uri = s"$CoinbaseBaseRestEndpoint/orders/${ref.externalOrderId}?product_id=$productId"
       httpRequestCoinbaseAccount(
         HttpMethods.DELETE,
@@ -430,10 +430,10 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
         exchangeConfig.secrets,
         serverTime
       ) map {
-        case (statusCode, j) if statusCode.isSuccess() => CancelOrderResult(exchangeConfig.name, ref.tradePair, productId, success = true, orderUnknown = false, Some(s"HTTP-$statusCode $j"))
+        case (statusCode, j) if statusCode.isSuccess() => CancelOrderResult(exchangeConfig.name, ref.pair, productId, success = true, orderUnknown = false, Some(s"HTTP-$statusCode $j"))
         case (statusCode, j) =>
           log.warning(s"DELETE $uri failed with: $statusCode, $j")
-          CancelOrderResult(exchangeConfig.name, ref.tradePair, productId, success = false, orderUnknown = true, Some(s"HTTP-$statusCode $j")) // TODO decode error message to check if reason = Order unknown. For now we always say orderUnknown=true here
+          CancelOrderResult(exchangeConfig.name, ref.pair, productId, success = false, orderUnknown = true, Some(s"HTTP-$statusCode $j")) // TODO decode error message to check if reason = Order unknown. For now we always say orderUnknown=true here
       }
     }
 

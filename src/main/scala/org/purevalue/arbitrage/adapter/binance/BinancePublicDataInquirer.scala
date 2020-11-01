@@ -1,18 +1,18 @@
 package org.purevalue.arbitrage.adapter.binance
 
-import akka.actor.typed.ActorRef
-import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
+import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
+import akka.actor.typed.{ActorRef, Behavior}
 import org.purevalue.arbitrage._
+import org.purevalue.arbitrage.adapter.PublicDataInquirer
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer._
-import org.purevalue.arbitrage.traderoom.exchange.Exchange.GetAllTradePairs
-import org.purevalue.arbitrage.traderoom.exchange.{Ask, Bid}
+import org.purevalue.arbitrage.traderoom.exchange.{Ask, Bid, Exchange}
 import org.purevalue.arbitrage.traderoom.{Asset, TradePair}
 import org.purevalue.arbitrage.util.HttpUtil.httpGetJson
 import org.purevalue.arbitrage.util.Util.stepSizeToFractionDigits
 import spray.json._
 
+import scala.concurrent.Await
 import scala.concurrent.duration.DurationInt
-import scala.concurrent.{Await, ExecutionContextExecutor}
 
 
 // The LOT_SIZE filter defines the quantity rules for the symbol
@@ -67,9 +67,12 @@ private[binance] case class BinanceTradePair(baseAsset: Asset,
 }
 
 object BinancePublicDataInquirer {
+  def apply(globalConfig: GlobalConfig,
+            exchangeConfig: ExchangeConfig):
+  Behavior[PublicDataInquirer.Command] =
+    Behaviors.setup(context => new BinancePublicDataInquirer(context, globalConfig, exchangeConfig))
 
-  sealed trait Command
-  case class GetBinanceTradePairs(replyTo: ActorRef[_]) extends Command
+  case class GetBinanceTradePairs(replyTo: ActorRef[Set[BinanceTradePair]]) extends PublicDataInquirer.Command
 
   def toBid(e: Seq[String]): Bid = {
     if (e.length != 2) throw new IllegalArgumentException(e.toString())
@@ -88,20 +91,15 @@ object BinancePublicDataInquirer {
   }
 
   val BinanceBaseRestEndpoint = "https://api.binance.com"
-
-  def props(globalConfig: GlobalConfig,
-            exchangeConfig: ExchangeConfig): Props =
-    Props(new BinancePublicDataInquirer(globalConfig, exchangeConfig))
 }
 
 /**
  * Binance exchange - account data channel
  */
-private[binance] class BinancePublicDataInquirer(globalConfig: GlobalConfig,
-                                                 exchangeConfig: ExchangeConfig) extends Actor with ActorLogging {
-  implicit val system: ActorSystem = Main.actorSystem
-  implicit val executionContext: ExecutionContextExecutor = system.dispatcher
-
+private[binance] class BinancePublicDataInquirer(context: ActorContext[PublicDataInquirer.Command],
+                                                 globalConfig: GlobalConfig,
+                                                 exchangeConfig: ExchangeConfig) extends PublicDataInquirer(context) {
+  import PublicDataInquirer._
   var exchangeInfo: RawBinanceExchangeInformationJson = _
   var binanceTradePairs: Set[BinanceTradePair] = _
 
@@ -149,23 +147,20 @@ private[binance] class BinancePublicDataInquirer(globalConfig: GlobalConfig,
         .filterNot(e => exchangeConfig.assetBlocklist.contains(e.baseAsset) || exchangeConfig.assetBlocklist.contains(e.quoteAsset))
         .toSet
 
-      if (log.isDebugEnabled) log.debug("received ExchangeInfo")
+      if (context.log.isDebugEnabled) context.log.debug("received ExchangeInfo")
     } catch {
-      case e: Exception => log.error(e, "init failed")
+      case e: Exception => context.log.error("init failed", e)
     }
   }
 
-
-  override def preStart(): Unit = {
-    init()
-  }
-
-  override def receive: Receive = {
+  override def onMessage(message: Command): Behavior[Command] = {
     // @formatter:off
-    case GetAllTradePairs()     => sender() ! tradePairs // from exchange
-    case GetBinanceTradePairs() => sender() ! binanceTradePairs // from BinancePublicDataChannel
+    case GetAllTradePairs(replyTo)     => replyTo ! Exchange.AllTradePairs(tradePairs)
+    case GetBinanceTradePairs(replyTo) => replyTo ! binanceTradePairs // from BinancePublicDataChannel
     // @formatter:on
   }
+
+  init()
 }
 
 

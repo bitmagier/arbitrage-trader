@@ -3,8 +3,8 @@ package org.purevalue.arbitrage.trader
 import java.time.{Duration, Instant}
 import java.util.UUID
 
-import akka.actor.Status.Failure
-import akka.actor.{Actor, ActorLogging, ActorRef, ActorSystem, Props}
+import akka.actor.typed.scaladsl.{AbstractBehavior, ActorContext, Behaviors}
+import akka.actor.typed.{ActorRef, ActorSystem, Behavior}
 import com.typesafe.config.Config
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.traderoom._
@@ -13,7 +13,9 @@ import org.purevalue.arbitrage.traderoom.exchange.OrderLimitChooser
 import scala.concurrent.ExecutionContextExecutor
 
 object FooTrader {
-  def props(traderConfig: Config, tradeRoom: ActorRef): Props = Props(new FooTrader(traderConfig, tradeRoom))
+  def apply(traderConfig: Config, tradeRoom: ActorRef[TradeRoom.Message]):
+  Behavior[Command] =
+    Behaviors.setup(context => new FooTrader(context, traderConfig, tradeRoom))
 
   sealed trait Command
   case class SearchRun(tc: TradeContext) extends Command
@@ -22,9 +24,12 @@ object FooTrader {
 /**
  * A basic trader to evolve the concept
  */
-class FooTrader(traderConfig: Config, tradeRoom: ActorRef) extends Actor with ActorLogging {
-  implicit val actorSystem: ActorSystem = Main.actorSystem
-  implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
+class FooTrader(context: ActorContext[FooTrader.Command],
+                traderConfig: Config,
+                tradeRoom: ActorRef[TradeRoom.Message]) extends AbstractBehavior[FooTrader.Command](context) {
+  import FooTrader._
+  implicit val system: ActorSystem[UserRootGuardian.Reply] = Main.actorSystem
+  implicit val executionContext: ExecutionContextExecutor = system.executionContext
 
   val traderName: String = "FooTrader"
   val maxOpenOrderBundles: Int = traderConfig.getInt("max-open-order-bundles")
@@ -181,27 +186,26 @@ class FooTrader(traderConfig: Config, tradeRoom: ActorRef) extends Actor with Ac
   def lifeSign(): Unit = {
     val duration = Duration.between(lastLifeSign, Instant.now())
     if (duration.compareTo(traderConfig.getDuration("lifesign-interval")) > 0) {
-      log.info(s"FooTrader life sign: $shotsDelivered shots delivered. $numSearchesDiff search runs ($numSingleSearchesDiff single searches) done in last ${duration.toMinutes} minutes. Total search runs: $numSearchesTotal")
-
-      log.info(s"FooTrader no-result-reasons: $noResultReasonStats")
+      context.log.info(s"FooTrader life sign: $shotsDelivered shots delivered. $numSearchesDiff search runs " +
+        s"($numSingleSearchesDiff single searches) done in last ${duration.toMinutes} minutes. Total search runs: $numSearchesTotal")
+      context.log.info(s"FooTrader no-result-reasons: $noResultReasonStats")
       lastLifeSign = Instant.now()
       numSingleSearchesDiff = 0
       numSearchesDiff = 0
     }
   }
 
-  override def receive: Receive = {
+  override def onMessage(message: Command): Behavior[Command] = {
     case SearchRun(tc) =>
       lifeSign()
       numSearchesDiff += 1
       numSearchesTotal += 1
       findBestShots(3)(tc).foreach { b =>
         shotsDelivered += 1
-        tradeRoom ! b
+        tradeRoom ! TradeRoom.PlaceOrderRequestBundle(b)
       }
-
-    case Failure(cause)  => log.error(cause, "Failure received")
+      Behaviors.same
   }
 
-  log.info("FooTrader started")
+  context.log.info("FooTrader started")
 }
