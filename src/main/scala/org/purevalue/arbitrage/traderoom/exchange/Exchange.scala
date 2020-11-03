@@ -18,7 +18,7 @@ import org.purevalue.arbitrage.util.{Emoji, InitSequence, InitStep, StaleDataExc
 import org.purevalue.arbitrage.{Config, ExchangeConfig, Main, UserRootGuardian}
 
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
-import scala.concurrent.{ExecutionContextExecutor, Future}
+import scala.concurrent.{Await, ExecutionContextExecutor, Future}
 import scala.util.{Failure, Success}
 
 case class TickerSnapshot(exchange: String, ticker: Map[TradePair, Ticker])
@@ -41,7 +41,6 @@ object Exchange {
   case class SimulatedAccountData(dataset: ExchangeAccountStreamData) extends Message
 
   case class GetAllTradePairs(replyTo: ActorRef[TradeRoomInitCoordinator.Reply]) extends Message // request from TradeRommInitCoordinator
-  case class AllTradePairs(pairs: Set[TradePair]) extends Message // reply from PublicDataInquirer
   case class GetTickerSnapshot(replyTo: ActorRef[TickerSnapshot]) extends Message
   case class GetWallet(replyTo: ActorRef[Wallet]) extends Message
   case class GetFullDataSnapshot(replyTo: ActorRef[TradeRoom.Message]) extends Message
@@ -79,11 +78,11 @@ object Exchange {
 }
 
 class Exchange(context: ActorContext[Exchange.Message],
-                 timers: TimerScheduler[Exchange.Message],
-                 exchangeName: String,
-                 config: Config,
-                 exchangeConfig: ExchangeConfig,
-                 initStuff: ExchangeInitStuff) extends AbstractBehavior[Exchange.Message](context) {
+               timers: TimerScheduler[Exchange.Message],
+               exchangeName: String,
+               config: Config,
+               exchangeConfig: ExchangeConfig,
+               initStuff: ExchangeInitStuff) extends AbstractBehavior[Exchange.Message](context) {
 
   import Exchange._
 
@@ -272,14 +271,13 @@ class Exchange(context: ActorContext[Exchange.Message],
       initStuff.exchangePublicDataInquirerProps(config.global, exchangeConfig),
       s"PublicDataInquirer-$exchangeName")
 
-    publicDataInquirer ! PublicDataInquirer.GetAllTradePairs(context.self)
-
-    Behaviors.receiveMessage[Message] {
-      case AllTradePairs(pairs) =>
-        allTradePairs = pairs
-        context.log.info(s"""[$exchangeName] All trade pairs: ${allTradePairs.toSeq.sorted.mkString(", ")}""")
-        initMode()
-    }
+    implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
+    allTradePairs = Await.result(
+      publicDataInquirer.ask(ref => PublicDataInquirer.GetAllTradePairs(ref)),
+      timeout.duration.plus(500.millis)
+    )
+    context.log.info(s"""[$exchangeName] All trade pairs: ${allTradePairs.toSeq.sorted.mkString(", ")}""")
+    initMode()
   }
 
 

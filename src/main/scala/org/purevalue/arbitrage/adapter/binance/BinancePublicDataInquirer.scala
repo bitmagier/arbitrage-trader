@@ -5,7 +5,7 @@ import akka.actor.typed.{ActorRef, Behavior}
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.PublicDataInquirer
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer._
-import org.purevalue.arbitrage.traderoom.exchange.{Ask, Bid, Exchange}
+import org.purevalue.arbitrage.traderoom.exchange.{Ask, Bid}
 import org.purevalue.arbitrage.traderoom.{Asset, TradePair}
 import org.purevalue.arbitrage.util.HttpUtil.httpGetJson
 import org.purevalue.arbitrage.util.Util.stepSizeToFractionDigits
@@ -99,7 +99,9 @@ object BinancePublicDataInquirer {
 private[binance] class BinancePublicDataInquirer(context: ActorContext[PublicDataInquirer.Command],
                                                  globalConfig: GlobalConfig,
                                                  exchangeConfig: ExchangeConfig) extends PublicDataInquirer(context) {
+
   import PublicDataInquirer._
+
   var exchangeInfo: RawBinanceExchangeInformationJson = _
   var binanceTradePairs: Set[BinanceTradePair] = _
 
@@ -154,10 +156,13 @@ private[binance] class BinancePublicDataInquirer(context: ActorContext[PublicDat
   }
 
   override def onMessage(message: Command): Behavior[Command] = {
-    // @formatter:off
-    case GetAllTradePairs(replyTo)     => replyTo ! Exchange.AllTradePairs(tradePairs)
-    case GetBinanceTradePairs(replyTo) => replyTo ! binanceTradePairs // from BinancePublicDataChannel
-    // @formatter:on
+    message match {
+      // @formatter:off
+      case GetAllTradePairs(replyTo)     => replyTo ! tradePairs
+      case GetBinanceTradePairs(replyTo) => replyTo ! binanceTradePairs // from BinancePublicDataChannel
+      // @formatter:on
+    }
+    this
   }
 
   init()

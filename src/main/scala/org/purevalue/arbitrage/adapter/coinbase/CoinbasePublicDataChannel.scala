@@ -1,23 +1,26 @@
 package org.purevalue.arbitrage.adapter.coinbase
 
 import akka.Done
-import akka.actor.{Actor, ActorLogging, ActorRef, ActorSystem, Kill, Props}
+import akka.actor.typed.scaladsl.AskPattern.{Askable, schedulerFromActorSystem}
+import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
+import akka.actor.typed.{ActorRef, Behavior}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.StatusCodes
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
-import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
-import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataChannel.{CoinbaseWebSocketEndpoint, Connect}
+import org.purevalue.arbitrage.adapter.PublicDataChannel.Disconnected
+import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataChannel.CoinbaseWebSocketEndpoint
 import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataInquirer.GetCoinbaseTradePairs
+import org.purevalue.arbitrage.adapter.{PublicDataChannel, PublicDataInquirer}
 import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.IncomingPublicData
-import org.purevalue.arbitrage.traderoom.exchange.{Ask, Bid, ExchangePublicStreamData, OrderBook, OrderBookUpdate, Ticker}
-import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig, Main}
+import org.purevalue.arbitrage.traderoom.exchange.{Ask, Bid, Exchange, ExchangePublicStreamData, OrderBook, OrderBookUpdate, Ticker}
+import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig}
 import spray.json.{DefaultJsonProtocol, JsObject, JsonParser, RootJsonFormat, enrichAny}
 
 import scala.concurrent.duration.DurationInt
-import scala.concurrent.{Await, ExecutionContextExecutor, Future, Promise}
+import scala.concurrent.{Await, Future, Promise}
 
 private[coinbase] case class SubscribeRequestJson(`type`: String = "subscribe",
                                                   product_ids: Seq[String],
@@ -83,25 +86,24 @@ private[coinbase] object CoinbasePublicJsonProtocol extends DefaultJsonProtocol 
 }
 
 object CoinbasePublicDataChannel {
-  // The websocket feed is publicly available, but connections to it are rate-limited to 1 per 4 seconds per IP.
-  val CoinbaseWebSocketEndpoint: String = "wss://ws-feed.pro.coinbase.com" // "wss://ws-feed-public.sandbox.pro.coinbase.com"
-
-  private case class Connect()
-
-  def props(globalConfig: GlobalConfig,
+  def apply(globalConfig: GlobalConfig,
             exchangeConfig: ExchangeConfig,
             relevantTradePairs: Set[TradePair],
-            exchange: ActorRef,
-            coinbasePublicDataInquirer: ActorRef): Props = Props(
-    new CoinbasePublicDataChannel(globalConfig, exchangeConfig, relevantTradePairs, exchange, coinbasePublicDataInquirer))
+            exchange: ActorRef[Exchange.Message],
+            publicDataInquirer: ActorRef[PublicDataInquirer.Command]):
+  Behavior[PublicDataChannel.Event] =
+    Behaviors.setup(context =>
+      new CoinbasePublicDataChannel(context, globalConfig, exchangeConfig, relevantTradePairs, exchange, publicDataInquirer))
+
+  // The websocket feed is publicly available, but connections to it are rate-limited to 1 per 4 seconds per IP.
+  val CoinbaseWebSocketEndpoint: String = "wss://ws-feed.pro.coinbase.com" // "wss://ws-feed-public.sandbox.pro.coinbase.com"
 }
-private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
+private[coinbase] class CoinbasePublicDataChannel(context: ActorContext[PublicDataChannel.Event],
+                                                  globalConfig: GlobalConfig,
                                                   exchangeConfig: ExchangeConfig,
                                                   relevantTradePairs: Set[TradePair],
-                                                  exchange: ActorRef,
-                                                  coinbasePublicDataInquirer: ActorRef) extends Actor with ActorLogging {
-  implicit val actorSystem: ActorSystem = Main.actorSystem
-  implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
+                                                  exchange: ActorRef[Exchange.Message],
+                                                  publicDataInquirer: ActorRef[PublicDataInquirer.Command]) extends PublicDataChannel(context) {
 
   val TickerChannelName: String = "ticker"
   val OrderBookChannelname: String = "level2"
@@ -122,14 +124,14 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
 
   // @formatter:off
   def decodeJsObject(messageType: String, j: JsObject): Seq[IncomingPublicCoinbaseJson] = {
-    if (log.isDebugEnabled) log.debug(s"received: $j")
+    if (context.log.isDebugEnabled) context.log.debug(s"received: $j")
     messageType match {
-      case "subscriptions"   => log.debug(s"$j"); Nil
+      case "subscriptions"   => context.log.debug(s"$j"); Nil
       case TickerChannelName => Seq(j.convertTo[TickerJson])
       case "snapshot"        => Seq(j.convertTo[OrderBookSnapshotJson])
       case "l2update"        => Seq(j.convertTo[OrderBookUpdateJson])
       case "error"           => throw new RuntimeException(j.prettyPrint)
-      case other             => log.warning("received unhandled messageType: $j"); Nil
+      case other             => context.log.warn("received unhandled messageType: $j"); Nil
     }
   } // @formatter:on
 
@@ -141,11 +143,11 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
           case j: JsObject if j.fields.contains("type") =>
             decodeJsObject(j.fields("type").convertTo[String], j)
           case j: JsObject =>
-            log.warning(s"Unknown json object received: $j")
+            context.log.warn(s"Unknown json object received: $j")
             Nil
         })
     case _ =>
-      log.warning(s"Received non TextMessage")
+      context.log.warn(s"Received non TextMessage")
       Future.successful(Nil)
   }
 
@@ -167,7 +169,7 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
         decodeMessage(message)
           .map(_.map(exchangeDataMapping))
           .map(IncomingPublicData)
-          .pipeTo(exchange)
+          .foreach(exchange ! _)
       ),
       Source(
         subscribeMessages.map(e => TextMessage(e.toJson.compactPrint))
@@ -180,7 +182,7 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
   def createConnected: Future[Done.type] =
     ws._1.flatMap { upgrade =>
       if (upgrade.response.status == StatusCodes.SwitchingProtocols) {
-        log.info("connected")
+        context.log.info("connected")
         Future.successful(Done)
       } else {
         throw new RuntimeException(s"Connection failed: ${upgrade.response.status}")
@@ -188,12 +190,12 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
     }
 
   def connect(): Unit = {
-    log.info(s"connect WebSocket $CoinbaseWebSocketEndpoint...")
+    context.log.info(s"connect WebSocket $CoinbaseWebSocketEndpoint...")
 
     ws = Http().singleWebSocketRequest(WebSocketRequest(CoinbaseWebSocketEndpoint), wsFlow)
     ws._2.future.onComplete { e =>
-      log.info(s"connection closed")
-      self ! Kill
+      context.log.info(s"connection closed")
+      context.self ! Disconnected()
     }
     connected = createConnected
   }
@@ -202,7 +204,7 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
   def initCoinbaseTradePairBySymbol(): Unit = {
     implicit val timeout: Timeout = globalConfig.internalCommunicationTimeoutDuringInit
     coinbaseTradePairByProductId = Await.result(
-      (coinbasePublicDataInquirer ? GetCoinbaseTradePairs()).mapTo[Set[CoinbaseTradePair]],
+      publicDataInquirer.ask(ref => GetCoinbaseTradePairs(ref)),
       timeout.duration.plus(500.millis))
       .filter(e => relevantTradePairs.contains(e.toTradePair))
       .map(e => (e.id, e))
@@ -211,27 +213,16 @@ private[coinbase] class CoinbasePublicDataChannel(globalConfig: GlobalConfig,
 
 
   def init(): Unit = {
-    log.info("initializing coinbase public data channel")
-    try {
-      initCoinbaseTradePairBySymbol()
-      self ! Connect()
-    } catch {
-      case e: Exception => log.error(e, "init failed")
-    }
-  }
-
-  override def preStart() {
-    init()
+    context.log.info("initializing coinbase public data channel")
+    initCoinbaseTradePairBySymbol()
+    connect()
   }
 
   override def postStop(): Unit = {
     if (ws != null && !ws._2.isCompleted) ws._2.success(None)
   }
 
-  override def receive: Receive = {
-    case Connect()             => connect()
-  }
-
+  init()
 }
 
 // TODO [later] subscribe to status channel: The status channel will send all products and currencies on a preset interval.

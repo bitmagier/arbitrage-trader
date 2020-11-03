@@ -9,7 +9,7 @@ object UserRootGuardian {
   var tradeRoomInitCoordinator: ActorRef[TradeRoomInitCoordinator.Reply] = _
   var tradeRoom: ActorRef[TradeRoom.Message] = _
 
-  def apply(config:Config): Behavior[UserRootGuardian.Reply] =
+  def apply(config: Config): Behavior[UserRootGuardian.Reply] =
     Behaviors.setup {
       context =>
         tradeRoomInitCoordinator = context.spawn(TradeRoomInitCoordinator(config, context.self), "TradeRoomInitCoordinator")
@@ -24,14 +24,14 @@ object UserRootGuardian {
   sealed trait Reply
   case class TradeRoomInitialized(tradeRoom: ActorRef[TradeRoom.Message]) extends Reply
 
-// TODO
-//  override val supervisorStrategy: AllForOneStrategy = {
-//    AllForOneStrategy(maxNrOfRetries = 5, withinTimeRange = 2.minutes, loggingEnabled = true) {
-//      // @formatter:off
+  // TODO
+  //  override val supervisorStrategy: AllForOneStrategy = {
+  //    AllForOneStrategy(maxNrOfRetries = 5, withinTimeRange = 2.minutes, loggingEnabled = true) {
+  //      // @formatter:off
 //      case _: ActorKilledException => Restart
 //      case _: Exception            => Escalate
 //    } // @formatter:on
-//  }
+  //  }
 }
 
 

@@ -190,7 +190,7 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
 
     context.log.info(s"connecting WebSocket $WebSocketEndpoint ...")
     ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow)
-    ws._2.future.onComplete { e =>
+    ws._2.future.onComplete { _ =>
       context.log.info(s"connection closed")
       context.self ! Disconnected()
     }

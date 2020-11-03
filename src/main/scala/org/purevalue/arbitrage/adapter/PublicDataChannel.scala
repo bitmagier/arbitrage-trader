@@ -13,7 +13,9 @@ object PublicDataChannel {
   case class Disconnected() extends Event()
 }
 abstract class PublicDataChannel(context: ActorContext[PublicDataChannel.Event]) extends AbstractBehavior[PublicDataChannel.Event](context) {
+
   import PublicDataChannel._
+
   implicit val system: ActorSystem[UserRootGuardian.Reply] = Main.actorSystem
   implicit val executionContext: ExecutionContext = system.executionContext
 
@@ -23,10 +25,11 @@ abstract class PublicDataChannel(context: ActorContext[PublicDataChannel.Event])
 
   def postStop(): Unit = {}
 
-  override def onMessage(message: Event): Behavior[Event] = {
+  override def onMessage(message: Event): Behavior[Event] = message match {
+    // @formatter:off
     case OnStreamsRunning() => onStreamsRunning(); Behaviors.unhandled
-
-    case Disconnected() => throw new ConnectionClosedException(getClass.getSimpleName)
+    case Disconnected()     => throw new ConnectionClosedException(getClass.getSimpleName)
+    // @formatter:on
   }
 
   override def onSignal: PartialFunction[Signal, Behavior[Event]] = {

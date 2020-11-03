@@ -2,13 +2,13 @@ package org.purevalue.arbitrage.traderoom.exchange
 
 import java.util.UUID
 
-import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.traderoom.TradeSide.{Buy, Sell}
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer.{LiquidityTransfer, WorkingContext}
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLock, UniqueDemand}
 import org.purevalue.arbitrage.traderoom.{Asset, CryptoValue, OrderRequest, TradePair, TradeSide}
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.{Config, ExchangeConfig}
+import org.slf4j.LoggerFactory
 
 import scala.annotation.tailrec
 
@@ -20,7 +20,7 @@ case class NoGoodManufacturingOptionAvailable(exchange: String, demandAsset: Ass
 case class LiquidityRebalanceCurrentlyLossy(exchange: String, source: Asset, destination: Asset) extends LBStatisticEvent
 
 object LiquidityBalancerStats {
-  private val log = Logging(actorSystem.eventStream, getClass)
+  private val log = LoggerFactory.getLogger(getClass)
   private var stats: Map[LBStatisticEvent, Int] = Map()
 
   def inc(e: LBStatisticEvent): Unit = {
@@ -54,7 +54,7 @@ class LiquidityBalancer(val config: Config,
                         val exchangeConfig: ExchangeConfig,
                         val tradePairs: Set[TradePair],
                         val wc: WorkingContext) {
-  private val log = Logging(actorSystem.eventStream, getClass)
+  private val log = LoggerFactory.getLogger(getClass)
 
   // tx granularity = asset's bucket size
   def bucketSize(asset: Asset): Double =
@@ -370,7 +370,7 @@ class LiquidityBalancer(val config: Config,
       )
     } catch {
       case e: Exception =>
-        log.error(e, s"[${exchangeConfig.name}] liquidity balancer failed.\nAvailable trade pairs: ${tradePairs.toSeq.sortBy(_.toString)}.")
+        log.error(s"[${exchangeConfig.name}] liquidity balancer failed.\nAvailable trade pairs: ${tradePairs.toSeq.sortBy(_.toString)}.", e)
         Nil
     }
   }

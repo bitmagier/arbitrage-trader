@@ -27,7 +27,9 @@ object FooTrader {
 class FooTrader(context: ActorContext[FooTrader.Command],
                 traderConfig: Config,
                 tradeRoom: ActorRef[TradeRoom.Message]) extends AbstractBehavior[FooTrader.Command](context) {
+
   import FooTrader._
+
   implicit val system: ActorSystem[UserRootGuardian.Reply] = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = system.executionContext
 
@@ -195,7 +197,7 @@ class FooTrader(context: ActorContext[FooTrader.Command],
     }
   }
 
-  override def onMessage(message: Command): Behavior[Command] = {
+  override def onMessage(message: Command): Behavior[Command] = message match {
     case SearchRun(tc) =>
       lifeSign()
       numSearchesDiff += 1

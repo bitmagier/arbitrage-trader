@@ -103,7 +103,7 @@ class LiquidityBalancerRun(context: ActorContext[LiquidityBalancerRun.Command],
     }
   }
 
-  override def onMessage(message: Command): Behavior[Command] = {
+  override def onMessage(message: Command): Behavior[Command] = message match {
     case Run() =>
       balanceLiquidity()
       parent ! Exchange.LiquidityBalancerRunFinished()

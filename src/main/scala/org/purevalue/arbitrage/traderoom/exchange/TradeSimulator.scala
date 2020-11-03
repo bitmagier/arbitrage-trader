@@ -8,6 +8,7 @@ import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
 import akka.actor.typed.{ActorRef, Behavior}
 import akka.util.Timeout
 import org.purevalue.arbitrage.adapter.AccountDataChannel
+import org.purevalue.arbitrage.traderoom.TradeRoom.OrderRef
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.{CancelOrderResult, GetTickerSnapshot}
 import org.purevalue.arbitrage.traderoom.{LocalCryptoValue, Order, OrderRequest, OrderStatus, OrderType, OrderUpdate, TradePair}
 import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig}
@@ -26,21 +27,23 @@ class TradeSimulator(context: ActorContext[AccountDataChannel.Command],
                      globalConfig: GlobalConfig,
                      exchangeConfig: ExchangeConfig,
                      exchange: ActorRef[Exchange.Message])
-  extends AccountDataChannel[AccountDataChannel.Command](context) {
+  extends AccountDataChannel(context) {
+
+  import AccountDataChannel._
 
   val activeOrders: collection.concurrent.Map[String, Order] = TrieMap() // external-order-id -> Order
 
-  override def cancelOrder(pair: TradePair, externalOrderId: String): Future[Exchange.CancelOrderResult] = {
+  override def cancelOrder(ref: OrderRef): Future[Exchange.CancelOrderResult] = {
     Future.successful {
-      if (activeOrders.contains(externalOrderId)) {
-        val o = activeOrders(externalOrderId)
+      if (activeOrders.contains(ref.externalOrderId)) {
+        val o = activeOrders(ref.externalOrderId)
         exchange ! Exchange.IncomingAccountData(
-          Seq(OrderUpdate(externalOrderId, exchangeConfig.name, pair, o.side, None, None, None, None, None, Some(OrderStatus.CANCELED), None, None, None, Instant.now))
+          Seq(OrderUpdate(ref.externalOrderId, exchangeConfig.name, ref.pair, o.side, None, None, None, None, None, Some(OrderStatus.CANCELED), None, None, None, Instant.now))
         )
-        activeOrders.remove(externalOrderId)
-        CancelOrderResult(exchangeConfig.name, pair, externalOrderId, success = true, orderUnknown = false, None)
+        activeOrders.remove(ref.externalOrderId)
+        CancelOrderResult(exchangeConfig.name, ref.pair, ref.externalOrderId, success = true, orderUnknown = false, None)
       } else {
-        CancelOrderResult(exchangeConfig.name, pair, externalOrderId, success = false, orderUnknown = false, Some("failed because we assume the order is already filled"))
+        CancelOrderResult(exchangeConfig.name, ref.pair, ref.externalOrderId, success = false, orderUnknown = false, Some("failed because we assume the order is already filled"))
       }
     }
   }
@@ -96,7 +99,7 @@ class TradeSimulator(context: ActorContext[AccountDataChannel.Command],
     Exchange.NewOrderAck(exchangeConfig.name, o.pair, externalOrderId, o.id)
   }
 
-  override def onMessage(msg: AccountDataChannel.Command): Behavior[AccountDataChannel.Command] = {
+  override def onMessage(message: Command): Behavior[Command] = message match {
     case c: AccountDataChannel.CancelOrder =>
       handleCancelOrder(c)
       Behaviors.same

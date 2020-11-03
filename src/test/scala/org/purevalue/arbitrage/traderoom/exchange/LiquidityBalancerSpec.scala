@@ -88,24 +88,24 @@ class LiquidityBalancerSpec extends AnyWordSpecLike
 
       orders should have size 3
       val linkToEthOrder = orders.find(e =>
-        e.orderRequest.exchange == ExchangeName
-          && e.orderRequest.pair == TradePair(LINK, ETH)
-          && e.orderRequest.side == Sell)
+        e.exchange == ExchangeName
+          && e.pair == TradePair(LINK, ETH)
+          && e.side == Sell)
       val btcToUsdtOrder = orders.find(e =>
-        e.orderRequest.exchange == ExchangeName
-          && e.orderRequest.pair == TradePair(BTC, USDT)
-          && e.orderRequest.side == Sell)
+        e.exchange == ExchangeName
+          && e.pair == TradePair(BTC, USDT)
+          && e.side == Sell)
       val linkToUsdtOrder = orders.find(e =>
-        e.orderRequest.exchange == ExchangeName
-          && e.orderRequest.pair == TradePair(LINK, USDT)
-          && e.orderRequest.side == Sell)
+        e.exchange == ExchangeName
+          && e.pair == TradePair(LINK, USDT)
+          && e.side == Sell)
 
       linkToEthOrder.isDefined shouldBe true
       btcToUsdtOrder.isDefined shouldBe true
       linkToUsdtOrder.isDefined shouldBe true
 
-      linkToEthOrder.get.orderRequest.amountBaseAsset shouldBe (3 * 20.0) / 10.55 +- 0.000001
-      linkToEthOrder.get.orderRequest.limit shouldBe ((10.55 / EthPriceUSD) * (1.0 - Cfg.liquidityManager.tickerBasedTxLimitBeyondEdgeLimit)) +- 0.00001
+      linkToEthOrder.get.amountBaseAsset shouldBe (3 * 20.0) / 10.55 +- 0.000001
+      linkToEthOrder.get.limit shouldBe ((10.55 / EthPriceUSD) * (1.0 - Cfg.liquidityManager.tickerBasedTxLimitBeyondEdgeLimit)) +- 0.00001
 
       {
         val btcBucketSize = defaultLiquidityBalancer.bucketSize(BTC)
@@ -113,16 +113,16 @@ class LiquidityBalancerSpec extends AnyWordSpecLike
           .convertTo(BTC, wc.ticker).amount
         val maxTransferValue = 1.0 - minLeftBtcSupply
         val minTransferValue = ((maxTransferValue / btcBucketSize).round - 1) * btcBucketSize
-        println(s"BTC ${btcToUsdtOrder.get.orderRequest.amountBaseAsset} between $minTransferValue and $maxTransferValue}")
-        btcToUsdtOrder.get.orderRequest.amountBaseAsset should (be >= minTransferValue and be <= maxTransferValue)
+        println(s"BTC ${btcToUsdtOrder.get.amountBaseAsset} between $minTransferValue and $maxTransferValue}")
+        btcToUsdtOrder.get.amountBaseAsset should (be >= minTransferValue and be <= maxTransferValue)
       }
 
       {
         val linkBucketSize = defaultLiquidityBalancer.bucketSize(LINK)
-        val maxTransferValue = 500.0 - linkToEthOrder.get.orderRequest.amountBaseAsset
+        val maxTransferValue = 500.0 - linkToEthOrder.get.amountBaseAsset
         val minTransferValue = ((maxTransferValue / linkBucketSize).round - 1) * linkBucketSize
-        println(s"LINK ${linkToUsdtOrder.get.orderRequest.amountBaseAsset} between $minTransferValue and $maxTransferValue}")
-        linkToUsdtOrder.get.orderRequest.amountBaseAsset should (be >= minTransferValue and be <= maxTransferValue)
+        println(s"LINK ${linkToUsdtOrder.get.amountBaseAsset} between $minTransferValue and $maxTransferValue}")
+        linkToUsdtOrder.get.amountBaseAsset should (be >= minTransferValue and be <= maxTransferValue)
       }
     }
 

@@ -3,21 +3,20 @@ package org.purevalue.arbitrage.adapter.coinbase
 import java.nio.charset.StandardCharsets
 import java.util.Base64
 
-import akka.actor.ActorSystem
-import akka.event.Logging
+import akka.actor.typed.ActorSystem
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model._
 import akka.http.scaladsl.model.headers.RawHeader
 import akka.stream.Materializer
-import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.util.HttpUtil.hmacSha256Signature
 import org.purevalue.arbitrage.{GlobalConfig, Main, SecretsConfig}
+import org.slf4j.LoggerFactory
 import spray.json.{JsValue, JsonParser, JsonReader}
 
 import scala.concurrent.{ExecutionContext, Future}
 
 private[coinbase] object CoinbaseHttpUtil {
-  private val log = Logging(actorSystem.eventStream, getClass)
+  private val log = LoggerFactory.getLogger(getClass)
   private lazy val globalConfig: GlobalConfig = Main.config().global
 
   // {"iso":"2020-10-01T21:22:24Z","epoch":1601587344.} <- spray cannot parse that, but we can
@@ -44,7 +43,8 @@ private[coinbase] object CoinbaseHttpUtil {
 
   // https://docs.pro.coinbase.com/#api-key-permissions
   def httpRequestCoinbaseHmacSha256(method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig, serverTime: Double)
-                                   (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[HttpResponse] = {
+                                   (implicit system: ActorSystem[_], fm: Materializer, executor: ExecutionContext):
+  Future[HttpResponse] = {
     val signature = createSignature(method, uri, requestBody, apiKeys, serverTime)
 
     Http().singleRequest(
@@ -65,24 +65,26 @@ private[coinbase] object CoinbaseHttpUtil {
   }
 
   def httpRequestCoinbaseAccount(method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig, serverTime: Double)
-                                (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[(StatusCode, String)] = {
+                                (implicit system: ActorSystem[_], fm: Materializer, executor: ExecutionContext):
+  Future[(StatusCode, String)] = {
     httpRequestCoinbaseHmacSha256(method, uri, requestBody, apiKeys, serverTime)
       .flatMap {
         response: HttpResponse =>
           response.entity.toStrict(globalConfig.httpTimeout).map { r =>
-            if (!response.status.isSuccess()) log.warning(s"$response")
+            if (!response.status.isSuccess()) log.warn(s"$response")
             (response.status, r.data.utf8String)
           }
       }
   }
 
   def httpRequestPureJsonCoinbaseAccount(method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig, serverTime: Double)
-                                        (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[(StatusCode, JsValue)] = {
+                                        (implicit system: ActorSystem[_], fm: Materializer, executor: ExecutionContext):
+  Future[(StatusCode, JsValue)] = {
     httpRequestCoinbaseHmacSha256(method, uri, requestBody, apiKeys, serverTime)
       .flatMap {
         response: HttpResponse =>
           response.entity.toStrict(globalConfig.httpTimeout).map { r =>
-            if (!response.status.isSuccess()) log.warning(s"$response")
+            if (!response.status.isSuccess()) log.warn(s"$response")
             r.contentType match {
               case ContentTypes.`application/json` => (response.status, JsonParser(r.data.utf8String))
               case _ => throw new RuntimeException(s"Non-Json message received:\n${r.data.utf8String}")
@@ -92,7 +94,9 @@ private[coinbase] object CoinbaseHttpUtil {
   }
 
   def httpRequestJsonCoinbaseAccount[T, E](method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig, serverTime: Double)
-                                          (implicit evidence1: JsonReader[T], evidence2: JsonReader[E], system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[Either[T, E]] = {
+                                          (implicit evidence1: JsonReader[T], evidence2: JsonReader[E], system: ActorSystem[_], fm: Materializer,
+                                           executor: ExecutionContext):
+  Future[Either[T, E]] = {
     httpRequestPureJsonCoinbaseAccount(method, uri, requestBody, apiKeys, serverTime).map {
       case (statusCode, j) =>
         try {

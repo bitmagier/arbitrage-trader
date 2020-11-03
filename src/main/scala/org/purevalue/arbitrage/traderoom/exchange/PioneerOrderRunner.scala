@@ -282,12 +282,8 @@ class PioneerOrderRunner(context: ActorContext[Message],
       if (result.success) {
         context.log.info(s"Intended cancel of PioneerOrder $o ${o.request.shortDesc} succeeded")
       } else {
-        context.log.error(s"Intended cancel of PioneerOrder ${o.request.shortDesc} failed: {} {}",
-          if (result.orderUnknown) "(order unknown)" else "",
-          result.text match {
-            case Some(text) => text
-            case None => ""
-          })
+        context.log.error(s"Intended cancel of PioneerOrder ${o.request.shortDesc} failed: " +
+          (if (result.orderUnknown) "(order unknown) " else "") + result.text.getOrElse(""))
       }
     }
   }

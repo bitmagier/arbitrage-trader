@@ -39,19 +39,19 @@ class TradeRoomInitCoordinator(context: ActorContext[TradeRoomInitCoordinator.Re
 
   val AllExchanges: Map[String, ExchangeInitStuff] = Map(
     "binance" -> ExchangeInitStuff(
-      BinancePublicDataInquirer,
-      BinancePublicDataChannel,
-      BinanceAccountDataChannel
+      BinancePublicDataInquirer.apply,
+      BinancePublicDataChannel.apply,
+      BinanceAccountDataChannel.apply
     ),
     "bitfinex" -> ExchangeInitStuff(
-      BitfinexPublicDataInquirer,
-      BitfinexPublicDataChannel,
-      BitfinexAccountDataChannel
+      BitfinexPublicDataInquirer.apply,
+      BitfinexPublicDataChannel.apply,
+      BitfinexAccountDataChannel.apply
     ),
     "coinbase" -> ExchangeInitStuff(
-      CoinbasePublicDataInquirer,
-      CoinbasePublicDataChannel,
-      CoinbaseAccountDataChannel
+      CoinbasePublicDataInquirer.apply,
+      CoinbasePublicDataChannel.apply,
+      CoinbaseAccountDataChannel.apply
     )
   )
 

@@ -4,28 +4,29 @@ import java.time.Instant
 import java.util.UUID
 
 import akka.Done
-import akka.actor.{Actor, ActorLogging, ActorRef, ActorSystem, Cancellable, Kill, Props}
+import akka.actor.typed.scaladsl.AskPattern.{Askable, schedulerFromActorSystem}
+import akka.actor.typed.scaladsl.{ActorContext, Behaviors, TimerScheduler}
+import akka.actor.typed.{ActorRef, Behavior, PostStop, Signal}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{HttpMethods, HttpResponse, StatusCodes}
-import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
-import org.purevalue.arbitrage.adapter.coinbase.CoinbaseAccountDataChannel.{Connect, OnStreamsRunning}
 import org.purevalue.arbitrage.adapter.coinbase.CoinbaseHttpUtil.{Signature, httpRequestCoinbaseAccount, httpRequestJsonCoinbaseAccount, parseServerTime}
 import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataChannel.CoinbaseWebSocketEndpoint
-import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataInquirer.{CoinbaseBaseRestEndpoint, DeliverAccounts, GetCoinbaseTradePairs}
+import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataInquirer.{CoinbaseBaseRestEndpoint, GetCoinbaseTradePairs}
+import org.purevalue.arbitrage.adapter.{AccountDataChannel, PublicDataInquirer}
 import org.purevalue.arbitrage.traderoom.TradeRoom.OrderRef
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
-import org.purevalue.arbitrage.traderoom.exchange.{Balance, CompleteWalletUpdate, ExchangeAccountStreamData}
+import org.purevalue.arbitrage.traderoom.exchange.{Balance, CompleteWalletUpdate, Exchange, ExchangeAccountStreamData}
 import org.purevalue.arbitrage.util.HttpUtil
 import org.purevalue.arbitrage.util.Util.{alignToStepSizeCeil, alignToStepSizeNearest, formatDecimalWithFixPrecision}
-import org.purevalue.arbitrage.{Config, ExchangeConfig, Main}
+import org.purevalue.arbitrage.{Config, ExchangeConfig}
 import spray.json.{DefaultJsonProtocol, JsObject, JsonParser, RootJsonFormat, enrichAny}
 
 import scala.concurrent.duration.DurationInt
-import scala.concurrent.{Await, ExecutionContextExecutor, Future, Promise}
+import scala.concurrent.{Await, Future, Promise}
 
 
 private[coinbase] case class SubscribeRequestWithAuthJson(`type`: String = "subscribe",
@@ -238,23 +239,27 @@ private[coinbase] object CoinbaseAccountJsonProtocol extends DefaultJsonProtocol
 }
 
 object CoinbaseAccountDataChannel {
-  private case class Connect()
-  private case class OnStreamsRunning()
-
-  def props(config: Config,
+  def apply(config: Config,
             exchangeConfig: ExchangeConfig,
-            exchange: ActorRef,
-            exchangePublicDataInquirer: ActorRef): Props = Props(new CoinbaseAccountDataChannel(config, exchangeConfig, exchange, exchangePublicDataInquirer))
+            exchange: ActorRef[Exchange.Message],
+            publicDataInquirer: ActorRef[PublicDataInquirer.Command]):
+  Behavior[AccountDataChannel.Command] = {
+    Behaviors.withTimers(timers =>
+      Behaviors.setup(context => new CoinbaseAccountDataChannel(context, timers, config, exchangeConfig, exchange, publicDataInquirer)))
+  }
+
+  private case class DeliverAccounts() extends AccountDataChannel.Command
+  private case class OnStreamsRunning() extends AccountDataChannel.Command
 }
-private[coinbase] class CoinbaseAccountDataChannel(config: Config,
+private[coinbase] class CoinbaseAccountDataChannel(context: ActorContext[AccountDataChannel.Command],
+                                                   timers: TimerScheduler[AccountDataChannel.Command],
+                                                   config: Config,
                                                    exchangeConfig: ExchangeConfig,
-                                                   exchange: ActorRef,
-                                                   exchangePublicDataInquirer: ActorRef) extends Actor with ActorLogging {
+                                                   exchange: ActorRef[Exchange.Message],
+                                                   publicDataInquirer: ActorRef[PublicDataInquirer.Command]) extends AccountDataChannel(context) {
 
-  implicit val actorSystem: ActorSystem = Main.actorSystem
-  implicit val executionContext: ExecutionContextExecutor = actorSystem.dispatcher
-
-  var deliverAccountsSchedule: Option[Cancellable] = None
+  import AccountDataChannel._
+  import CoinbaseAccountDataChannel._
 
   val UserChannelName: String = "user"
 
@@ -266,7 +271,7 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
   def pullCoinbaseTradePairs(): Unit = {
     implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
     val coinbaseTradePairs: Set[CoinbaseTradePair] = Await.result(
-      (exchangePublicDataInquirer ? GetCoinbaseTradePairs()).mapTo[Set[CoinbaseTradePair]],
+      publicDataInquirer.ask(ref => GetCoinbaseTradePairs(ref)),
       timeout.duration.plus(500.millis))
 
     coinbaseTradePairsByProductId = coinbaseTradePairs.map(e => e.id -> e).toMap
@@ -284,8 +289,8 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
   def decodeJsObject(messageType: String, j: JsObject): Seq[IncomingCoinbaseAccountJson] = {
     messageType match {
       case "subscriptions" =>
-        if (log.isDebugEnabled) log.debug(j.compactPrint)
-        self ! OnStreamsRunning()
+        if (context.log.isDebugEnabled) context.log.debug(j.compactPrint)
+        context.self ! OnStreamsRunning()
         Nil
       case "received"      => Seq(j.convertTo[CoinbaseOrderReceivedJson])
       case "change"        => Seq(j.convertTo[CoinbaseOrderChangedJson]) // An order has changed. This is the result of self-trade prevention adjusting the order size or available funds
@@ -294,7 +299,7 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
       case "match"         => Nil // ignore: A trade occurred between two orders.
       case "activate"      => Nil // ignore: An activate message is sent when a stop order is placed.
       case "error"         => throw new RuntimeException(j.prettyPrint)
-      case other           => log.warning(s"received unhandled message type: $j"); Nil
+      case _               => context.log.warn(s"received unhandled message type: $j"); Nil
     }
   } // // @formatter:on
 
@@ -307,11 +312,11 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
             import DefaultJsonProtocol._
             decodeJsObject(j.fields("type").convertTo[String], j)
           case j: JsObject =>
-            log.warning(s"Unknown json object received: $j")
+            context.log.warn(s"Unknown json object received: $j")
             Nil
         })
     case _ =>
-      log.warning(s"Received non TextMessage")
+      context.log.warn(s"Received non TextMessage")
       Future.successful(Nil)
   }
 
@@ -345,7 +350,7 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
         decodeMessage(message)
           .map(_.map(exchangeDataMapping))
           .map(IncomingAccountData)
-          .pipeTo(exchange)
+          .foreach(exchange ! _)
       ),
       Source(
         List(TextMessage(subscribeMessage.toJson.compactPrint))
@@ -358,7 +363,7 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
   def createConnected: Future[Done.type] =
     ws._1.flatMap { upgrade =>
       if (upgrade.response.status == StatusCodes.SwitchingProtocols) {
-        log.info("connected")
+        context.log.info("connected")
         Future.successful(Done)
       } else {
         throw new RuntimeException(s"Connection failed: ${upgrade.response.status}")
@@ -366,11 +371,11 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
     }
 
   def connect(): Unit = {
-    log.info(s"starting WebSocket $CoinbaseWebSocketEndpoint ...")
+    context.log.info(s"starting WebSocket $CoinbaseWebSocketEndpoint ...")
     ws = Http().singleWebSocketRequest(WebSocketRequest(CoinbaseWebSocketEndpoint), wsFlow())
     ws._2.future.onComplete { e =>
-      log.info(s"connection closed")
-      self ! Kill
+      context.log.info(s"connection closed")
+      context.self ! ConnectionClosed(getClass.getSimpleName)
     }
     connected = createConnected
   }
@@ -385,8 +390,9 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
       val coinbaseTradepair = coinbaseTradePairsByTradePair(o.pair)
 
       val size: String = formatDecimalWithFixPrecision(
+        // The size must be greater than the base_min_size for the product and no larger than the base_max_size
         Math.max(coinbaseTradepair.baseMinSize,
-          alignToStepSizeCeil(o.amountBaseAsset, coinbaseTradepair.baseIncrement)), 8) // The size must be greater than the base_min_size for the product and no larger than the base_max_size
+          alignToStepSizeCeil(o.amountBaseAsset, coinbaseTradepair.baseIncrement)), 8)
 
       val price: String = formatDecimalWithFixPrecision(
         alignToStepSizeNearest(o.limit, coinbaseTradepair.quoteIncrement), 8) // The price must be specified in quote_increment product units.
@@ -399,7 +405,8 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
         size,
         price).toJson.compactPrint
 
-      httpRequestJsonCoinbaseAccount[NewOrderResponseJson, String](HttpMethods.POST, s"$CoinbaseBaseRestEndpoint/orders", Some(requestBody), exchangeConfig.secrets, serverTime)
+      httpRequestJsonCoinbaseAccount[NewOrderResponseJson, String](
+        HttpMethods.POST, s"$CoinbaseBaseRestEndpoint/orders", Some(requestBody), exchangeConfig.secrets, serverTime)
         .map {
           case Left(newOrderResponse) =>
             exchange ! IncomingAccountData(Seq(newOrderResponse.toOrderUpdate(exchangeConfig.name, id => coinbaseTradePairsByProductId(id).toTradePair)))
@@ -407,7 +414,7 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
           case Right(error) => throw new RuntimeException(s"newLimitOrder(${o.shortDesc}) failed: $error")
         } recover {
         case e: Exception =>
-          log.error(e, s"NewLimitOrder(${o.shortDesc}) failed. Request body:\n$requestBody\ncoinbaseTradePair:$coinbaseTradepair\n")
+          context.log.error(s"NewLimitOrder(${o.shortDesc}) failed. Request body:\n$requestBody\ncoinbaseTradePair:$coinbaseTradepair\n", e)
           throw e
       }
     }
@@ -432,14 +439,14 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
       ) map {
         case (statusCode, j) if statusCode.isSuccess() => CancelOrderResult(exchangeConfig.name, ref.pair, productId, success = true, orderUnknown = false, Some(s"HTTP-$statusCode $j"))
         case (statusCode, j) =>
-          log.warning(s"DELETE $uri failed with: $statusCode, $j")
+          context.log.warn(s"DELETE $uri failed with: $statusCode, $j")
           CancelOrderResult(exchangeConfig.name, ref.pair, productId, success = false, orderUnknown = true, Some(s"HTTP-$statusCode $j")) // TODO decode error message to check if reason = Order unknown. For now we always say orderUnknown=true here
       }
     }
 
     for {
       serverTime <- queryServerTime()
-      cancelOrderResult <- cancelOrder(ref: OrderRef, serverTime)
+      cancelOrderResult <- cancelOrder(ref, serverTime)
     } yield cancelOrderResult
   }
 
@@ -456,7 +463,7 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
                 .toMap
             ))
           case Right(error) =>
-            log.warning(s"coinbase: queryAccounts() failed: $error")
+            context.log.warn(s"coinbase: queryAccounts() failed: $error")
             Nil
         }
         .map(e => IncomingAccountData(e))
@@ -466,39 +473,44 @@ private[coinbase] class CoinbaseAccountDataChannel(config: Config,
       serverTime <- queryServerTime()
       accounts <- queryAccounts(serverTime)
     } yield accounts)
-      .pipeTo(exchange)
+      .foreach(exchange ! _)
   }
 
   def init(): Unit = {
-    log.info("initializing coinbase account data channel")
+    context.log.info("initializing coinbase account data channel")
     try {
       pullCoinbaseTradePairs()
-      self ! Connect()
+      connect()
       if (config.tradeRoom.tradeSimulation) {
-        self ! DeliverAccounts()
+        context.self ! DeliverAccounts()
       } else {
-        deliverAccountsSchedule = Some(actorSystem.scheduler.scheduleAtFixedRate(1.second, 1500.millis, self, DeliverAccounts()))
+        timers.startTimerAtFixedRate(DeliverAccounts(), 1500.millis)
       }
     } catch {
-      case e: Exception => log.error(e, "init failed")
+      case e: Exception => context.log.error("init failed", e)
     }
   }
 
-  override def preStart(): Unit = {
-    init()
-  }
-
-  override def postStop(): Unit = {
+  def postStop(): Unit = {
     if (ws != null && !ws._2.isCompleted) ws._2.success(None)
   }
 
-  // @formatter:off
-  override def receive: Receive = {
-    case Connect()                               => connect()
-    case OnStreamsRunning()                      => onStreamsRunning()
-    case NewLimitOrder(o)                        => newLimitOrder(o).pipeTo(sender())
-    case CancelOrder(ref)                        => cancelOrder(ref).pipeTo(sender())
-    case DeliverAccounts()                       => deliverAccounts()
+
+  override def onMessage(message: Command): Behavior[Command] = {
+    message match {
+      // @formatter:off
+      case OnStreamsRunning()                      => onStreamsRunning()
+      case NewLimitOrder(o, replyTo)               => newLimitOrder(o).foreach(replyTo ! _)
+      case c: CancelOrder                          => handleCancelOrder(c)
+      case DeliverAccounts()                       => deliverAccounts()
+      // @formatter:on
+    }
+    this
   }
-  // @formatter:on
+
+  override def onSignal: PartialFunction[Signal, Behavior[Command]] = {
+    case PostStop => postStop(); this
+  }
+
+  init()
 }

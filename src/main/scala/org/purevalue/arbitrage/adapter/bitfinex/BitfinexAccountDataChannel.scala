@@ -3,21 +3,23 @@ package org.purevalue.arbitrage.adapter.bitfinex
 import java.time.Instant
 
 import akka.Done
-import akka.actor.{Actor, ActorLogging, ActorRef, ActorSystem, Kill, Props}
+import akka.actor.typed.scaladsl.AskPattern.{Askable, schedulerFromActorSystem}
+import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
+import akka.actor.typed.{ActorRef, Behavior, PostStop, Signal}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
 import akka.http.scaladsl.model.{HttpMethods, StatusCodes, Uri}
-import akka.pattern.{ask, pipe}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
 import org.purevalue.arbitrage._
-import org.purevalue.arbitrage.adapter.bitfinex.BitfinexAccountDataChannel.{Connect, OnStreamsRunning}
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexHttpUtil.httpRequestJsonBitfinexAccount
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexOrderUpdateJson.{toOrderStatus, toOrderType}
 import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.{GetBitfinexAssets, GetBitfinexTradePairs}
+import org.purevalue.arbitrage.adapter.{AccountDataChannel, PublicDataInquirer}
+import org.purevalue.arbitrage.traderoom.TradeRoom.OrderRef
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
-import org.purevalue.arbitrage.traderoom.exchange.{Balance, ExchangeAccountStreamData, WalletAssetUpdate}
+import org.purevalue.arbitrage.traderoom.exchange.{Balance, Exchange, ExchangeAccountStreamData, WalletAssetUpdate}
 import org.purevalue.arbitrage.util.HttpUtil.hmacSha384Signature
 import org.purevalue.arbitrage.util.Util.{convertBytesToLowerCaseHex, formatDecimal}
 import org.purevalue.arbitrage.util.WrongAssumption
@@ -25,7 +27,7 @@ import spray.json.{DefaultJsonProtocol, JsNumber, JsObject, JsString, JsValue, J
 
 import scala.collection.Seq
 import scala.concurrent.duration.DurationInt
-import scala.concurrent.{Await, ExecutionContextExecutor, Future, Promise}
+import scala.concurrent.{Await, Future, Promise}
 
 
 private[bitfinex] trait IncomingBitfinexAccountJson
@@ -278,25 +280,27 @@ private[bitfinex] object BitfinexAccountDataJsonProtocoll extends DefaultJsonPro
 
 
 object BitfinexAccountDataChannel {
-  private case class Connect()
-  private case class OnStreamsRunning()
-
-  def props(config: Config,
+  def apply(config: Config,
             exchangeConfig: ExchangeConfig,
-            exchange: ActorRef,
-            publicDataInquirer: ActorRef): Props =
-    Props(new BitfinexAccountDataChannel(config: Config, exchangeConfig, exchange, publicDataInquirer))
+            exchange: ActorRef[Exchange.Message],
+            publicDataInquirer: ActorRef[PublicDataInquirer.Command]):
+  Behavior[AccountDataChannel.Command] =
+    Behaviors.setup(context => new BitfinexAccountDataChannel(context, config, exchangeConfig, exchange, publicDataInquirer))
+
+  private case class Connect() extends AccountDataChannel.Command
+  private case class OnStreamsRunning() extends AccountDataChannel.Command()
 }
-private[bitfinex] class BitfinexAccountDataChannel(config: Config,
+private[bitfinex] class BitfinexAccountDataChannel(context: ActorContext[AccountDataChannel.Command],
+                                                   config: Config,
                                                    exchangeConfig: ExchangeConfig,
-                                                   exchange: ActorRef,
-                                                   exchangePublicDataInquirer: ActorRef) extends Actor with ActorLogging {
+                                                   exchange: ActorRef[Exchange.Message],
+                                                   publicDataInquirer: ActorRef[PublicDataInquirer.Command]) extends AccountDataChannel(context) {
+
+  import AccountDataChannel._
+  import BitfinexAccountDataChannel._
 
   val BaseRestEndpoint = "https://api.bitfinex.com"
   val WebSocketEndpoint: Uri = Uri("wss://api.bitfinex.com/ws/2")
-
-  implicit val system: ActorSystem = Main.actorSystem
-  implicit val executionContext: ExecutionContextExecutor = system.dispatcher
 
   var bitfinexAssets: Set[BitfinexAsset] = _
   var bitfinexTradePairs: Set[BitfinexTradePair] = _
@@ -316,7 +320,7 @@ private[bitfinex] class BitfinexAccountDataChannel(config: Config,
     case o: BitfinexOrderUpdateJson   => o.toOrderUpdate(exchangeConfig.name, symbol => bitfinexTradePairByApiSymbol(symbol).toTradePair)
     case t: BitfinexTradeExecutedJson => t.toOrderUpdate(exchangeConfig.name, symbol => bitfinexTradePairByApiSymbol(symbol).toTradePair)
     case w: BitfinexWalletUpdateJson  => w.toWalletAssetUpdate(symbol => symbolToAsset(symbol))
-    case x                            => log.error(s"$x"); throw new NotImplementedError
+    case x                            => context.log.error(s"$x"); throw new NotImplementedError
     // @formatter:on
   }
 
@@ -325,21 +329,20 @@ private[bitfinex] class BitfinexAccountDataChannel(config: Config,
       case j: JsObject if j.fields.contains("event") =>
         j.fields("event").convertTo[String] match {
           case "auth" if j.fields("status").convertTo[String] == "OK" =>
-            if (log.isDebugEnabled) log.debug(s"received auth response: $j")
-            self ! OnStreamsRunning()
+            if (context.log.isDebugEnabled) context.log.debug(s"received auth response: $j")
+            context.self ! OnStreamsRunning()
             None
           case "auth" =>
             throw new RuntimeException(s"bitfinex account WebSocket authentification failed with: $j")
           case _ =>
-            log.info(s"bitfinex: watching event message: $s") // TODO log level
+            context.log.info(s"bitfinex: watching event message: $s") // TODO log level
             None
         }
       case j: JsObject =>
-        log.warning(s"Unknown json event object received: $j")
+        context.log.warn(s"Unknown json event object received: $j")
         None
     }
   }
-
 
   def decodeDataArray(s: String): Seq[IncomingBitfinexAccountJson] = {
     JsonParser(s).convertTo[Vector[JsValue]] match {
@@ -347,57 +350,57 @@ private[bitfinex] class BitfinexAccountDataChannel(config: Config,
         dataArray(1).convertTo[String] match {
 
           case "hb" =>
-            if (log.isDebugEnabled) log.debug(s"received heartbeat event")
+            if (context.log.isDebugEnabled) context.log.debug(s"received heartbeat event")
             Nil
 
           case "os" => // order snapshot
-            if (log.isDebugEnabled) log.debug(s"received event 'order snaphot': $s")
+            if (context.log.isDebugEnabled) context.log.debug(s"received event 'order snaphot': $s")
             dataArray(2).convertTo[Vector[JsValue]]
               .map(e => BitfinexOrderUpdateJson("os", e.convertTo[Vector[JsValue]]))
 
           case streamType: String if Seq("on", "ou", "oc").contains(streamType) =>
-            if (log.isDebugEnabled) log.debug(s"received event 'order new/update/cancel': $s")
+            if (context.log.isDebugEnabled) context.log.debug(s"received event 'order new/update/cancel': $s")
             Seq(BitfinexOrderUpdateJson(streamType, dataArray(2).convertTo[Vector[JsValue]]))
 
           case streamType: String if Seq("ps", "pn", "pu", "pc").contains(streamType) =>
-            log.debug(s"ignoring 'Position' data: $s")
+            context.log.debug(s"ignoring 'Position' data: $s")
             Nil
 
           case "tu" =>
-            if (log.isDebugEnabled) log.debug(s"watching trade update event: $s")
+            if (context.log.isDebugEnabled) context.log.debug(s"watching trade update event: $s")
             Nil // ignoring trade updates (prefering order updates, which have more details)
 
           case "te" =>
-            if (log.isDebugEnabled) log.debug(s"watching event 'trade executed': $s")
+            if (context.log.isDebugEnabled) context.log.debug(s"watching event 'trade executed': $s")
             //Seq(BitfinexTradeExecutedJson(dataArray(2).convertTo[Vector[JsValue]]))
             Nil
 
           case "ws" =>
-            if (log.isDebugEnabled) log.debug(s"received event 'wallet snapshot': $s")
+            if (context.log.isDebugEnabled) context.log.debug(s"received event 'wallet snapshot': $s")
             dataArray(2).convertTo[Vector[JsValue]].map(e => BitfinexWalletUpdateJson(e.convertTo[Vector[JsValue]]))
 
           case "wu" =>
-            if (log.isDebugEnabled) log.debug(s"received event 'wallet update': $s")
+            if (context.log.isDebugEnabled) context.log.debug(s"received event 'wallet update': $s")
             Seq(BitfinexWalletUpdateJson(dataArray(2).convertTo[Vector[JsValue]]))
 
           case "bu" =>
-            if (log.isDebugEnabled) log.debug(s"watching event 'balance update': $s")
+            if (context.log.isDebugEnabled) context.log.debug(s"watching event 'balance update': $s")
             Nil // we ignore that event, we can calculate balance from wallet
 
           case "miu" =>
-            if (log.isDebugEnabled) log.debug(s"watching event 'margin info update': $s")
+            if (context.log.isDebugEnabled) context.log.debug(s"watching event 'margin info update': $s")
             Nil // ignore margin info update
 
           case "fiu" =>
-            if (log.isDebugEnabled) log.debug(s"watching event 'funding info': $s")
+            if (context.log.isDebugEnabled) context.log.debug(s"watching event 'funding info': $s")
             Nil // ignore funding info
 
           case s: String if Seq("fte", "ftu").contains(s) =>
-            if (log.isDebugEnabled) log.debug(s"watching event 'funding trade': $s")
+            if (context.log.isDebugEnabled) context.log.debug(s"watching event 'funding trade': $s")
             Nil // ignore funding trades
 
           case "n" =>
-            if (log.isDebugEnabled) log.debug(s"received notification event: $s")
+            if (context.log.isDebugEnabled) context.log.debug(s"received notification event: $s")
             Nil // ignore notifications
 
           case x => throw new RuntimeException(s"bitfinex: received data of unidentified stream type '$x': $s")
@@ -415,7 +418,7 @@ private[bitfinex] class BitfinexAccountDataChannel(config: Config,
           case x => throw new RuntimeException(s"unidentified response: $x")
         }
     case _ =>
-      log.warning(s"Received non TextMessage")
+      context.log.warn(s"Received non TextMessage")
       Future.successful(Nil)
   }
 
@@ -437,7 +440,7 @@ private[bitfinex] class BitfinexAccountDataChannel(config: Config,
         decodeMessage(message)
           .map(exchangeDataMapping)
           .map(IncomingAccountData)
-          .pipeTo(exchange)
+          .foreach(exchange ! _)
       ),
       Source(List(
         TextMessage(authMessage.toJson.compactPrint)
@@ -450,7 +453,7 @@ private[bitfinex] class BitfinexAccountDataChannel(config: Config,
   def createConnected: Future[Done.type] =
     ws._1.flatMap { upgrade =>
       if (upgrade.response.status == StatusCodes.SwitchingProtocols) {
-        log.info("connected")
+        context.log.info("connected")
         Future.successful(Done)
       } else {
         throw new RuntimeException(s"Connection failed: ${upgrade.response.status}")
@@ -460,7 +463,7 @@ private[bitfinex] class BitfinexAccountDataChannel(config: Config,
   def pullBitfinexTradePairs(): Unit = {
     implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
     bitfinexTradePairs = Await.result(
-      (exchangePublicDataInquirer ? GetBitfinexTradePairs()).mapTo[Set[BitfinexTradePair]],
+      publicDataInquirer.ask(ref => GetBitfinexTradePairs(ref)),
       timeout.duration.plus(500.millis)
     )
     bitfinexTradePairByApiSymbol = bitfinexTradePairs.map(e => e.apiSymbol -> e).toMap
@@ -470,17 +473,17 @@ private[bitfinex] class BitfinexAccountDataChannel(config: Config,
   def pullBitfinexAssets(): Unit = {
     implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
     bitfinexAssets = Await.result(
-      (exchangePublicDataInquirer ? GetBitfinexAssets()).mapTo[Set[BitfinexAsset]],
+      publicDataInquirer.ask(ref => GetBitfinexAssets(ref)),
       timeout.duration.plus(500.millis)
     )
   }
 
   def connect(): Unit = {
-    log.info(s"connecting WebSocket $WebSocketEndpoint ...")
+    context.log.info(s"connecting WebSocket $WebSocketEndpoint ...")
     ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow)
     ws._2.future.onComplete { e =>
-      log.info(s"connection closed")
-      self ! Kill
+      context.log.info(s"connection closed")
+      context.self ! ConnectionClosed(getClass.getSimpleName)
     }
     connected = createConnected
   }
@@ -518,7 +521,7 @@ private[bitfinex] class BitfinexAccountDataChannel(config: Config,
     ).map {
       case Left(response) => response match {
         case r: SubmitOrderResponseJson if r.status == "SUCCESS" && r.orders.length == 1 =>
-          if (log.isDebugEnabled) log.debug(s"$r")
+          if (context.log.isDebugEnabled) context.log.debug(s"$r")
           val order = r.orders.head
           exchange ! IncomingAccountData(exchangeDataMapping(Seq(order)))
           NewOrderAck(exchangeConfig.name, o.pair, order.orderId.toString, o.id)
@@ -529,10 +532,10 @@ private[bitfinex] class BitfinexAccountDataChannel(config: Config,
     }
   }
 
-  def cancelOrder(tradePair: TradePair, externalOrderId: Long): Future[CancelOrderResult] = {
+  override def cancelOrder(ref: OrderRef): Future[CancelOrderResult] = {
     import BitfinexAccountDataJsonProtocoll._
 
-    val requestBody = JsObject("id" -> JsNumber(externalOrderId))
+    val requestBody = JsObject("id" -> JsNumber(ref.externalOrderId))
     httpRequestJsonBitfinexAccount[CancelOrderResponseJson, JsValue](
       HttpMethods.POST,
       s"$BaseRestEndpoint/v2/auth/w/order/cancel",
@@ -541,16 +544,16 @@ private[bitfinex] class BitfinexAccountDataChannel(config: Config,
     ).map {
       case Left(response) => response match {
         case r: CancelOrderResponseJson if r.status == "SUCCESS" =>
-          if (log.isDebugEnabled) log.debug(s"$r")
+          if (context.log.isDebugEnabled) context.log.debug(s"$r")
           exchange ! IncomingAccountData(exchangeDataMapping(Seq(r.order)))
-          CancelOrderResult(exchangeConfig.name, tradePair, r.order.orderId.toString, success = true)
+          CancelOrderResult(exchangeConfig.name, ref.pair, r.order.orderId.toString, success = true)
         case r: CancelOrderResponseJson =>
-          log.debug(s"Cancel order failed. Response: $r")
-          CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId.toString, success = false, orderUnknown = false, Some(r.text))
+          context.log.debug(s"Cancel order failed. Response: $r")
+          CancelOrderResult(exchangeConfig.name, ref.pair, ref.externalOrderId, success = false, orderUnknown = false, Some(r.text))
       }
       case Right(errorResponse) => // TODO figure out what we get when order-id does not exist and set CancelOrderResult.orderUnknown accordingly. For now we take the error-response as orderUnknown=true
-        log.warning(s"CancelOrder id=$externalOrderId failed: $errorResponse")
-        CancelOrderResult(exchangeConfig.name, tradePair, externalOrderId.toString, success = false, orderUnknown = true, Some(errorResponse.compactPrint))
+        context.log.warn(s"CancelOrder id=${ref.externalOrderId} failed: $errorResponse")
+        CancelOrderResult(exchangeConfig.name, ref.pair, ref.externalOrderId, success = false, orderUnknown = true, Some(errorResponse.compactPrint))
     }
   }
 
@@ -559,31 +562,38 @@ private[bitfinex] class BitfinexAccountDataChannel(config: Config,
   }
 
   def init(): Unit = {
-    log.info("inititlizing bitfinex account data channel")
+    context.log.info("inititlizing bitfinex account data channel")
     try {
       pullBitfinexTradePairs()
       pullBitfinexAssets()
-      self ! Connect()
+      context.self ! Connect()
     } catch {
-      case e: Exception => log.error(e, "init failed")
+      case e: Exception => context.log.error("init failed", e)
     }
   }
 
-  override def preStart(): Unit = {
-    init()
-  }
-
-  override def postStop(): Unit = {
+  def postStop(): Unit = {
     if (ws != null && !ws._2.isCompleted) ws._2.success(None)
   }
 
-
   // @formatter:off
-  override def receive: Receive = {
-    case Connect()                               => connect()
-    case OnStreamsRunning()                      => onStreamsRunning()
-    case NewLimitOrder(o)                        => newLimitOrder(o).pipeTo(sender())
-    case CancelOrder(ref)                        => cancelOrder(ref.tradePair, ref.externalOrderId.toLong).pipeTo(sender())
+  override def onMessage(message: Command): Behavior[Command] = {
+    message match {
+      case Connect()                               => connect()
+      case OnStreamsRunning()                      => onStreamsRunning()
+      case NewLimitOrder(o, replyTo)               => newLimitOrder(o).foreach(replyTo ! _)
+      case c: CancelOrder                          => handleCancelOrder(c)
+    }
+    this
   }
   // @formatter:on
+
+  override def onSignal: PartialFunction[Signal, Behavior[Command]] = {
+    case PostStop =>
+      postStop()
+      context.log.info(s"${this.getClass.getSimpleName} stopped")
+      this
+  }
+
+  init()
 }

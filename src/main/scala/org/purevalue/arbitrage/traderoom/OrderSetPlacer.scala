@@ -29,16 +29,17 @@ class OrderSetPlacer(context: ActorContext[NewOrderSet],
                      exchanges: Map[String, ActorRef[Exchange.Message]]) extends AbstractBehavior[NewOrderSet](context) {
   private var ackCollector: Option[ActorRef[NewOrderAck]] = None
 
-  override def onMessage(message: NewOrderSet): Behavior[NewOrderSet] = {
-    case request: NewOrderSet =>
-      val numRequests = request.orders.length
-      ackCollector = Some(context.spawn(AckCollector(globalConfig, exchanges, numRequests, request.replyTo), s"${context.self.path.name}-AckCollector"))
-      request.orders.foreach { o =>
-        exchanges(o.exchange) ! NewLimitOrder(o, ackCollector.get)
-      }
-      context.watch(ackCollector.get)
-      Behaviors.unhandled
-  }
+  override def onMessage(message: NewOrderSet): Behavior[NewOrderSet] =
+    message match {
+      case request: NewOrderSet =>
+        val numRequests = request.orders.length
+        ackCollector = Some(context.spawn(AckCollector(globalConfig, exchanges, numRequests, request.replyTo), s"${context.self.path.name}-AckCollector"))
+        request.orders.foreach { o =>
+          exchanges(o.exchange) ! NewLimitOrder(o, ackCollector.get)
+        }
+        context.watch(ackCollector.get)
+        Behaviors.unhandled
+    }
 
   override def onSignal: PartialFunction[Signal, Behavior[NewOrderSet]] = {
     case Terminated(_) =>
@@ -82,7 +83,7 @@ class AckCollector(context: ActorContext[NewOrderAck],
     }
   }
 
-  override def onMessage(message: NewOrderAck): Behavior[NewOrderAck] = {
+  override def onMessage(message: NewOrderAck): Behavior[NewOrderAck] = message match {
     case a: NewOrderAck =>
       answers = a :: answers
       onResponse()

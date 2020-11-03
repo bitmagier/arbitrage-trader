@@ -1,13 +1,12 @@
 package org.purevalue.arbitrage.traderoom.exchange
 
-import akka.event.Logging
-import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.traderoom.TradeSide
+import org.slf4j.LoggerFactory
 
 import scala.collection.{Iterator, Map}
 
 class OrderLimitChooser(private val orderBook: Option[OrderBook], private val ticker: Ticker) {
-    private val log = Logging(actorSystem.eventStream, getClass)
+  private val log = LoggerFactory.getLogger(getClass)
 
   /**
    * First we determine a theoretical ideal order limit (like when realityAdjustmentRate is 0.0) based on order book, if present,

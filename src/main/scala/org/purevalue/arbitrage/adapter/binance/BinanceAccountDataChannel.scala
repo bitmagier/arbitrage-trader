@@ -13,11 +13,11 @@ import akka.http.scaladsl.model.{HttpMethods, StatusCodes, Uri}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
 import org.purevalue.arbitrage._
-import org.purevalue.arbitrage.adapter.AccountDataChannel.ConnectionClosed
 import org.purevalue.arbitrage.adapter.binance.BinanceHttpUtil.httpRequestJsonBinanceAccount
 import org.purevalue.arbitrage.adapter.binance.BinanceOrder.{toOrderStatus, toOrderType, toTradeSide}
 import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.{BinanceBaseRestEndpoint, GetBinanceTradePairs}
 import org.purevalue.arbitrage.adapter.{AccountDataChannel, PublicDataInquirer}
+import org.purevalue.arbitrage.traderoom.TradeRoom.OrderRef
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.{Balance, Exchange, ExchangeAccountStreamData, TickerSnapshot, Wallet, WalletAssetUpdate, WalletBalanceUpdate}
@@ -316,9 +316,10 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
                                                  config: Config,
                                                  exchangeConfig: ExchangeConfig,
                                                  exchange: ActorRef[Exchange.Message],
-                                                 exchangePublicDataInquirer: ActorRef[PublicDataInquirer.Command])
+                                                 publicDataInquirer: ActorRef[PublicDataInquirer.Command])
   extends AccountDataChannel(context) {
 
+  import AccountDataChannel._
   import BinanceAccountDataChannel._
 
   // outboundAccountPosition is sent any time an account balance has changed and contains the assets
@@ -516,11 +517,11 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
   }
 
   // fire and forget - error logging in case of failure
-  override def cancelOrder(pair: TradePair, externalOrderId: String): Future[Exchange.CancelOrderResult] = {
-    val symbol = binanceTradePairsByTradePair(pair).symbol
+  override def cancelOrder(ref: OrderRef): Future[Exchange.CancelOrderResult] = {
+    val symbol = binanceTradePairsByTradePair(ref.pair).symbol
     httpRequestJsonBinanceAccount[CancelOrderResponseJson, ErrorResponseJson](
       HttpMethods.DELETE,
-      s"$BinanceBaseRestEndpoint/api/v3/order?symbol=$symbol&orderId=$externalOrderId",
+      s"$BinanceBaseRestEndpoint/api/v3/order?symbol=$symbol&orderId=${ref.externalOrderId}",
       None,
       exchangeConfig.secrets,
       sign = true
@@ -528,7 +529,7 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
       case Left(response) =>
         if (context.log.isDebugEnabled) context.log.debug(s"Order successfully canceled: $response")
         exchange ! IncomingAccountData(exchangeDataMapping(Seq(response)))
-        CancelOrderResult(exchangeConfig.name, pair, externalOrderId, success = true)
+        CancelOrderResult(exchangeConfig.name, ref.pair, ref.externalOrderId, success = true)
       case Right(errorResponse) =>
         context.log.debug(s"CancelOrder failed: $errorResponse")
         val orderUnknown: Boolean = errorResponse.code match {
@@ -536,7 +537,7 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
           case BinanceErrorCodes.CancelRejected if errorResponse.msg == "Unknown order sent." => true
           case _ => false
         }
-        CancelOrderResult(exchangeConfig.name, pair, externalOrderId, success = false, orderUnknown, Some(errorResponse.toString))
+        CancelOrderResult(exchangeConfig.name, ref.pair, ref.externalOrderId, success = false, orderUnknown, Some(errorResponse.toString))
     }
   }
 
@@ -556,7 +557,7 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
   def pullBinanceTradePairs(): Unit = {
     implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
     val binanceTradePairs: Set[BinanceTradePair] = Await.result(
-      exchangePublicDataInquirer.ask(ref => GetBinanceTradePairs(ref)),
+      publicDataInquirer.ask(ref => GetBinanceTradePairs(ref)),
       timeout.duration.plus(500.millis))
 
     binanceTradePairsBySymbol = binanceTradePairs.map(e => e.symbol -> e).toMap
@@ -623,11 +624,11 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
   }
 
   // @formatter:off
-  override def onMessage(message: AccountDataChannel.Command): Behavior[AccountDataChannel.Command] = {
+  override def onMessage(message: Command): Behavior[Command] = message match {
     case Connect()                                    => connect(); this
     case OnStreamsRunning()                           => onStreamsRunning(); this
     case SendPing()                                   => pingUserStream(); this
-    case AccountDataChannel.NewLimitOrder(o, replyTo) => newLimitOrder(o).foreach(ack => replyTo ! ack)
+    case AccountDataChannel.NewLimitOrder(o, replyTo) => newLimitOrder(o).foreach(ack => replyTo ! ack); this
     case c: AccountDataChannel.CancelOrder            => handleCancelOrder(c); this
     case ConnectionClosed(c)                          => throw new ConnectionClosedException(c) // in order to let the actor terminate and restart by
   }

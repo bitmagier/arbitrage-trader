@@ -2,23 +2,22 @@ package org.purevalue.arbitrage.adapter.bitfinex
 
 import java.time.Instant
 
-import akka.actor.ActorSystem
-import akka.event.Logging
+import akka.actor.typed.ActorSystem
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model._
 import akka.http.scaladsl.model.headers.RawHeader
 import akka.stream.Materializer
-import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.util.HttpUtil.hmacSha384Signature
 import org.purevalue.arbitrage.util.Util.convertBytesToLowerCaseHex
 import org.purevalue.arbitrage.util.WrongAssumption
 import org.purevalue.arbitrage.{GlobalConfig, Main, SecretsConfig}
+import org.slf4j.LoggerFactory
 import spray.json.{JsValue, JsonParser, JsonReader}
 
 import scala.concurrent.{ExecutionContext, Future}
 
 private[bitfinex] object BitfinexHttpUtil {
-  private val log = Logging(actorSystem.eventStream, getClass)
+  private val log = LoggerFactory.getLogger(getClass)
   private val globalConfig: GlobalConfig = Main.config().global
   private var lastBitfinexNonce: Option[Long] = None
 
@@ -32,7 +31,8 @@ private[bitfinex] object BitfinexHttpUtil {
   }
 
   def httpRequestBitfinexHmacSha384(method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig)
-                                   (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[HttpResponse] = {
+                                   (implicit system: ActorSystem[_], fm: Materializer, executor: ExecutionContext):
+  Future[HttpResponse] = {
     val nonce = bitfinexNonce
     val apiPath = Uri(uri).toRelative.toString() match {
       case s: String if s.startsWith("/") => s.substring(1) // "v2/auth/..."
@@ -57,13 +57,13 @@ private[bitfinex] object BitfinexHttpUtil {
       ))
   }
 
-
   def httpRequestPureJsonBitfinexAccount(method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig)
-                                        (implicit system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[(StatusCode, JsValue)] =
+                                        (implicit system: ActorSystem[_], fm: Materializer, executor: ExecutionContext):
+  Future[(StatusCode, JsValue)] =
     httpRequestBitfinexHmacSha384(method, uri, requestBody, apiKeys)
       .flatMap {
         response: HttpResponse =>
-          if (!response.status.isSuccess()) log.warning(s"$response")
+          if (!response.status.isSuccess()) log.warn(s"$response")
           response.entity.toStrict(globalConfig.httpTimeout).map { r =>
             r.contentType match {
               case ContentTypes.`application/json` => (response.status, JsonParser(r.data.utf8String))
@@ -73,7 +73,9 @@ private[bitfinex] object BitfinexHttpUtil {
       }
 
   def httpRequestJsonBitfinexAccount[T, E](method: HttpMethod, uri: String, requestBody: Option[String], apiKeys: SecretsConfig)
-                                          (implicit evidence1: JsonReader[T], evidence2: JsonReader[E], system: ActorSystem, fm: Materializer, executor: ExecutionContext): Future[Either[T, E]] = {
+                                          (implicit evidence1: JsonReader[T], evidence2: JsonReader[E], system: ActorSystem[_],
+                                           fm: Materializer, executor: ExecutionContext):
+  Future[Either[T, E]] = {
     httpRequestPureJsonBitfinexAccount(method, uri, requestBody, apiKeys).map {
       case (statusCode, j) =>
         try {
