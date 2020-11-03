@@ -43,16 +43,16 @@ object Exchange {
   case class GetAllTradePairs(replyTo: ActorRef[TradeRoomInitCoordinator.Reply]) extends Message // request from TradeRommInitCoordinator
   case class GetTickerSnapshot(replyTo: ActorRef[TickerSnapshot]) extends Message
   case class GetWallet(replyTo: ActorRef[Wallet]) extends Message
-  case class GetFullDataSnapshot(replyTo: ActorRef[TradeRoom.Message]) extends Message
+  case class GetFullDataSnapshot(replyTo: ActorRef[TradeRoom.FullDataSnapshot]) extends Message
   case class GetActiveOrders(replyTo: ActorRef[Map[OrderRef, Order]]) extends Message
   case class GetWalletLiquidCrypto(replyTo: ActorRef[Seq[CryptoValue]]) extends Message
 
-  case class SetUsableTradePairs(tradeable: Set[TradePair], replyTo: ActorRef[TradeRoomInitCoordinator.Reply]) extends Message
+  case class SetUsableTradePairs(tradeable: Set[TradePair], replyTo: ActorRef[TradeRoomInitCoordinator.UsableTradePairsSet]) extends Message
   case class JoinTradeRoom(tradeRoom: ActorRef[TradeRoom.Message]) extends Message
   case class RemoveActiveOrder(ref: OrderRef) extends Message
   case class RemoveOrphanOrder(ref: OrderRef) extends Message
 
-  case class StartStreaming(replyTo: ActorRef[TradeRoomInitCoordinator.Reply]) extends Message
+  case class StartStreaming(replyTo: ActorRef[StreamingStarted]) extends Message
   case class AccountDataChannelInitialized() extends Message
   case class WalletUpdateTrigger() extends Message
   case class PioneerOrderSucceeded() extends Message
@@ -225,7 +225,7 @@ class Exchange(context: ActorContext[Exchange.Message],
   val pioneerOrdersSucceeded: WaitingFor = WaitingFor()
   val joinedTradeRoom: WaitingFor = WaitingFor()
 
-  def startStreaming(replyTo: ActorRef[TradeRoomInitCoordinator.Reply]): Unit = {
+  def startStreaming(replyTo: ActorRef[TradeRoomInitCoordinator.StreamingStarted]): Unit = {
     val maxWaitTime = config.global.internalCommunicationTimeoutDuringInit.duration
     val pioneerOrderMaxWaitTime: FiniteDuration = maxWaitTime.plus(FiniteDuration(config.tradeRoom.maxOrderLifetime.toMillis, TimeUnit.MILLISECONDS))
     val initSequence = new InitSequence(

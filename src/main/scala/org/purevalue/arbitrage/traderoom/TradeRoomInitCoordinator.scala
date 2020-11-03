@@ -1,14 +1,16 @@
 package org.purevalue.arbitrage.traderoom
 
+import akka.actor.typed.scaladsl.AskPattern.{Askable, schedulerFromActorSystem}
 import akka.actor.typed.scaladsl.{AbstractBehavior, ActorContext, Behaviors}
-import akka.actor.typed.{ActorRef, Behavior}
+import akka.actor.typed.{ActorRef, ActorSystem, Behavior}
+import akka.util.Timeout
 import org.purevalue.arbitrage.adapter.binance.{BinanceAccountDataChannel, BinancePublicDataChannel, BinancePublicDataInquirer}
 import org.purevalue.arbitrage.adapter.bitfinex.{BitfinexAccountDataChannel, BitfinexPublicDataChannel, BitfinexPublicDataInquirer}
 import org.purevalue.arbitrage.adapter.coinbase.{CoinbaseAccountDataChannel, CoinbasePublicDataChannel, CoinbasePublicDataInquirer}
-import org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator.{AllTradePairs, Reply, StreamingStarted, UsableTradePairsSet}
+import org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator.{AllTradePairs, Reply}
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.{Exchange, ExchangeAccountDataChannelInit, ExchangePublicDataChannelInit, ExchangePublicDataInquirerInit}
-import org.purevalue.arbitrage.{Config, UserRootGuardian}
+import org.purevalue.arbitrage.{Config, Main, UserRootGuardian}
 
 
 case class ExchangeInitStuff(exchangePublicDataInquirerProps: ExchangePublicDataInquirerInit,
@@ -23,13 +25,15 @@ object TradeRoomInitCoordinator {
 
   sealed trait Reply
   case class AllTradePairs(exchange: String, pairs: Set[TradePair]) extends Reply
-  case class UsableTradePairsSet(exchange: String) extends Reply
-  case class StreamingStarted(exchange: String) extends Reply
+  case class UsableTradePairsSet(exchange: String)
+  case class StreamingStarted(exchange: String)
 }
 class TradeRoomInitCoordinator(context: ActorContext[TradeRoomInitCoordinator.Reply],
                                config: Config,
                                parent: ActorRef[UserRootGuardian.Reply])
   extends AbstractBehavior[TradeRoomInitCoordinator.Reply](context) {
+
+  implicit val system: ActorSystem[UserRootGuardian.Reply] = Main.actorSystem
 
   // @formatter:off
   var allTradePairs:      Map[String, Set[TradePair]] = Map()
@@ -110,33 +114,20 @@ class TradeRoomInitCoordinator(context: ActorContext[TradeRoomInitCoordinator.Re
   }
 
   def sendStartStreaming(): Behavior[Reply] = {
-    var exchangesStreamingPending: Set[String] = exchanges.keySet
-
+    implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
     exchanges.values.foreach { exchange =>
-      exchange ! StartStreaming(context.self)
+      exchange.ask(ref => StartStreaming(ref))
+      context.log.debug(s"streaming started on $exchange")
     }
-
-    Behaviors.receiveMessage[Reply] {
-      case StreamingStarted(exchange) =>
-        exchangesStreamingPending -= exchange
-        context.log.debug(s"streaming started on $exchange. Still waiting for $exchangesStreamingPending")
-        if (exchangesStreamingPending.nonEmpty) Behaviors.same
-        else initialized()
-    }
+    initialized()
   }
 
   def pushUsableTradePairs(): Behavior[Reply] = {
+    implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
     exchanges.foreach {
-      case (exchange, actor) => actor ! SetUsableTradePairs(usableTradePairs(exchange), context.self)
+      case (exchange, actor) => actor.ask(ref => SetUsableTradePairs(usableTradePairs(exchange), ref))
     }
-    var exchangesReplied: Set[String] = Set()
-
-    Behaviors.receiveMessage[Reply] {
-      case UsableTradePairsSet(exchange) =>
-        exchangesReplied += exchange
-        if (exchangesReplied != exchanges.keySet) Behaviors.same
-        else sendStartStreaming()
-    }
+    sendStartStreaming()
   }
 
   def startExchanges(): Unit = {
@@ -163,24 +154,6 @@ class TradeRoomInitCoordinator(context: ActorContext[TradeRoomInitCoordinator.Re
     exchanges(exchange) ! GetAllTradePairs(context.self)
   )
 }
-
-//  override def preStart(): Unit = {
-//    startExchanges() // parallel
-//    queryAllTradePairs()
-//    determineUsableTradepairs()
-//    pushUsableTradePairs()
-//    sendStartStreaming()
-//  }
-//
-//  override def receive: Receive = {
-//    // @formatter:off
-//
-//    case Exchange.StreamingStarted(exchange) => onStreamingStarted(exchange)
-//    case akka.actor.Status.Failure(cause)    => log.error(cause, "Failure received")
-//    case msg                                 => log.error(s"unexpected message: $msg")
-//    // @formatter:on
-//  }
-
 
 // TODO
 //  override val supervisorStrategy: AllForOneStrategy = {

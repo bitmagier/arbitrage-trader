@@ -77,7 +77,7 @@ object TradeRoom {
                               heartbeatTS: Option[Instant],
                               tickerTS: Option[Instant],
                               orderBookTS: Option[Instant],
-                              wallet: Wallet) extends Message
+                              wallet: Wallet)
 
   // communication
   case class GetReferenceTicker(replyTo: ActorRef[TickerSnapshot]) extends Message
@@ -134,7 +134,7 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
     implicit val timeout: Timeout = config.global.internalCommunicationTimeout
     implicit val system: ActorSystem[UserRootGuardian.Reply] = Main.actorSystem
     val publicData: Iterable[Future[FullDataSnapshot]] = {
-      exchanges.values.map(_.ask(ref => GetFullDataSnapshot(ref)).mapTo[FullDataSnapshot])
+      exchanges.values.map(_.ask(ref => GetFullDataSnapshot(ref)))
     }
 
     Future.sequence(publicData).map(d =>
@@ -577,7 +577,7 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
   def startTraders(): Unit = {
     fooTrader = Some(context.spawn(FooTrader(Config.trader("foo-trader"), context.self), "FooTrader"))
     val traderScheduleDelay: FiniteDuration = FiniteDuration(config.tradeRoom.traderTriggerInterval.toMillis, TimeUnit.MILLISECONDS)
-    timers.startTimerWithFixedDelay(TriggerTrader(), traderScheduleDelay);
+    timers.startTimerWithFixedDelay(TriggerTrader(), traderScheduleDelay)
   }
 
   def onExchangeJoined(exchange: String): Unit = {
