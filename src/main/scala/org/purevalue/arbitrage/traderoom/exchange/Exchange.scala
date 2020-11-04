@@ -252,7 +252,6 @@ class Exchange(context: ActorContext[Exchange.Message],
       case Success(_) => switchToInitializedMode()
       case Failure(e) =>
         val msg = s"[$exchangeName] Init sequence failed"
-        context.log.error(msg, e)
         throw new RuntimeException(msg, e)
     }
   }
