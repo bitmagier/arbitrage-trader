@@ -280,44 +280,44 @@ class Exchange(context: ActorContext[Exchange.Message],
     context.log.info(s"""[$exchangeName] All trade pairs: ${allTradePairs.toSeq.sorted.mkString(", ")}""")
   }
 
-  override def onMessage(msg: Message): Behavior[Message] = {
+  override def onMessage(message: Message): Behavior[Message] = message match {
     // @formatter:off
-      case IncomingPublicData(data)                 => applyPublicDataset(data); Behaviors.same
-      case IncomingAccountData(data)                => data.foreach(applyAccountData); Behaviors.same
-      case SimulatedAccountData(dataset)            => applySimulatedAccountData(dataset); Behaviors.same
+    case IncomingPublicData(data)                 => applyPublicDataset(data); Behaviors.same
+    case IncomingAccountData(data)                => data.foreach(applyAccountData); Behaviors.same
+    case SimulatedAccountData(dataset)            => applySimulatedAccountData(dataset); Behaviors.same
 
-      case o: NewLimitOrder                         => onNewLimitOrder(o); Behaviors.same
-      case c: CancelOrder                           => onCancelOrder(c); Behaviors.same // needed for pioneer order runner
+    case o: NewLimitOrder                         => onNewLimitOrder(o); Behaviors.same
+    case c: CancelOrder                           => onCancelOrder(c); Behaviors.same // needed for pioneer order runner
 
-      case WalletUpdateTrigger()                    => if (!walletInitialized.isArrived) walletInitialized.arrived(); Behaviors.same
+    case WalletUpdateTrigger()                    => if (!walletInitialized.isArrived) walletInitialized.arrived(); Behaviors.same
 
-      case SetUsableTradePairs(tradePairs, replyTo) =>
-        setUsableTradePairs(tradePairs)
-        replyTo ! TradeRoomInitCoordinator.UsableTradePairsSet(exchangeName)
-        Behaviors.same
+    case SetUsableTradePairs(tradePairs, replyTo) =>
+      setUsableTradePairs(tradePairs)
+      replyTo ! TradeRoomInitCoordinator.UsableTradePairsSet(exchangeName)
+      Behaviors.same
 
-      case RemoveActiveOrder(ref)                   => accountData.activeOrders = accountData.activeOrders - ref; Behaviors.same
-      case StartStreaming(replyTo)                  => startStreaming(replyTo); Behaviors.same
-      case AccountDataChannelInitialized()          => accountDataChannelInitialized.arrived(); Behaviors.same
-      case PioneerOrderSucceeded()                  => pioneerOrdersSucceeded.arrived(); Behaviors.same
-      case PioneerOrderFailed(e)                    => context.log.error(s"[$exchangeName] Pioneer order failed", e); stop()
-      case j: JoinTradeRoom                         => joinTradeRoom(j); Behaviors.same
+    case RemoveActiveOrder(ref)                   => accountData.activeOrders = accountData.activeOrders - ref; Behaviors.same
+    case StartStreaming(replyTo)                  => startStreaming(replyTo); Behaviors.same
+    case AccountDataChannelInitialized()          => accountDataChannelInitialized.arrived(); Behaviors.same
+    case PioneerOrderSucceeded()                  => pioneerOrdersSucceeded.arrived(); Behaviors.same
+    case PioneerOrderFailed(e)                    => context.log.error(s"[$exchangeName] Pioneer order failed", e); stop()
+    case j: JoinTradeRoom                         => joinTradeRoom(j); Behaviors.same
 
-      case GetAllTradePairs(replyTo)                => replyTo ! TradeRoomInitCoordinator.AllTradePairs(exchangeName, allTradePairs); Behaviors.same
-      case GetActiveOrders(replyTo)                 => replyTo ! accountData.activeOrders; Behaviors.same
-      case GetPriceEstimate(tradePair, replyTo)     => replyTo ! publicData.ticker(tradePair).priceEstimate; Behaviors.same
-      case GetWalletLiquidCrypto(replyTo)           =>
-        replyTo ! accountData.wallet.liquidCryptoValues(exchangeConfig.usdEquivalentCoin, publicData.ticker)
-        Behaviors.same
+    case GetAllTradePairs(replyTo)                => replyTo ! TradeRoomInitCoordinator.AllTradePairs(exchangeName, allTradePairs); Behaviors.same
+    case GetActiveOrders(replyTo)                 => replyTo ! accountData.activeOrders; Behaviors.same
+    case GetPriceEstimate(tradePair, replyTo)     => replyTo ! publicData.ticker(tradePair).priceEstimate; Behaviors.same
+    case GetWalletLiquidCrypto(replyTo)           =>
+      replyTo ! accountData.wallet.liquidCryptoValues(exchangeConfig.usdEquivalentCoin, publicData.ticker)
+      Behaviors.same
 
-      case ConvertValue(value, target, replyTo)     =>
-        replyTo ! value.convertTo(target, publicData.ticker)
-        Behaviors.same
+    case ConvertValue(value, target, replyTo)     =>
+      replyTo ! value.convertTo(target, publicData.ticker)
+      Behaviors.same
 
-      case DetermineRealisticLimit(pair, side, quantity, replyTo) =>
-        replyTo ! determineRealisticLimit(pair, side, quantity)
-        Behaviors.same
-      // @formatter:on
+    case DetermineRealisticLimit(pair, side, quantity, replyTo) =>
+      replyTo ! determineRealisticLimit(pair, side, quantity)
+      Behaviors.same
+    // @formatter:on
   }
 
   def checkValidity(o: OrderRequest): Unit = {
