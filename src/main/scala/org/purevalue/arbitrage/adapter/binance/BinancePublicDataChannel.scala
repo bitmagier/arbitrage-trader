@@ -227,6 +227,8 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
   override def postStop(): Unit = {
     if (ws != null && !ws._2.isCompleted) ws._2.success(None)
   }
+
+  connect()
 }
 
 // A single connection to stream.binance.com is only valid for 24 hours; expect to be disconnected at the 24 hour mark

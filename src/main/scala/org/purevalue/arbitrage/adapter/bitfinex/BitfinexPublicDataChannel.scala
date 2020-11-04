@@ -369,7 +369,7 @@ private[bitfinex] class BitfinexPublicDataChannel(context: ActorContext[PublicDa
       .toMap
   }
 
-  override def connect(): Unit = {
+  def connect(): Unit = {
     log.info("initializing bitfinex public data channel")
     initBitfinexTradePairBySymbol()
 
@@ -412,4 +412,6 @@ private[bitfinex] class BitfinexPublicDataChannel(context: ActorContext[PublicDa
         c._2.success(None) // close open connections
       }
   }
+
+  connect()
 }

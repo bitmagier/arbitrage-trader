@@ -19,8 +19,6 @@ abstract class PublicDataChannel(context: ActorContext[PublicDataChannel.Event])
   implicit val system: ActorSystem[UserRootGuardian.Reply] = Main.actorSystem
   implicit val executionContext: ExecutionContext = system.executionContext
 
-  def connect(): Unit
-
   def onStreamsRunning(): Unit = {}
 
   def postStop(): Unit = {}
@@ -35,6 +33,4 @@ abstract class PublicDataChannel(context: ActorContext[PublicDataChannel.Event])
   override def onSignal: PartialFunction[Signal, Behavior[Event]] = {
     case PostStop => postStop(); Behaviors.same
   }
-
-  connect()
 }
