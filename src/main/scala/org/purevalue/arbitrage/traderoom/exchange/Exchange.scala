@@ -37,6 +37,11 @@ object Exchange {
   }
 
   trait Message
+
+  case class StartAccountDataManager() extends Message
+  case class StartPublicDataChannel() extends Message
+  case class InitiatePioneerOrders() extends Message
+
   case class IncomingPublicData(data: Seq[ExchangePublicStreamData]) extends Message
   case class IncomingAccountData(data: Seq[ExchangeAccountStreamData]) extends Message
   case class SimulatedAccountData(dataset: ExchangeAccountStreamData) extends Message
@@ -231,12 +236,13 @@ class Exchange(context: ActorContext[Exchange.Message],
   def startStreaming(replyTo: ActorRef[TradeRoomInitCoordinator.StreamingStarted]): Unit = {
     val maxWaitTime = config.global.internalCommunicationTimeoutDuringInit.duration
     val pioneerOrderMaxWaitTime: FiniteDuration = maxWaitTime.plus(FiniteDuration(config.tradeRoom.maxOrderLifetime.toMillis, TimeUnit.MILLISECONDS))
+    val self = context.self
     val initSequence = new InitSequence(
       log,
       exchangeName,
       List(
-        InitStep("start account-data-manager", () => startAccountDataManager()),
-        InitStep("start public-data-channel", () => startPublicDataChannel()),
+        InitStep("start account-data-manager", () => self ! StartAccountDataManager()),
+        InitStep("start public-data-channel", () => self ! StartPublicDataChannel()),
         InitStep("wait until account-data-channel initialized", () => accountDataChannelInitialized.await(maxWaitTime)),
         InitStep("wait until wallet data arrives", () => { // wait another 2 seconds for all wallet entries to arrive (bitfinex)
           walletInitialized.await(maxWaitTime)
@@ -245,7 +251,7 @@ class Exchange(context: ActorContext[Exchange.Message],
         InitStep("wait until public-data-channel initialized", () => publicDataChannelInitialized.await(maxWaitTime)),
         InitStep("check if balance is sufficient for trading", () => checkIfBalanceIsSufficientForTrading()),
         InitStep("warmup channels for 3 seconds", () => Thread.sleep(3000)),
-        InitStep(s"initiate pioneers", () => initiatePioneerOrders()),
+        InitStep(s"initiate pioneers", () => self ! InitiatePioneerOrders()),
         InitStep("waiting for pioneer orders to succeed", () => pioneerOrdersSucceeded.await(pioneerOrderMaxWaitTime)),
         InitStep("send streaming-started", () => replyTo ! StreamingStarted(exchangeName)),
         InitStep("wait until joined trade-room", () => joinedTradeRoom.await(maxWaitTime * 3))
@@ -284,6 +290,10 @@ class Exchange(context: ActorContext[Exchange.Message],
 
   override def onMessage(message: Message): Behavior[Message] = message match {
     // @formatter:off
+    case StartAccountDataManager()                => startAccountDataManager(); Behaviors.same
+    case StartPublicDataChannel()                 => startPublicDataChannel(); Behaviors.same
+    case InitiatePioneerOrders()                  => initiatePioneerOrders(); Behaviors.same
+
     case IncomingPublicData(data)                 => applyPublicDataset(data); Behaviors.same
     case IncomingAccountData(data)                => data.foreach(applyAccountData); Behaviors.same
     case SimulatedAccountData(dataset)            => applySimulatedAccountData(dataset); Behaviors.same

@@ -117,9 +117,10 @@ class TradeRoomInitCoordinator(context: ActorContext[TradeRoomInitCoordinator.Re
 
   def sendStartStreaming(): Behavior[Reply] = {
     implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
-    exchanges.values.foreach { exchange =>
-      exchange.ask(ref => StartStreaming(ref))
-      log.debug(s"streaming started on $exchange")
+    exchanges.foreach {
+      case (name, actor) =>
+        actor.ask(ref => StartStreaming(ref))
+        log.debug(s"streaming started on $name")
     }
     initialized()
   }
