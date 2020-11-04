@@ -109,7 +109,8 @@ private[coinbase] class CoinbasePublicDataInquirer(context: ActorContext[PublicD
             context.log.error(s"query products failed with: $error")
             throw new RuntimeException()
         },
-        globalConfig.httpTimeout.plus(500.millis)).toSet
+        globalConfig.httpTimeout.plus(500.millis)
+      ).toSet
 
     tradePairs = coinbaseTradePairs.map(_.toTradePair)
     context.log.info("pulled trade pairs")
@@ -117,8 +118,14 @@ private[coinbase] class CoinbasePublicDataInquirer(context: ActorContext[PublicD
 
   def init(): Unit = {
     context.log.debug("starting "+getClass.getSimpleName)
-    registerAssets()
-    pullTradePairs()
+    try {
+      registerAssets()
+      pullTradePairs()
+    } catch {
+      case e:Throwable =>
+        context.log.error("init failed", e)
+        throw e
+    }
   }
 
   override def onMessage(message: Command): Behavior[Command] = {
