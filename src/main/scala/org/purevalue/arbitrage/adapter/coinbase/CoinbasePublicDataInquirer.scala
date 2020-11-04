@@ -103,11 +103,12 @@ private[coinbase] class CoinbasePublicDataInquirer(context: ActorContext[PublicD
               .filter(e => e.status == "online" && !e.trading_disabled && !e.cancel_only && !e.post_only)
               .map(_.toCoinbaseTradePair)
               .filterNot(e => exchangeConfig.assetBlocklist.contains(e.baseAsset) || exchangeConfig.assetBlocklist.contains(e.quoteAsset))
+
           case Right(error) =>
             context.log.error(s"query products failed with: $error")
             throw new RuntimeException()
         },
-        globalConfig.httpTimeout).toSet
+        globalConfig.httpTimeout.plus(500.millis)).toSet
 
     tradePairs = coinbaseTradePairs.map(_.toTradePair)
   }
