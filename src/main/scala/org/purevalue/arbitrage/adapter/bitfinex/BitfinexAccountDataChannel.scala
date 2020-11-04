@@ -333,7 +333,8 @@ private[bitfinex] class BitfinexAccountDataChannel(context: ActorContext[Account
             context.self ! OnStreamsRunning()
             None
           case "auth" =>
-            throw new RuntimeException(s"bitfinex account WebSocket authentification failed with: $j")
+            context.log.error(s"bitfinex account WebSocket authentification failed with: $j")
+            throw new RuntimeException()
           case _ =>
             context.log.info(s"bitfinex: watching event message: $s") // TODO log level
             None
@@ -403,7 +404,9 @@ private[bitfinex] class BitfinexAccountDataChannel(context: ActorContext[Account
             if (context.log.isDebugEnabled) context.log.debug(s"received notification event: $s")
             Nil // ignore notifications
 
-          case x => throw new RuntimeException(s"bitfinex: received data of unidentified stream type '$x': $s")
+          case x =>
+            context.log.error(s"bitfinex: received data of unidentified stream type '$x': $s")
+            throw new RuntimeException()
         }
     }
   }
@@ -415,7 +418,9 @@ private[bitfinex] class BitfinexAccountDataChannel(context: ActorContext[Account
         .map {
           case s: String if s.startsWith("{") => decodeJsonObject(s); Nil
           case s: String if s.startsWith("[") => decodeDataArray(s)
-          case x => throw new RuntimeException(s"unidentified response: $x")
+          case x =>
+            context.log.error(s"unidentified response: $x")
+            throw new RuntimeException()
         }
     case _ =>
       context.log.warn(s"Received non TextMessage")
@@ -526,9 +531,12 @@ private[bitfinex] class BitfinexAccountDataChannel(context: ActorContext[Account
           exchange ! IncomingAccountData(exchangeDataMapping(Seq(order)))
           NewOrderAck(exchangeConfig.name, o.pair, order.orderId.toString, o.id)
         case r: SubmitOrderResponseJson =>
-          throw new RuntimeException(s"newLimitOrder(${o.shortDesc}) failed: $r")
+          context.log.error(s"newLimitOrder(${o.shortDesc}) failed: $r")
+          throw new RuntimeException()
       }
-      case Right(errorResponse) => throw new RuntimeException(s"NewLimitOrder(${o.shortDesc}) failed: $errorResponse")
+      case Right(errorResponse) =>
+        context.log.error(s"NewLimitOrder(${o.shortDesc}) failed: $errorResponse")
+        throw new RuntimeException()
     }
   }
 

@@ -298,7 +298,7 @@ private[coinbase] class CoinbaseAccountDataChannel(context: ActorContext[Account
       case "open"          => Nil // ignore: This message will only be sent for orders which are not fully filled immediately.
       case "match"         => Nil // ignore: A trade occurred between two orders.
       case "activate"      => Nil // ignore: An activate message is sent when a stop order is placed.
-      case "error"         => throw new RuntimeException(j.prettyPrint)
+      case "error"         => context.log.error(j.prettyPrint); throw new RuntimeException()
       case _               => context.log.warn(s"received unhandled message type: $j"); Nil
     }
   } // // @formatter:on
@@ -411,7 +411,9 @@ private[coinbase] class CoinbaseAccountDataChannel(context: ActorContext[Account
           case Left(newOrderResponse) =>
             exchange ! IncomingAccountData(Seq(newOrderResponse.toOrderUpdate(exchangeConfig.name, id => coinbaseTradePairsByProductId(id).toTradePair)))
             newOrderResponse.toNewOrderAck(exchangeConfig.name, id => coinbaseTradePairsByProductId(id).toTradePair, o.id)
-          case Right(error) => throw new RuntimeException(s"newLimitOrder(${o.shortDesc}) failed: $error")
+          case Right(error) =>
+            context.log.error(s"newLimitOrder(${o.shortDesc}) failed: $error")
+            throw new RuntimeException()
         } recover {
         case e: Exception =>
           context.log.error(s"NewLimitOrder(${o.shortDesc}) failed. Request body:\n$requestBody\ncoinbaseTradePair:$coinbaseTradepair\n", e)

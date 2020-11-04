@@ -85,7 +85,9 @@ private[coinbase] class CoinbasePublicDataInquirer(context: ActorContext[PublicD
         currencies.foreach { e =>
           Asset.register(e.id, Some(e.name), None, stepSizeToFractionDigits(e.min_size.toDouble), exchangeConfig.assetSourceWeight)
         }
-      case Right(error) => throw new RuntimeException(s"coinbase: GET /currencies failed: $error")
+      case Right(error) =>
+        context.log.error(s"coinbase: GET /currencies failed: $error")
+        throw new RuntimeException()
     }
   }
 
@@ -101,7 +103,9 @@ private[coinbase] class CoinbasePublicDataInquirer(context: ActorContext[PublicD
               .filter(e => e.status == "online" && !e.trading_disabled && !e.cancel_only && !e.post_only)
               .map(_.toCoinbaseTradePair)
               .filterNot(e => exchangeConfig.assetBlocklist.contains(e.baseAsset) || exchangeConfig.assetBlocklist.contains(e.quoteAsset))
-          case Right(error) => throw new RuntimeException(s"query products failed with: $error")
+          case Right(error) =>
+            context.log.error(s"query products failed with: $error")
+            throw new RuntimeException()
         },
         globalConfig.httpTimeout).toSet
 

@@ -130,8 +130,8 @@ private[coinbase] class CoinbasePublicDataChannel(context: ActorContext[PublicDa
       case TickerChannelName => Seq(j.convertTo[TickerJson])
       case "snapshot"        => Seq(j.convertTo[OrderBookSnapshotJson])
       case "l2update"        => Seq(j.convertTo[OrderBookUpdateJson])
-      case "error"           => throw new RuntimeException(j.prettyPrint)
-      case other             => context.log.warn("received unhandled messageType: $j"); Nil
+      case "error"           => context.log.error(j.prettyPrint); throw new RuntimeException()
+      case _                 => context.log.warn("received unhandled messageType: $j"); Nil
     }
   } // @formatter:on
 

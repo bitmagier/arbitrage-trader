@@ -69,7 +69,9 @@ private[bitfinex] class BitfinexPublicDataInquirer(context: ActorContext[PublicD
           response.head
             .map(e => (e._1, e._2))
             .toMap
-        case Right(errorResponse) => throw new RuntimeException(s"query currency labels failed: $errorResponse")
+        case Right(errorResponse) =>
+          context.log.error(s"query currency labels failed: $errorResponse")
+          throw new RuntimeException()
       }
 
     if (context.log.isDebugEnabled) context.log.debug(s"pub:map:currency:label: $currencyNames")
@@ -99,7 +101,9 @@ private[bitfinex] class BitfinexPublicDataInquirer(context: ActorContext[PublicD
         httpGetJson[List[List[String]], JsValue](s"$BaseRestEndpointPublic/v2/conf/pub:list:pair:exchange"),
         globalConfig.httpTimeout) match {
         case Left(response) => response.head
-        case Right(errorResponse) => throw new RuntimeException(s"query exchange pairs failed: $errorResponse")
+        case Right(errorResponse) =>
+          context.log.error(s"query exchange pairs failed: $errorResponse")
+          throw new RuntimeException()
       }
     if (context.log.isDebugEnabled) context.log.debug(s"pub:list:pair:exchange: $rawTradePairs")
 

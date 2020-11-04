@@ -115,7 +115,9 @@ private[binance] class BinancePublicDataInquirer(context: ActorContext[PublicDat
         httpGetJson[RawBinanceExchangeInformationJson, JsValue](s"$BinanceBaseRestEndpoint/api/v3/exchangeInfo"),
         globalConfig.httpTimeout.plus(500.millis)) match {
         case Left(response) => response
-        case Right(errorResponse) => throw new RuntimeException(s"query exchange info failed: $errorResponse")
+        case Right(errorResponse) =>
+          context.log.error(s"query exchange info failed: $errorResponse")
+          throw new RuntimeException()
       }
 
       val rawBinanceTradePairs = exchangeInfo.symbols
@@ -151,7 +153,9 @@ private[binance] class BinancePublicDataInquirer(context: ActorContext[PublicDat
 
       if (context.log.isDebugEnabled) context.log.debug("received ExchangeInfo")
     } catch {
-      case e: Exception => context.log.error("init failed", e)
+      case e: Exception =>
+        context.log.error("init failed", e)
+        throw new RuntimeException()
     }
   }
 

@@ -427,7 +427,9 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
         case Left(response) =>
           if (context.log.isDebugEnabled) context.log.debug(s"received initial account information: $response")
           IncomingAccountData(exchangeDataMapping(Seq(response)))
-        case Right(errorResponse) => throw new RuntimeException(s"deliverAccountInformation failed: $errorResponse")
+        case Right(errorResponse) =>
+          context.log.error(s"deliverAccountInformation failed: $errorResponse")
+          throw new RuntimeException()
       }.foreach(data => exchange ! data)
   }
 
@@ -439,7 +441,9 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
         case Left(response) =>
           if (context.log.isDebugEnabled) context.log.debug(s"received initial open orders: $response")
           IncomingAccountData(exchangeDataMapping(response))
-        case Right(errorResponse) => throw new RuntimeException(s"deliverOpenOrders failed: $errorResponse")
+        case Right(errorResponse) =>
+          context.log.error(s"deliverOpenOrders failed: $errorResponse")
+          throw new RuntimeException()
       }.foreach(data => exchange ! data)
   }
 
@@ -598,7 +602,8 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
         timers.startTimerAtFixedRate(SendPing(), 30.minutes)
         Future.successful(Done)
       } else {
-        throw new RuntimeException(s"Connection failed: ${upgrade.response.status}")
+        context.log.error(s"Connection failed: ${upgrade.response.status}")
+        throw new RuntimeException()
       }
     }
 
@@ -619,7 +624,9 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
       pullBinanceTradePairs()
       context.self ! Connect()
     } catch {
-      case e: Exception => context.log.error("init failed", e)
+      case e: Exception =>
+        context.log.error("init failed", e)
+        throw new RuntimeException()
     }
   }
 
