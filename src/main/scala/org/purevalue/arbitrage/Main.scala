@@ -37,9 +37,10 @@ object UserRootGuardian {
 
 object Main extends App {
   private val _config = Config.load()
-  val actorSystem: ActorSystem[UserRootGuardian.Reply] = ActorSystem[UserRootGuardian.Reply](UserRootGuardian(config()), "ArbitrageTrader")
+  private val _actorSystem: ActorSystem[UserRootGuardian.Reply] = ActorSystem[UserRootGuardian.Reply](UserRootGuardian(config()), "ArbitrageTrader")
 
   def config(): Config = _config
+  def actorSystem: ActorSystem[UserRootGuardian.Reply] = _actorSystem
 }
 
 

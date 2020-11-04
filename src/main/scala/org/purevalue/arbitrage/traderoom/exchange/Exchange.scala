@@ -262,7 +262,8 @@ class Exchange(context: ActorContext[Exchange.Message],
     context.log.info(s"""[$exchangeName] usable trade pairs: ${tradePairs.toSeq.sortBy(_.toString).mkString(", ")}""")
   }
 
-  override def onMessage(msg: Message): Behavior[Message] = {
+
+  def init(): Unit = {
     context.log.info(s"Initializing Exchange $exchangeName" +
       s"${if (tradeSimulationMode) " in TRADE-SIMULATION mode" else ""}" +
       s"${if (exchangeConfig.doNotTouchTheseAssets.nonEmpty) s" (DoNotTouch: ${exchangeConfig.doNotTouchTheseAssets.mkString(", ")})" else ""}")
@@ -277,13 +278,10 @@ class Exchange(context: ActorContext[Exchange.Message],
       timeout.duration.plus(500.millis)
     )
     context.log.info(s"""[$exchangeName] All trade pairs: ${allTradePairs.toSeq.sorted.mkString(", ")}""")
-    initMode()
   }
 
-
-  def initMode(): Behavior[Message] =
-    Behaviors.receiveMessage[Message] {
-      // @formatter:off
+  override def onMessage(msg: Message): Behavior[Message] = {
+    // @formatter:off
       case IncomingPublicData(data)                 => applyPublicDataset(data); Behaviors.same
       case IncomingAccountData(data)                => data.foreach(applyAccountData); Behaviors.same
       case SimulatedAccountData(dataset)            => applySimulatedAccountData(dataset); Behaviors.same
@@ -320,7 +318,7 @@ class Exchange(context: ActorContext[Exchange.Message],
         replyTo ! determineRealisticLimit(pair, side, quantity)
         Behaviors.same
       // @formatter:on
-    }
+  }
 
   def checkValidity(o: OrderRequest): Unit = {
     if (exchangeConfig.doNotTouchTheseAssets.contains(o.pair.baseAsset)
@@ -577,6 +575,8 @@ class Exchange(context: ActorContext[Exchange.Message],
 
     Behaviors.same
   }
+
+  init()
 
 
   //  override val supervisorStrategy: OneForOneStrategy = {
