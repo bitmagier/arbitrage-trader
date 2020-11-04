@@ -88,7 +88,7 @@ private[coinbase] class CoinbasePublicDataInquirer(context: ActorContext[PublicD
       case Right(error) =>
         throw new RuntimeException(s"coinbase: GET /currencies failed: $error")
     }
-    context.log.info("assets registered")
+    context.log.debug("assets registered")
   }
 
   def pullTradePairs(): Unit = {
@@ -110,7 +110,7 @@ private[coinbase] class CoinbasePublicDataInquirer(context: ActorContext[PublicD
       ).toSet
 
     tradePairs = coinbaseTradePairs.map(_.toTradePair)
-    context.log.info("pulled trade pairs")
+    context.log.debug("pulled trade pairs")
   }
 
   def init(): Unit = {

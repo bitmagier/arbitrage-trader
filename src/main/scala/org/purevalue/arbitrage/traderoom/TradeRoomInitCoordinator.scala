@@ -140,9 +140,12 @@ class TradeRoomInitCoordinator(context: ActorContext[TradeRoomInitCoordinator.Re
     msg match {
       case AllTradePairs(exchange, pairs) =>
         allTradePairs = allTradePairs + (exchange -> pairs)
+        context.log.debug(s"received trade pairs for $exchange")
+
         if (allTradePairs.keySet != exchanges.keySet) {
           Behaviors.same
         } else {
+          context.log.info("trade pairs received")
           determineUsableTradepairs()
           pushUsableTradePairs()
         }
