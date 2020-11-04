@@ -11,6 +11,7 @@ import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer.WorkingConte
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.OrderBookTooFlatException
 import org.purevalue.arbitrage.traderoom.{OrderRequest, TradePair, TradeRoom}
 import org.purevalue.arbitrage.{Config, ExchangeConfig, Main, UserRootGuardian}
+import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor, Future}
@@ -43,6 +44,8 @@ class LiquidityBalancerRun(context: ActorContext[LiquidityBalancerRun.Command],
 
   import LiquidityBalancerRun._
 
+  private val log = LoggerFactory.getLogger(getClass)
+
   private implicit val system: ActorSystem[UserRootGuardian.Reply] = Main.actorSystem
   private implicit val executionContext: ExecutionContextExecutor = system.executionContext
   private implicit val timeout: Timeout = config.global.internalCommunicationTimeout
@@ -57,7 +60,7 @@ class LiquidityBalancerRun(context: ActorContext[LiquidityBalancerRun.Command],
         tradeRoom.ask(ref => TradeRoom.PlaceLiquidityTransformationOrder(o, ref))
           .recover {
             case e: Exception =>
-              context.log.error(s"[${exchangeConfig.name}] Error while placing liquidity tx order $o", e)
+              log.error(s"[${exchangeConfig.name}] Error while placing liquidity tx order $o", e)
               None
           }
       )
@@ -85,7 +88,7 @@ class LiquidityBalancerRun(context: ActorContext[LiquidityBalancerRun.Command],
       } while (Instant.now.isBefore(orderFinishDeadline))
     }
     if (stillUnfinished.isEmpty) {
-      context.log.debug(s"[${exchangeConfig.name}] all ${orderRefs.size} liquidity transaction(s) finished")
+      log.debug(s"[${exchangeConfig.name}] all ${orderRefs.size} liquidity transaction(s) finished")
     } else { // should not happen, because TradeRoom/Exchange doing cleanup unfinished orders by themself!
       throw new RuntimeException(s"Not all liquidity tx orders did finish. Still unfinished: [$stillUnfinished]")
     }
@@ -97,8 +100,8 @@ class LiquidityBalancerRun(context: ActorContext[LiquidityBalancerRun.Command],
     ).onComplete {
       // @formatter:off
       case Success(orderRefs)                    => waitUntilLiquidityOrdersFinished(orderRefs)
-      case Failure(e: OrderBookTooFlatException) => context.log.warn(s"[code improved needed] [${exchangeConfig.name}] Cannot perform liquidity housekeeping because the order book of trade pair ${e.tradePair} was too flat")
-      case Failure(e)                            => context.log.error(s"[${exchangeConfig.name}] liquidity houskeeping failed", e)
+      case Failure(e: OrderBookTooFlatException) => log.warn(s"[code improved needed] [${exchangeConfig.name}] Cannot perform liquidity housekeeping because the order book of trade pair ${e.tradePair} was too flat")
+      case Failure(e)                            => log.error(s"[${exchangeConfig.name}] liquidity houskeeping failed", e)
       // @formatter:on
     }
   }

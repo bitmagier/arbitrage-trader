@@ -16,6 +16,7 @@ import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLoc
 import org.purevalue.arbitrage.traderoom.{Asset, CryptoValue, ExchangeInitStuff, Order, OrderRequest, OrderUpdate, TradePair, TradeRoom, TradeRoomInitCoordinator, TradeSide, exchange}
 import org.purevalue.arbitrage.util.{Emoji, InitSequence, InitStep, StaleDataException, WaitingFor}
 import org.purevalue.arbitrage.{Config, ExchangeConfig, Main, UserRootGuardian}
+import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.concurrent.{Await, ExecutionContextExecutor, Future}
@@ -85,6 +86,8 @@ class Exchange(context: ActorContext[Exchange.Message],
                initStuff: ExchangeInitStuff) extends AbstractBehavior[Exchange.Message](context) {
 
   import Exchange._
+
+  private val log = LoggerFactory.getLogger(getClass)
 
   private case class ExchangePublicData(var ticker: Map[TradePair, Ticker],
                                         var orderBook: Map[TradePair, OrderBook],
@@ -210,7 +213,7 @@ class Exchange(context: ActorContext[Exchange.Message],
         timers.startTimerWithFixedDelay(LiquidityHouseKeeping(), 30.seconds)
       }
     }
-    context.log.info(s"${Emoji.Excited}  [$exchangeName] completely initialized and running")
+    log.info(s"${Emoji.Excited}  [$exchangeName] completely initialized and running")
 
     tradeRoom.get ! TradeRoomJoined(exchangeName)
 
@@ -229,7 +232,7 @@ class Exchange(context: ActorContext[Exchange.Message],
     val maxWaitTime = config.global.internalCommunicationTimeoutDuringInit.duration
     val pioneerOrderMaxWaitTime: FiniteDuration = maxWaitTime.plus(FiniteDuration(config.tradeRoom.maxOrderLifetime.toMillis, TimeUnit.MILLISECONDS))
     val initSequence = new InitSequence(
-      context.log,
+      log,
       exchangeName,
       List(
         InitStep("start account-data-manager", () => startAccountDataManager()),
@@ -258,12 +261,12 @@ class Exchange(context: ActorContext[Exchange.Message],
 
   def setUsableTradePairs(tradePairs: Set[TradePair]): Unit = {
     usableTradePairs = tradePairs
-    context.log.info(s"""[$exchangeName] usable trade pairs: ${tradePairs.toSeq.sortBy(_.toString).mkString(", ")}""")
+    log.info(s"""[$exchangeName] usable trade pairs: ${tradePairs.toSeq.sortBy(_.toString).mkString(", ")}""")
   }
 
 
   def init(): Unit = {
-    context.log.info(s"Initializing Exchange $exchangeName" +
+    log.info(s"Initializing Exchange $exchangeName" +
       s"${if (tradeSimulationMode) " in TRADE-SIMULATION mode" else ""}" +
       s"${if (exchangeConfig.doNotTouchTheseAssets.nonEmpty) s" (DoNotTouch: ${exchangeConfig.doNotTouchTheseAssets.mkString(", ")})" else ""}")
 
@@ -276,7 +279,7 @@ class Exchange(context: ActorContext[Exchange.Message],
       publicDataInquirer.ask(ref => PublicDataInquirer.GetAllTradePairs(ref)),
       timeout.duration.plus(500.millis)
     )
-    context.log.info(s"""[$exchangeName] All trade pairs: ${allTradePairs.toSeq.sorted.mkString(", ")}""")
+    log.info(s"""[$exchangeName] All trade pairs: ${allTradePairs.toSeq.sorted.mkString(", ")}""")
   }
 
   override def onMessage(message: Message): Behavior[Message] = message match {
@@ -299,7 +302,7 @@ class Exchange(context: ActorContext[Exchange.Message],
     case StartStreaming(replyTo)                  => startStreaming(replyTo); Behaviors.same
     case AccountDataChannelInitialized()          => accountDataChannelInitialized.arrived(); Behaviors.same
     case PioneerOrderSucceeded()                  => pioneerOrdersSucceeded.arrived(); Behaviors.same
-    case PioneerOrderFailed(e)                    => context.log.error(s"[$exchangeName] Pioneer order failed", e); stop()
+    case PioneerOrderFailed(e)                    => log.error(s"[$exchangeName] Pioneer order failed", e); stop()
     case j: JoinTradeRoom                         => joinTradeRoom(j); Behaviors.same
 
     case GetAllTradePairs(replyTo)                => replyTo ! TradeRoomInitCoordinator.AllTradePairs(exchangeName, allTradePairs); Behaviors.same
@@ -342,16 +345,16 @@ class Exchange(context: ActorContext[Exchange.Message],
       if (tradeSimulationMode) tradeSimulator.get ! forwardMsg
       else accountDataChannel ! forwardMsg
     } else {
-      context.log.debug(s"[$exchangeName] onCancelOrder($c): order already gone")
+      log.debug(s"[$exchangeName] onCancelOrder($c): order already gone")
     }
   }
 
   def guardedRetry(e: ExchangePublicStreamData): Unit = {
     if (e.applyDeadline.isEmpty) e.applyDeadline = Some(Instant.now.plus(e.MaxApplyDelay))
     if (Instant.now.isAfter(e.applyDeadline.get)) {
-      context.log.warn(s"ignoring update [timeout] $e")
+      log.warn(s"ignoring update [timeout] $e")
     } else {
-      context.log.debug(s"scheduling retry of $e")
+      log.debug(s"scheduling retry of $e")
       context.pipeToSelf(
         Future {
           concurrent.blocking {
@@ -396,9 +399,9 @@ class Exchange(context: ActorContext[Exchange.Message],
   private def guardedRetry(e: ExchangeAccountStreamData): Unit = {
     if (e.applyDeadline.isEmpty) e.applyDeadline = Some(Instant.now.plus(e.MaxApplyDelay))
     if (Instant.now.isAfter(e.applyDeadline.get)) {
-      context.log.debug(s"ignoring update [timeout] $e")
+      log.debug(s"ignoring update [timeout] $e")
     } else {
-      context.log.debug(s"scheduling retry of $e")
+      log.debug(s"scheduling retry of $e")
       context.pipeToSelf(
         Future(concurrent.blocking {
           Thread.sleep(20)
@@ -408,7 +411,7 @@ class Exchange(context: ActorContext[Exchange.Message],
   }
 
   private def applyAccountData(data: ExchangeAccountStreamData): Unit = {
-    if (context.log.isDebugEnabled) context.log.debug(s"applying incoming $data")
+    if (log.isTraceEnabled) log.trace(s"applying incoming $data")
 
     data match {
       case w: WalletBalanceUpdate =>
@@ -458,7 +461,7 @@ class Exchange(context: ActorContext[Exchange.Message],
 
   def applySimulatedAccountData(dataset: ExchangeAccountStreamData): Unit = {
     if (!config.tradeRoom.tradeSimulation) throw new RuntimeException
-    context.log.debug(s"Applying simulation data ...")
+    log.trace(s"Applying simulation data ...")
     applyAccountData(dataset)
   }
 
@@ -469,7 +472,7 @@ class Exchange(context: ActorContext[Exchange.Message],
     val lastSeen: Instant = (publicData.heartbeatTS.toSeq ++ publicData.tickerTS.toSeq ++ publicData.orderBookTS.toSeq).max
     if (Duration.between(lastSeen, Instant.now).compareTo(config.tradeRoom.restarWhenDataStreamIsOlderThan) > 0) {
       val msg = s"[$exchangeName] public data is outdated!"
-      context.log.error(msg) // TODO check if we need to log here too. Better only the exception get caught and logged
+      log.error(msg) // TODO check if we need to log here too. Better only the exception get caught and logged
       throw new StaleDataException(msg)
     } else false
   }
@@ -505,7 +508,7 @@ class Exchange(context: ActorContext[Exchange.Message],
           LiquidityBalancerRun(config, exchangeConfig, usableTradePairs, context.self, tradeRoom.get, wc),
           s"${exchangeConfig.name}-liquidity-balancer-run")
 
-      case Failure(cause) => context.log.error(s"[$exchangeName]  liquidityHouseKeeping()", cause)
+      case Failure(cause) => log.error(s"[$exchangeName]  liquidityHouseKeeping()", cause)
     }
   }
 
@@ -518,7 +521,7 @@ class Exchange(context: ActorContext[Exchange.Message],
     val order = accountData.activeOrders.get(ref)
     accountData.activeOrders = accountData.activeOrders - ref
     if (order.isDefined) {
-      context.log.info(s"[$exchangeName] cleaned up orphan finished order ${order.get}")
+      log.info(s"[$exchangeName] cleaned up orphan finished order ${order.get}")
     }
   }
 
@@ -564,7 +567,7 @@ class Exchange(context: ActorContext[Exchange.Message],
       case GetActiveOrders(replyTo)        => replyTo ! accountData.activeOrders
       case GetFullDataSnapshot(replyTo)    => replyTo ! exchangeDataSnapshot
 
-      case AccountDataChannelInitialized() => context.log.info(s"[$exchangeName] account data channel re-initialized")
+      case AccountDataChannelInitialized() => log.info(s"[$exchangeName] account data channel re-initialized")
 
       case DataHouseKeeping()              => dataHouseKeeping()
       case LiquidityHouseKeeping()         => liquidityHouseKeeping()

@@ -9,6 +9,7 @@ import org.purevalue.arbitrage.traderoom.exchange.{Ask, Bid}
 import org.purevalue.arbitrage.traderoom.{Asset, TradePair}
 import org.purevalue.arbitrage.util.HttpUtil.httpGetJson
 import org.purevalue.arbitrage.util.Util.stepSizeToFractionDigits
+import org.slf4j.LoggerFactory
 import spray.json._
 
 import scala.concurrent.Await
@@ -102,6 +103,8 @@ private[binance] class BinancePublicDataInquirer(context: ActorContext[PublicDat
 
   import PublicDataInquirer._
 
+  private val log = LoggerFactory.getLogger(getClass)
+
   var exchangeInfo: RawBinanceExchangeInformationJson = _
   var binanceTradePairs: Set[BinanceTradePair] = _
 
@@ -116,7 +119,7 @@ private[binance] class BinancePublicDataInquirer(context: ActorContext[PublicDat
         globalConfig.httpTimeout.plus(500.millis)) match {
         case Left(response) => response
         case Right(errorResponse) =>
-          context.log.error(s"query exchange info failed: $errorResponse")
+          log.error(s"query exchange info failed: $errorResponse")
           throw new RuntimeException()
       }
 
@@ -151,10 +154,10 @@ private[binance] class BinancePublicDataInquirer(context: ActorContext[PublicDat
         .filterNot(e => exchangeConfig.assetBlocklist.contains(e.baseAsset) || exchangeConfig.assetBlocklist.contains(e.quoteAsset))
         .toSet
 
-      if (context.log.isDebugEnabled) context.log.debug("received ExchangeInfo")
+      if (log.isTraceEnabled) log.trace("received ExchangeInfo")
     } catch {
       case e: Exception =>
-        context.log.error("init failed", e)
+        log.error("init failed", e)
         throw new RuntimeException()
     }
   }

@@ -168,7 +168,6 @@ private[bitfinex] object WebSocketJsonProtocoll extends DefaultJsonProtocol {
 ////////////////////////////////////////////////
 
 object BitfinexPublicDataChannel {
-
   def apply(globalConfig: GlobalConfig,
             exchangeConfig: ExchangeConfig,
             relevantTradePairs: Set[TradePair],
@@ -188,6 +187,7 @@ private[bitfinex] class BitfinexPublicDataChannel(context: ActorContext[PublicDa
                                                   relevantTradePairs: Set[TradePair],
                                                   exchange: ActorRef[Exchange.Message],
                                                   publicDataInquirer: ActorRef[PublicDataInquirer.Command]) extends PublicDataChannel(context) {
+  private val log = LoggerFactory.getLogger(getClass)
 
   val WebSocketEndpoint: Uri = Uri(s"wss://api-pub.bitfinex.com/ws/2")
   val MaximumNumberOfChannelsPerConnection: Int = 25
@@ -211,7 +211,7 @@ private[bitfinex] class BitfinexPublicDataChannel(context: ActorContext[PublicDa
     case b: RawOrderBookSnapshotJson => b.toOrderBook(exchangeConfig.name, orderBookChannelTradepair(connectionId, b.channelId))
     case b: RawOrderBookUpdateJson   => b.toOrderBookUpdate(exchangeConfig.name, orderBookChannelTradepair(connectionId, b.channelId))
     case RawHeartbeat()              => Heartbeat(Instant.now)
-    case other                       => context.log.error(s"unhandled object: $other"); throw new NotImplementedError()
+    case other                       => log.error(s"unhandled object: $other"); throw new NotImplementedError()
     // @formatter:on
   }
 
@@ -222,7 +222,7 @@ private[bitfinex] class BitfinexPublicDataChannel(context: ActorContext[PublicDa
 
   def handleEvent(connectionId: Int, event: String, j: JsObject): Unit = event match {
     case "subscribed" =>
-      if (context.log.isDebugEnabled) context.log.debug(s"received SubscribeResponse message: $j")
+      if (log.isTraceEnabled) log.trace(s"received SubscribeResponse message: $j")
       val channel = j.fields("channel").convertTo[String]
       val channelId = j.fields("chanId").convertTo[Int]
 
@@ -234,7 +234,7 @@ private[bitfinex] class BitfinexPublicDataChannel(context: ActorContext[PublicDa
           val symbol = j.fields("symbol").convertTo[String]
           orderBookSymbolsByConnectionIdAndChannelId.put((connectionId, channelId), symbol)
 
-        case _ => context.log.error(s"unknown channel subscribe response for: $channel")
+        case _ => log.error(s"unknown channel subscribe response for: $channel")
       }
     case "error" =>
       val errorName: String = j.fields("code").convertTo[Int] match {
@@ -248,9 +248,9 @@ private[bitfinex] class BitfinexPublicDataChannel(context: ActorContext[PublicDa
         case 10401 => "Not subscribed"
         case _ => "unknown error code"
       }
-      context.log.error(s"received error ($errorName) message: $j")
-    case "info" => context.log.debug(s"received info message: $j")
-    case _ => context.log.warn(s"received unidentified message: $j")
+      log.error(s"received error ($errorName) message: $j")
+    case "info" => log.debug(s"received info message: $j")
+    case _ => log.warn(s"received unidentified message: $j")
   }
 
   def decodeJsonObject(s: String): IncomingPublicBitfinexJson = JsonMessage(JsonParser(s).asJsObject)
@@ -281,11 +281,11 @@ private[bitfinex] class BitfinexPublicDataChannel(context: ActorContext[PublicDa
         }
         case Some(_) => throw new NotImplementedError()
         case None =>
-          context.log.error(s"bitfinex: data message with unknown channelId $channelId received: $dataChannelMessage")
+          log.error(s"bitfinex: data message with unknown channelId $channelId received: $dataChannelMessage")
           UnknownChannelDataMessage(dataChannelMessage)
       }
     } else {
-      context.log.error(s"bitfinex: Unable to decode bifinex data message:\n$dataChannelMessage")
+      log.error(s"bitfinex: Unable to decode bifinex data message:\n$dataChannelMessage")
       UnknownChannelDataMessage(dataChannelMessage)
     }
   }
@@ -298,27 +298,27 @@ private[bitfinex] class BitfinexPublicDataChannel(context: ActorContext[PublicDa
           case s: String if s.startsWith("{") => decodeJsonObject(s)
           case s: String if s.startsWith("[") => decodeDataArray(connectionId, s)
           case x =>
-            context.log.error(s"unidentified response: $x")
+            log.error(s"unidentified response: $x")
             Nil
         } map {
         case JsonMessage(j) if j.fields.contains("event") =>
           handleEvent(connectionId, j.fields("event").convertTo[String], j)
           Nil
         case j: JsonMessage =>
-          context.log.warn(s"Unhandled JsonMessage received: $j")
+          log.warn(s"Unhandled JsonMessage received: $j")
           Nil
         case _: UnknownChannelDataMessage =>
           Nil
         case m: IncomingPublicBitfinexJson =>
-          if (context.log.isDebugEnabled) context.log.debug(s"received: $m")
+          if (log.isTraceEnabled) log.trace(s"received: $m")
           Seq(m)
         case other =>
-          context.log.warn(s"${Emoji.Confused}  Unhandled object $other")
+          log.warn(s"${Emoji.Confused}  Unhandled object $other")
           Nil
       }
 
     case msg: Message =>
-      context.log.warn(s"Unexpected kind of message received: $msg")
+      log.warn(s"Unexpected kind of message received: $msg")
       Future.successful(Nil)
   }
 
@@ -342,7 +342,7 @@ private[bitfinex] class BitfinexPublicDataChannel(context: ActorContext[PublicDa
     futureResponse.flatMap {
       upgrade =>
         if (upgrade.response.status == StatusCodes.SwitchingProtocols) {
-          context.log.info(s"connected")
+          log.info(s"connected")
           Future.successful(Done)
         } else {
           throw new RuntimeException(s"Connection failed: ${upgrade.response.status}")
@@ -370,20 +370,20 @@ private[bitfinex] class BitfinexPublicDataChannel(context: ActorContext[PublicDa
   }
 
   override def connect(): Unit = {
-    context.log.info("initializing bitfinex public data channel")
+    log.info("initializing bitfinex public data channel")
     initBitfinexTradePairBySymbol()
 
-    context.log.info(s"connecting WebSockets ...")
+    log.info(s"connecting WebSockets ...")
     wsList = List()
     connectedList = List()
     var connectionId: Int = 0
     relevantTradePairs.grouped(MaximumNumberOfChannelsPerConnection).foreach { partition =>
-      context.log.debug(s"""starting WebSocket stream partition for Tickers ${partition.mkString(",")}""")
+      log.debug(s"""starting WebSocket stream partition for Tickers ${partition.mkString(",")}""")
       val subscribeMessages: List[SubscribeRequestJson] = partition.map(e => subscribeTickerMessage(e)).toList
       connectionId += 1
       val ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow(connectionId, subscribeMessages))
       ws._2.future.onComplete { e =>
-        context.log.info(s"connection closed")
+        log.info(s"connection closed")
         context.self ! Disconnected()
       }
       wsList = ws :: wsList
@@ -391,18 +391,18 @@ private[bitfinex] class BitfinexPublicDataChannel(context: ActorContext[PublicDa
     }
 
     relevantTradePairs.grouped(MaximumNumberOfChannelsPerConnection).foreach { partition =>
-      context.log.debug(s"""starting WebSocket stream partition for OrderBooks ${partition.mkString(",")}""")
+      log.debug(s"""starting WebSocket stream partition for OrderBooks ${partition.mkString(",")}""")
       val subscribeMessages: List[SubscribeRequestJson] = partition.map(e => subscribeOrderBookMessage(e)).toList
       connectionId += 1
       val ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow(connectionId, subscribeMessages))
       ws._2.future.onComplete { e =>
-        context.log.info(s"connection closed")
+        log.info(s"connection closed")
         context.self ! Disconnected()
       }
       wsList = ws :: wsList
       connectedList = createConnected(ws._1) :: connectedList
     }
-    context.log.info(s"${wsList.size} WebSockets started")
+    log.info(s"${wsList.size} WebSockets started")
   }
 
   override def postStop(): Unit = {

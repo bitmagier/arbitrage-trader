@@ -19,6 +19,7 @@ import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLoc
 import org.purevalue.arbitrage.traderoom.exchange.{Exchange, LiquidityBalancerStats, LiquidityManager, OrderBook, Ticker, TickerSnapshot, Wallet}
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.util.{Emoji, WrongAssumption}
+import org.slf4j.LoggerFactory
 
 import scala.collection.concurrent.TrieMap
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
@@ -104,6 +105,8 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
                 usableTradePairs: Map[String, Set[TradePair]])
   extends AbstractBehavior[TradeRoom.Message](context) {
 
+  private val log = LoggerFactory.getLogger(getClass)
+
   import TradeRoom._
 
   private implicit val system: ActorSystem[UserRootGuardian.Reply] = Main.actorSystem
@@ -158,7 +161,9 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
    *
    * @return all (locked=true) or nothing
    */
-  def lockAllRequiredLiquidity(tradePattern: String, coins: Seq[LocalCryptoValue], dontUseTheseReserveAssets: Set[Asset]): Future[Option[List[LiquidityLock]]] = {
+  def lockAllRequiredLiquidity(tradePattern: String, coins: Seq[LocalCryptoValue], dontUseTheseReserveAssets: Set[Asset]):
+  Future[Option[List[LiquidityLock]]] = {
+
     implicit val timeout: Timeout = config.global.internalCommunicationTimeout
     Future.sequence(
       coins
@@ -185,10 +190,6 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
           exchanges(e.exchange) ! LiquidityLockClearance(e.liquidityRequestId)
         }
         None
-    } recover {
-      case e: Exception =>
-        context.log.error("Error while locking liquidity", e)
-        None
     }
   }
 
@@ -205,7 +206,7 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
 
     // this should not occur - but here is a last guard
     if (activeLiquidityTx.keys.exists(ref => ref.exchange == request.exchange && ref.pair == request.pair)) {
-      context.log.warn(s"Ignoring liquidity tx because a similar one (same trade pair on same exchange) is still in place: $request")
+      log.warn(s"Ignoring liquidity tx because a similar one (same trade pair on same exchange) is still in place: $request")
       return Future.successful(None)
     }
 
@@ -227,17 +228,17 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
         exchanges(request.exchange).ask(ref => NewLimitOrder(request, ref)).map { newOrderAck =>
           val ref: OrderRef = newOrderAck.toOrderRef
           activeLiquidityTx.update(ref, LiquidityTx(request, ref, lock, Instant.now))
-          context.log.debug(s"successfully placed liquidity tx order $newOrderAck")
+          log.debug(s"successfully placed liquidity tx order $newOrderAck")
           Some(ref)
         } recover {
           case e: Exception =>
-            context.log.error(s"failed to place new liquidity tx $request", e)
+            log.error(s"failed to place new liquidity tx $request", e)
             exchanges(request.exchange) ! LiquidityLockClearance(lock.liquidityRequestId)
             None
         }
 
       case None =>
-        context.log.debug(s"could not acquire lock for liquidity tx")
+        log.debug(s"could not acquire lock for liquidity tx")
         Future.successful(None)
     }
   }
@@ -251,7 +252,7 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
 
     if (bundle.orderRequests.exists(e =>
       doNotTouchAssets(e.exchange).intersect(e.pair.involvedAssets).nonEmpty)) {
-      context.log.warn(s"ignoring $bundle containing a DO-NOT-TOUCH asset")
+      log.warn(s"ignoring $bundle containing a DO-NOT-TOUCH asset")
     }
 
     collectTradeContext().foreach {
@@ -267,13 +268,13 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
               placeOrders(bundle.orderRequests) onComplete {
                 case Success(orderRefs: Seq[OrderRef]) =>
                   registerOrderBundle(bundle, lockedLiquidity, orderRefs)
-                  context.log.info(s"${Emoji.Excited}  Placed checked $bundle (estimated total win: ${formatDecimal(totalWin, 2)})")
+                  log.info(s"${Emoji.Excited}  Placed checked $bundle (estimated total win: ${formatDecimal(totalWin, 2)})")
 
-                case Failure(e) => context.log.error("placing orders failed", e)
+                case Failure(e) => log.error("placing orders failed", e)
               }
 
-            case Success(None) => context.log.info(s"""${Emoji.Robot}  Liquidity for trades not yet available: ${requiredLiquidity.mkString(", ")}""")
-            case Failure(e) => context.log.error("lockAllRequiredLiquidity failed", e)
+            case Success(None) => log.info(s"""${Emoji.Robot}  Liquidity for trades not yet available: ${requiredLiquidity.mkString(", ")}""")
+            case Failure(e) => log.error("lockAllRequiredLiquidity failed", e)
           }
         }
     }
@@ -288,12 +289,12 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
     def logWalletOverview(wallets: Map[String, Wallet], tickers: Map[String, Map[TradePair, Ticker]]): Unit = {
       wallets.values.foreach { w =>
         val walletOverview: String = w.toOverviewString(config.exchanges(w.exchange).usdEquivalentCoin, tickers(w.exchange))
-        context.log.info(s"${Emoji.Robot}  $walletOverview")
+        log.info(s"${Emoji.Robot}  $walletOverview")
       }
     }
 
     def logOrderBundleSafetyGuardStats(): Unit = {
-      context.log.info(s"${Emoji.Robot}  OrderBundleSafetyGuard decision stats: [${orderBundleSafetyGuard.unsafeStats.mkString("|")}]")
+      log.info(s"${Emoji.Robot}  OrderBundleSafetyGuard decision stats: [${orderBundleSafetyGuard.unsafeStats.mkString("|")}]")
     }
 
     def logOrderGainStats(referenceTicker: Map[TradePair, Ticker]): Unit = {
@@ -315,7 +316,7 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
           (_, tp) => referenceTicker.get(tp).map(_.priceEstimate))
 
       val lastHourSumUSDT: Double = lastHourArbitrageSumUSD + lastHourLiquidityTxSumUSDT
-      context.log.info(s"${Emoji.Robot}  Last 1h: cumulated gain: ${formatDecimal(lastHourSumUSDT, 2)} USD " +
+      log.info(s"${Emoji.Robot}  Last 1h: cumulated gain: ${formatDecimal(lastHourSumUSDT, 2)} USD " +
         s"(arbitrage orders: ${formatDecimal(lastHourArbitrageSumUSD, 2)} USD, " +
         s"liquidity tx: ${formatDecimal(lastHourLiquidityTxSumUSDT, 2)} USD) ")
 
@@ -332,7 +333,7 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
           reportingUsdEquivalentCoin,
           (_, tp) => referenceTicker.get(tp).map(_.priceEstimate))
       val totalSumUSDT: Double = totalArbitrageSumUSDT + totalLiquidityTxSumUSDT
-      context.log.info(s"${Emoji.Robot}  Total cumulated gain: ${formatDecimal(totalSumUSDT, 2)} USD " +
+      log.info(s"${Emoji.Robot}  Total cumulated gain: ${formatDecimal(totalSumUSDT, 2)} USD " +
         s"(arbitrage orders: ${formatDecimal(totalArbitrageSumUSDT, 2)} USD, liquidity tx: " +
         s"${formatDecimal(totalLiquidityTxSumUSDT, 2)} USD) ")
 
@@ -349,7 +350,7 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
       val liquidityTxOrders1h = finishedLiquidityTxs.values.filter(_.finishTime.isAfter(lastHourLimit)).map(_.finishedOrder)
       val orderBundleOrders1h = finishedOrderBundles.filter(_.finishTime.isAfter(lastHourLimit)).flatMap(_.finishedOrders)
 
-      context.log.info(
+      log.info(
         s"""${Emoji.Robot}  Last 1h final order status: trader tx:[${orderStateStats(orderBundleOrders1h).mkString(",")}],
            |liquidity tx: [${orderStateStats(liquidityTxOrders1h).mkString(",")}]""".stripMargin)
     }
@@ -385,11 +386,10 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
 
     activeOrderBundles.synchronized { // to avoid, that the cleanup-code of another OrderUpdateTrigger of the same order-bundle is race-conditioning with us
 
-      implicit val timeout: Timeout = config.global.internalCommunicationTimeout
       val bundle: OrderBundle = activeOrderBundles.get(orderBundleId) match {
         case Some(bundle) => bundle
         case None =>
-          context.log.warn(s"OrderBundle with ID=$orderBundleId is gone")
+          log.warn(s"OrderBundle with ID=$orderBundleId is gone")
           return
       }
       val of: Seq[Future[Option[Order]]] = bundle.orderRefs.map(e => activeOrder(e))
@@ -414,12 +414,12 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
           }
 
           if (orders.exists(_.orderStatus != OrderStatus.FILLED)) {
-            context.log.warn(s"${Emoji.Questionable}  ${finishedOrderBundle.shortDesc} did not complete. Orders: \n${orders.mkString("\n")}")
+            log.warn(s"${Emoji.Questionable}  ${finishedOrderBundle.shortDesc} did not complete. Orders: \n${orders.mkString("\n")}")
           } else if (bill.sumUSDAtCalcTime >= 0) {
             val emoji = if (bill.sumUSDAtCalcTime >= 1.0) Emoji.Opera else Emoji.Winning
-            context.log.info(s"$emoji  ${finishedOrderBundle.shortDesc} completed with a win of ${formatDecimal(bill.sumUSDAtCalcTime, 2)} USD")
+            log.info(s"$emoji  ${finishedOrderBundle.shortDesc} completed with a win of ${formatDecimal(bill.sumUSDAtCalcTime, 2)} USD")
           } else {
-            context.log.warn(s"${Emoji.SadFace}  ${finishedOrderBundle.shortDesc} completed with a loss of ${formatDecimal(bill.sumUSDAtCalcTime, 2)} USD ${Emoji.LookingDown}:\n $finishedOrderBundle")
+            log.warn(s"${Emoji.SadFace}  ${finishedOrderBundle.shortDesc} completed with a loss of ${formatDecimal(bill.sumUSDAtCalcTime, 2)} USD ${Emoji.LookingDown}:\n $finishedOrderBundle")
           }
       }
 
@@ -452,18 +452,18 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
       val orderBundleId: UUID = orderBundle.orderRequestBundle.id
       orders.flatten match {
         case order: Seq[Order] if order.isEmpty =>
-          context.log.error(s"No order present for ${orderBundle.shortDesc} -> cleaning up")
+          log.error(s"No order present for ${orderBundle.shortDesc} -> cleaning up")
           cleanupOrderBundle(orderBundleId)
         case order: Seq[Order] if order.forall(_.orderStatus == OrderStatus.FILLED) =>
-          if (context.log.isDebugEnabled) context.log.debug(s"All orders of ${orderBundle.shortDesc} FILLED -> finishing it")
+          if (log.isDebugEnabled) log.debug(s"All orders of ${orderBundle.shortDesc} FILLED -> finishing it")
           cleanupOrderBundle(orderBundleId)
-          context.log.info(s"${Emoji.Robot}  OrderBundle ${orderBundle.shortDesc} successfully finished")
+          log.info(s"${Emoji.Robot}  OrderBundle ${orderBundle.shortDesc} successfully finished")
         case order: Seq[Order] if order.forall(_.orderStatus.isFinal) =>
-          context.log.debug(s"${Emoji.Robot}  All orders of ${orderBundle.shortDesc} have a final state (${order.map(_.orderStatus).mkString(",")}) -> not ideal")
+          if (log.isDebugEnabled) log.debug(s"${Emoji.Robot}  All orders of ${orderBundle.shortDesc} have a final state (${order.map(_.orderStatus).mkString(",")}) -> not ideal")
           cleanupOrderBundle(orderBundleId)
-          context.log.warn(s"${Emoji.Robot}  Finished OrderBundle ${orderBundle.shortDesc}, but NOT all orders are FILLED: $orders")
+          log.warn(s"${Emoji.Robot}  Finished OrderBundle ${orderBundle.shortDesc}, but NOT all orders are FILLED: $orders")
         case order: Seq[Order] => // order bundle still active: nothing to do
-          if (context.log.isDebugEnabled) context.log.debug(s"Watching minor order update for $orderBundle: $order")
+          if (log.isDebugEnabled) log.debug(s"Watching minor order update for $orderBundle: $order")
       }
     }
   }
@@ -473,15 +473,15 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
       case None => throw new WrongAssumption("order must exist")
       case Some(order) =>
         if (order.orderStatus == OrderStatus.FILLED) {
-          context.log.info(s"${Emoji.Robot}  Liquidity tx ${tx.orderRequest.tradeDesc} (externalId:${tx.orderRef.externalOrderId}) FILLED")
+          log.info(s"${Emoji.Robot}  Liquidity tx ${tx.orderRequest.tradeDesc} (externalId:${tx.orderRef.externalOrderId}) FILLED")
           cleanupLiquidityTxOrder(tx)
         }
         else if (order.orderStatus.isFinal) {
-          context.log.warn(s"${Emoji.NoSupport}  Liquidity tx ${tx.orderRef} finished with state ${order.orderStatus}")
+          log.warn(s"${Emoji.NoSupport}  Liquidity tx ${tx.orderRef} finished with state ${order.orderStatus}")
           cleanupLiquidityTxOrder(tx)
         }
         else { // order still active: nothing to do
-          if (context.log.isDebugEnabled) context.log.debug(s"Watching liquidity tx minor order update: $order")
+          if (log.isTraceEnabled) log.trace(s"Watching liquidity tx minor order update: $order")
         }
     }
   }
@@ -509,7 +509,7 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
           activeOrder(t.ref).foreach {
             case None => // order & liquidityTx gone -> nothing there to pay heed to
             case Some(order) =>
-              context.log.warn(s"Got order-update (${t.ref.exchange}: ${t.ref.externalOrderId}) but cannot find active order bundle or liquidity tx for it." +
+              log.warn(s"Got order-update (${t.ref.exchange}: ${t.ref.externalOrderId}) but cannot find active order bundle or liquidity tx for it." +
                 s" Corresponding order is: $order")
             // otherwise, when the active order is already gone, we can just drop that update-trigger, because it comes too late.
             // Then the order from activeOrderBundles/activeLiquidityTx was already cleaned-up by a previous trigger
@@ -537,7 +537,7 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
           }
         }
 
-        context.log.warn(s"${Emoji.Judgemental}  Canceling aged order ${o.shortDesc} $source")
+        log.warn(s"${Emoji.Judgemental}  Canceling aged order ${o.shortDesc} $source")
         exchanges(o.exchange) ! CancelOrder(o.ref, None)
       }
     }
@@ -552,7 +552,7 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
         .filterNot(o => activeOrderBundles.values.exists(_.orderRefs.contains(o._1)))
         .filterNot(o => activeLiquidityTx.contains(o._1))
       if (orphanOrders.nonEmpty) {
-        context.log.warn(s"""unreferenced order(s) on ${orphanOrders.head._1.exchange}: ${orphanOrders.map(_._2.shortDesc).mkString(", ")}""")
+        log.warn(s"""unreferenced order(s) on ${orphanOrders.head._1.exchange}: ${orphanOrders.map(_._2.shortDesc).mkString(", ")}""")
         orphanOrders
           .filter(_._2.orderStatus.isFinal)
           .foreach { o =>
@@ -583,7 +583,7 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
   def onExchangeJoined(exchange: String): Unit = {
     exchangesJoined = exchangesJoined + exchange
     if (exchangesJoined == exchanges.keySet && fooTrader.isEmpty) {
-      context.log.info(s"${Emoji.Satisfied}  All exchanges initialized")
+      log.info(s"${Emoji.Satisfied}  All exchanges initialized")
       startTraders()
     }
   }
@@ -591,9 +591,9 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
 
   def onCancelOrderResult(c: CancelOrderResult): Unit = {
     if (c.success) {
-      context.log.info(s"Cancel order succeeded: $c")
+      log.info(s"Cancel order succeeded: $c")
     } else {
-      context.log.error(s"Cancel order failed: $c")
+      log.error(s"Cancel order failed: $c")
       // TODO error handling for failed cancels
     }
   }
@@ -626,12 +626,12 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
 
   override def onSignal: PartialFunction[Signal, Behavior[Message]] = {
     case PostStop =>
-      context.log.info("TradeRoom stopped")
+      log.info("TradeRoom stopped")
       this
   }
 
-  if (config.tradeRoom.tradeSimulation) context.log.info(s"Starting in trade simulation mode")
-  else context.log.info(s"${Emoji.DoYouEvenLiftBro}  Starting in production mode")
+  if (config.tradeRoom.tradeSimulation) log.info(s"Starting in trade simulation mode")
+  else log.info(s"${Emoji.DoYouEvenLiftBro}  Starting in production mode")
 
   for (exchange <- exchanges.values) {
     exchange ! Exchange.JoinTradeRoom(context.self)

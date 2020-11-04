@@ -9,6 +9,7 @@ import org.purevalue.arbitrage.util.HttpUtil
 import org.purevalue.arbitrage.util.HttpUtil.httpGetJson
 import org.purevalue.arbitrage.util.Util.stepSizeToFractionDigits
 import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig}
+import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, RootJsonFormat}
 
 import scala.concurrent.Await
@@ -71,6 +72,8 @@ private[coinbase] class CoinbasePublicDataInquirer(context: ActorContext[PublicD
 
   import PublicDataInquirer._
 
+  private val log = LoggerFactory.getLogger(getClass)
+
   var tradePairs: Set[TradePair] = _
   var coinbaseTradePairs: Set[CoinbaseTradePair] = _
 
@@ -88,7 +91,7 @@ private[coinbase] class CoinbasePublicDataInquirer(context: ActorContext[PublicD
       case Right(error) =>
         throw new RuntimeException(s"coinbase: GET /currencies failed: $error")
     }
-    context.log.debug("assets registered")
+    log.debug("assets registered")
   }
 
   def pullTradePairs(): Unit = {
@@ -110,17 +113,17 @@ private[coinbase] class CoinbasePublicDataInquirer(context: ActorContext[PublicD
       ).toSet
 
     tradePairs = coinbaseTradePairs.map(_.toTradePair)
-    context.log.debug("pulled trade pairs")
+    log.debug("pulled trade pairs")
   }
 
   def init(): Unit = {
-    context.log.debug("starting "+getClass.getSimpleName)
+    log.debug("starting "+getClass.getSimpleName)
     try {
       registerAssets()
       pullTradePairs()
     } catch {
       case e:Throwable =>
-        context.log.error("init failed", e)
+        log.error("init failed", e)
         throw e
     }
   }

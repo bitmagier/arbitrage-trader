@@ -7,6 +7,7 @@ import org.purevalue.arbitrage.traderoom.OrderSetPlacer.NewOrderSet
 import org.purevalue.arbitrage.traderoom.exchange.Exchange
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.{CancelOrder, NewLimitOrder, NewOrderAck}
 import org.purevalue.arbitrage.{GlobalConfig, Main, UserRootGuardian}
+import org.slf4j.LoggerFactory
 
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration.DurationInt
@@ -27,6 +28,7 @@ object OrderSetPlacer {
 class OrderSetPlacer(context: ActorContext[NewOrderSet],
                      globalConfig: GlobalConfig,
                      exchanges: Map[String, ActorRef[Exchange.Message]]) extends AbstractBehavior[NewOrderSet](context) {
+
   private var ackCollector: Option[ActorRef[NewOrderAck]] = None
 
   override def onMessage(message: NewOrderSet): Behavior[NewOrderSet] =
@@ -60,6 +62,7 @@ class AckCollector(context: ActorContext[NewOrderAck],
                    exchanges: Map[String, ActorRef[Exchange.Message]],
                    numRequests: Int,
                    reportTo: ActorRef[Seq[NewOrderAck]]) extends AbstractBehavior[NewOrderAck](context) {
+  private val log = LoggerFactory.getLogger(getClass)
   implicit val system: ActorSystem[UserRootGuardian.Reply] = Main.actorSystem
   implicit val executionContext: ExecutionContext = system.executionContext
   private var answers: List[NewOrderAck] = List()
@@ -91,7 +94,7 @@ class AckCollector(context: ActorContext[NewOrderAck],
 
   override def onSignal: PartialFunction[Signal, Behavior[NewOrderAck]] = {
     case MessageAdaptionFailure(exception) =>
-      context.log.warn(s"OrderSetPlacer received a failure: ${exception.getMessage}")
+      log.warn(s"OrderSetPlacer received a failure: ${exception.getMessage}")
       numFailures += 1
       onResponse()
   }

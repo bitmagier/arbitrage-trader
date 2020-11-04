@@ -23,6 +23,7 @@ import org.purevalue.arbitrage.traderoom.exchange.{Balance, Exchange, ExchangeAc
 import org.purevalue.arbitrage.util.HttpUtil.hmacSha384Signature
 import org.purevalue.arbitrage.util.Util.{convertBytesToLowerCaseHex, formatDecimal}
 import org.purevalue.arbitrage.util.WrongAssumption
+import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsNumber, JsObject, JsString, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
 import scala.collection.Seq
@@ -299,6 +300,8 @@ private[bitfinex] class BitfinexAccountDataChannel(context: ActorContext[Account
   import AccountDataChannel._
   import BitfinexAccountDataChannel._
 
+  private val log = LoggerFactory.getLogger(getClass)
+
   val BaseRestEndpoint = "https://api.bitfinex.com"
   val WebSocketEndpoint: Uri = Uri("wss://api.bitfinex.com/ws/2")
 
@@ -320,7 +323,7 @@ private[bitfinex] class BitfinexAccountDataChannel(context: ActorContext[Account
     case o: BitfinexOrderUpdateJson   => o.toOrderUpdate(exchangeConfig.name, symbol => bitfinexTradePairByApiSymbol(symbol).toTradePair)
     case t: BitfinexTradeExecutedJson => t.toOrderUpdate(exchangeConfig.name, symbol => bitfinexTradePairByApiSymbol(symbol).toTradePair)
     case w: BitfinexWalletUpdateJson  => w.toWalletAssetUpdate(symbol => symbolToAsset(symbol))
-    case x                            => context.log.error(s"$x"); throw new NotImplementedError
+    case x                            => log.error(s"$x"); throw new NotImplementedError
     // @formatter:on
   }
 
@@ -329,18 +332,18 @@ private[bitfinex] class BitfinexAccountDataChannel(context: ActorContext[Account
       case j: JsObject if j.fields.contains("event") =>
         j.fields("event").convertTo[String] match {
           case "auth" if j.fields("status").convertTo[String] == "OK" =>
-            if (context.log.isDebugEnabled) context.log.debug(s"received auth response: $j")
+            if (log.isTraceEnabled) log.trace(s"received auth response: $j")
             context.self ! OnStreamsRunning()
             None
           case "auth" =>
-            context.log.error(s"bitfinex account WebSocket authentification failed with: $j")
+            log.error(s"bitfinex account WebSocket authentification failed with: $j")
             throw new RuntimeException()
           case _ =>
-            context.log.info(s"bitfinex: watching event message: $s") // TODO log level
+            log.info(s"bitfinex: watching event message: $s") // TODO log level
             None
         }
       case j: JsObject =>
-        context.log.warn(s"Unknown json event object received: $j")
+        log.warn(s"Unknown json event object received: $j")
         None
     }
   }
@@ -351,61 +354,61 @@ private[bitfinex] class BitfinexAccountDataChannel(context: ActorContext[Account
         dataArray(1).convertTo[String] match {
 
           case "hb" =>
-            if (context.log.isDebugEnabled) context.log.debug(s"received heartbeat event")
+            if (log.isTraceEnabled) log.trace(s"received heartbeat event")
             Nil
 
           case "os" => // order snapshot
-            if (context.log.isDebugEnabled) context.log.debug(s"received event 'order snaphot': $s")
+            if (log.isTraceEnabled) log.trace(s"received event 'order snaphot': $s")
             dataArray(2).convertTo[Vector[JsValue]]
               .map(e => BitfinexOrderUpdateJson("os", e.convertTo[Vector[JsValue]]))
 
           case streamType: String if Seq("on", "ou", "oc").contains(streamType) =>
-            if (context.log.isDebugEnabled) context.log.debug(s"received event 'order new/update/cancel': $s")
+            if (log.isTraceEnabled) log.trace(s"received event 'order new/update/cancel': $s")
             Seq(BitfinexOrderUpdateJson(streamType, dataArray(2).convertTo[Vector[JsValue]]))
 
           case streamType: String if Seq("ps", "pn", "pu", "pc").contains(streamType) =>
-            context.log.debug(s"ignoring 'Position' data: $s")
+            if (log.isTraceEnabled) log.trace(s"ignoring 'Position' data: $s")
             Nil
 
           case "tu" =>
-            if (context.log.isDebugEnabled) context.log.debug(s"watching trade update event: $s")
+            if (log.isTraceEnabled) log.trace(s"watching trade update event: $s")
             Nil // ignoring trade updates (prefering order updates, which have more details)
 
           case "te" =>
-            if (context.log.isDebugEnabled) context.log.debug(s"watching event 'trade executed': $s")
+            if (log.isTraceEnabled) log.trace(s"watching event 'trade executed': $s")
             //Seq(BitfinexTradeExecutedJson(dataArray(2).convertTo[Vector[JsValue]]))
             Nil
 
           case "ws" =>
-            if (context.log.isDebugEnabled) context.log.debug(s"received event 'wallet snapshot': $s")
+            if (log.isTraceEnabled) log.trace(s"received event 'wallet snapshot': $s")
             dataArray(2).convertTo[Vector[JsValue]].map(e => BitfinexWalletUpdateJson(e.convertTo[Vector[JsValue]]))
 
           case "wu" =>
-            if (context.log.isDebugEnabled) context.log.debug(s"received event 'wallet update': $s")
+            if (log.isTraceEnabled) log.trace(s"received event 'wallet update': $s")
             Seq(BitfinexWalletUpdateJson(dataArray(2).convertTo[Vector[JsValue]]))
 
           case "bu" =>
-            if (context.log.isDebugEnabled) context.log.debug(s"watching event 'balance update': $s")
+            if (log.isTraceEnabled) log.trace(s"watching event 'balance update': $s")
             Nil // we ignore that event, we can calculate balance from wallet
 
           case "miu" =>
-            if (context.log.isDebugEnabled) context.log.debug(s"watching event 'margin info update': $s")
+            if (log.isTraceEnabled) log.trace(s"watching event 'margin info update': $s")
             Nil // ignore margin info update
 
           case "fiu" =>
-            if (context.log.isDebugEnabled) context.log.debug(s"watching event 'funding info': $s")
+            if (log.isTraceEnabled) log.trace(s"watching event 'funding info': $s")
             Nil // ignore funding info
 
           case s: String if Seq("fte", "ftu").contains(s) =>
-            if (context.log.isDebugEnabled) context.log.debug(s"watching event 'funding trade': $s")
+            if (log.isTraceEnabled) log.trace(s"watching event 'funding trade': $s")
             Nil // ignore funding trades
 
           case "n" =>
-            if (context.log.isDebugEnabled) context.log.debug(s"received notification event: $s")
+            if (log.isTraceEnabled) log.trace(s"received notification event: $s")
             Nil // ignore notifications
 
           case x =>
-            context.log.error(s"bitfinex: received data of unidentified stream type '$x': $s")
+            log.error(s"bitfinex: received data of unidentified stream type '$x': $s")
             throw new RuntimeException()
         }
     }
@@ -419,11 +422,11 @@ private[bitfinex] class BitfinexAccountDataChannel(context: ActorContext[Account
           case s: String if s.startsWith("{") => decodeJsonObject(s); Nil
           case s: String if s.startsWith("[") => decodeDataArray(s)
           case x =>
-            context.log.error(s"unidentified response: $x")
+            log.error(s"unidentified response: $x")
             throw new RuntimeException()
         }
     case _ =>
-      context.log.warn(s"Received non TextMessage")
+      log.warn(s"Received non TextMessage")
       Future.successful(Nil)
   }
 
@@ -458,7 +461,7 @@ private[bitfinex] class BitfinexAccountDataChannel(context: ActorContext[Account
   def createConnected: Future[Done.type] =
     ws._1.flatMap { upgrade =>
       if (upgrade.response.status == StatusCodes.SwitchingProtocols) {
-        context.log.info("connected")
+        log.info("connected")
         Future.successful(Done)
       } else {
         throw new RuntimeException(s"Connection failed: ${upgrade.response.status}")
@@ -484,10 +487,10 @@ private[bitfinex] class BitfinexAccountDataChannel(context: ActorContext[Account
   }
 
   def connect(): Unit = {
-    context.log.info(s"connecting WebSocket $WebSocketEndpoint ...")
+    log.info(s"connecting WebSocket $WebSocketEndpoint ...")
     ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow)
     ws._2.future.onComplete { e =>
-      context.log.info(s"connection closed")
+      log.info(s"connection closed")
       context.self ! ConnectionClosed(getClass.getSimpleName)
     }
     connected = createConnected
@@ -526,16 +529,16 @@ private[bitfinex] class BitfinexAccountDataChannel(context: ActorContext[Account
     ).map {
       case Left(response) => response match {
         case r: SubmitOrderResponseJson if r.status == "SUCCESS" && r.orders.length == 1 =>
-          if (context.log.isDebugEnabled) context.log.debug(s"$r")
+          if (log.isTraceEnabled) log.trace(s"$r")
           val order = r.orders.head
           exchange ! IncomingAccountData(exchangeDataMapping(Seq(order)))
           NewOrderAck(exchangeConfig.name, o.pair, order.orderId.toString, o.id)
         case r: SubmitOrderResponseJson =>
-          context.log.error(s"newLimitOrder(${o.shortDesc}) failed: $r")
+          log.error(s"newLimitOrder(${o.shortDesc}) failed: $r")
           throw new RuntimeException()
       }
       case Right(errorResponse) =>
-        context.log.error(s"NewLimitOrder(${o.shortDesc}) failed: $errorResponse")
+        log.error(s"NewLimitOrder(${o.shortDesc}) failed: $errorResponse")
         throw new RuntimeException()
     }
   }
@@ -552,15 +555,15 @@ private[bitfinex] class BitfinexAccountDataChannel(context: ActorContext[Account
     ).map {
       case Left(response) => response match {
         case r: CancelOrderResponseJson if r.status == "SUCCESS" =>
-          if (context.log.isDebugEnabled) context.log.debug(s"$r")
+          if (log.isTraceEnabled) log.trace(s"$r")
           exchange ! IncomingAccountData(exchangeDataMapping(Seq(r.order)))
           CancelOrderResult(exchangeConfig.name, ref.pair, r.order.orderId.toString, success = true)
         case r: CancelOrderResponseJson =>
-          context.log.debug(s"Cancel order failed. Response: $r")
+          log.debug(s"Cancel order failed. Response: $r")
           CancelOrderResult(exchangeConfig.name, ref.pair, ref.externalOrderId, success = false, orderUnknown = false, Some(r.text))
       }
       case Right(errorResponse) => // TODO figure out what we get when order-id does not exist and set CancelOrderResult.orderUnknown accordingly. For now we take the error-response as orderUnknown=true
-        context.log.warn(s"CancelOrder id=${ref.externalOrderId} failed: $errorResponse")
+        log.warn(s"CancelOrder id=${ref.externalOrderId} failed: $errorResponse")
         CancelOrderResult(exchangeConfig.name, ref.pair, ref.externalOrderId, success = false, orderUnknown = true, Some(errorResponse.compactPrint))
     }
   }
@@ -570,13 +573,13 @@ private[bitfinex] class BitfinexAccountDataChannel(context: ActorContext[Account
   }
 
   def init(): Unit = {
-    context.log.info("inititlizing bitfinex account data channel")
+    log.info("init bitfinex account data channel")
     try {
       pullBitfinexTradePairs()
       pullBitfinexAssets()
       context.self ! Connect()
     } catch {
-      case e: Exception => context.log.error("init failed", e)
+      case e: Exception => log.error("init failed", e)
     }
   }
 
@@ -599,7 +602,7 @@ private[bitfinex] class BitfinexAccountDataChannel(context: ActorContext[Account
   override def onSignal: PartialFunction[Signal, Behavior[Command]] = {
     case PostStop =>
       postStop()
-      context.log.info(s"${this.getClass.getSimpleName} stopped")
+      log.info(s"${this.getClass.getSimpleName} stopped")
       this
   }
 

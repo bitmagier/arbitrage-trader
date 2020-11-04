@@ -11,6 +11,7 @@ import org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator.{AllTradePairs
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.{Exchange, ExchangeAccountDataChannelInit, ExchangePublicDataChannelInit, ExchangePublicDataInquirerInit}
 import org.purevalue.arbitrage.{Config, Main, UserRootGuardian}
+import org.slf4j.LoggerFactory
 
 
 case class ExchangeInitStuff(exchangePublicDataInquirerProps: ExchangePublicDataInquirerInit,
@@ -33,6 +34,7 @@ class TradeRoomInitCoordinator(context: ActorContext[TradeRoomInitCoordinator.Re
                                parent: ActorRef[UserRootGuardian.Reply])
   extends AbstractBehavior[TradeRoomInitCoordinator.Reply](context) {
 
+  private val log = LoggerFactory.getLogger(getClass)
   implicit val system: ActorSystem[UserRootGuardian.Reply] = Main.actorSystem
 
   // @formatter:off
@@ -88,7 +90,7 @@ class TradeRoomInitCoordinator(context: ActorContext[TradeRoomInitCoordinator.Re
         ))
 
     for (exchange <- exchanges.keySet) {
-      context.log.info(s"[$exchange] unusable trade pairs: ${(allTradePairs(exchange) -- usableTradePairs(exchange)).toSeq.sortBy(_.toString)}")
+      log.info(s"[$exchange] unusable trade pairs: ${(allTradePairs(exchange) -- usableTradePairs(exchange)).toSeq.sortBy(_.toString)}")
     }
   }
 
@@ -106,7 +108,7 @@ class TradeRoomInitCoordinator(context: ActorContext[TradeRoomInitCoordinator.Re
 
 
   def initialized(): Behavior[Reply] = {
-    context.log.debug("TradeRoom initialized")
+    log.debug("TradeRoom initialized")
     val tradeRoom = context.spawn(TradeRoom(config, exchanges, usableTradePairs), "TradeRoom")
     parent ! UserRootGuardian.TradeRoomInitialized(tradeRoom)
     context.watch(tradeRoom)
@@ -117,7 +119,7 @@ class TradeRoomInitCoordinator(context: ActorContext[TradeRoomInitCoordinator.Re
     implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
     exchanges.values.foreach { exchange =>
       exchange.ask(ref => StartStreaming(ref))
-      context.log.debug(s"streaming started on $exchange")
+      log.debug(s"streaming started on $exchange")
     }
     initialized()
   }
@@ -140,12 +142,12 @@ class TradeRoomInitCoordinator(context: ActorContext[TradeRoomInitCoordinator.Re
     msg match {
       case AllTradePairs(exchange, pairs) =>
         allTradePairs = allTradePairs + (exchange -> pairs)
-        context.log.debug(s"received trade pairs for $exchange")
+        log.debug(s"received trade pairs for $exchange")
 
         if (allTradePairs.keySet != exchanges.keySet) {
           Behaviors.same
         } else {
-          context.log.info("trade pairs received")
+          log.info("trade pairs received")
           determineUsableTradepairs()
           pushUsableTradePairs()
         }

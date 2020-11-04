@@ -9,6 +9,7 @@ import com.typesafe.config.Config
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.OrderLimitChooser
+import org.slf4j.LoggerFactory
 
 import scala.concurrent.ExecutionContextExecutor
 
@@ -29,6 +30,8 @@ class FooTrader(context: ActorContext[FooTrader.Command],
                 tradeRoom: ActorRef[TradeRoom.Message]) extends AbstractBehavior[FooTrader.Command](context) {
 
   import FooTrader._
+
+  private val log = LoggerFactory.getLogger(getClass)
 
   implicit val system: ActorSystem[UserRootGuardian.Reply] = Main.actorSystem
   implicit val executionContext: ExecutionContextExecutor = system.executionContext
@@ -188,9 +191,9 @@ class FooTrader(context: ActorContext[FooTrader.Command],
   def lifeSign(): Unit = {
     val duration = Duration.between(lastLifeSign, Instant.now())
     if (duration.compareTo(traderConfig.getDuration("lifesign-interval")) > 0) {
-      context.log.info(s"FooTrader life sign: $shotsDelivered shots delivered. $numSearchesDiff search runs " +
+      log.info(s"FooTrader life sign: $shotsDelivered shots delivered. $numSearchesDiff search runs " +
         s"($numSingleSearchesDiff single searches) done in last ${duration.toMinutes} minutes. Total search runs: $numSearchesTotal")
-      context.log.info(s"FooTrader no-result-reasons: $noResultReasonStats")
+      log.info(s"FooTrader no-result-reasons: $noResultReasonStats")
       lastLifeSign = Instant.now()
       numSingleSearchesDiff = 0
       numSearchesDiff = 0
@@ -209,5 +212,5 @@ class FooTrader(context: ActorContext[FooTrader.Command],
       Behaviors.same
   }
 
-  context.log.info("FooTrader started")
+  log.info("FooTrader started")
 }

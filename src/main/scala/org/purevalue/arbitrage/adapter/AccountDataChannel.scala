@@ -6,6 +6,7 @@ import org.purevalue.arbitrage.traderoom.OrderRequest
 import org.purevalue.arbitrage.traderoom.TradeRoom.OrderRef
 import org.purevalue.arbitrage.traderoom.exchange.Exchange
 import org.purevalue.arbitrage.{Main, UserRootGuardian}
+import org.slf4j.LoggerFactory
 
 import scala.concurrent.{ExecutionContext, Future}
 
@@ -20,6 +21,8 @@ abstract class AccountDataChannel(context: ActorContext[AccountDataChannel.Comma
 
   import AccountDataChannel._
 
+  private val log = LoggerFactory.getLogger(getClass)
+
   implicit val system: ActorSystem[UserRootGuardian.Reply] = Main.actorSystem
   implicit val executionContext: ExecutionContext = system.executionContext
 
@@ -29,8 +32,8 @@ abstract class AccountDataChannel(context: ActorContext[AccountDataChannel.Comma
     cancelOrder(c.ref).foreach { result =>
       c.replyTo match {
         case Some(replyTo) => replyTo ! result
-        case None if result.success => context.log.info(s"order successfully cancelled ${c.ref}")
-        case None => context.log.info(s"order cancel failed: " +
+        case None if result.success => log.info(s"order successfully cancelled ${c.ref}")
+        case None => log.info(s"order cancel failed: " +
           (if (result.orderUnknown) "(order unknown) " else "") + result.text.getOrElse("")
         )
       }

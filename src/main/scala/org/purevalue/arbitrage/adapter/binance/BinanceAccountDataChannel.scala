@@ -23,6 +23,7 @@ import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.{Balance, Exchange, ExchangeAccountStreamData, TickerSnapshot, Wallet, WalletAssetUpdate, WalletBalanceUpdate}
 import org.purevalue.arbitrage.util.Util.{alignToStepSizeCeil, alignToStepSizeNearest, formatDecimal, formatDecimalWithFixPrecision}
 import org.purevalue.arbitrage.util.{BadCalculationError, ConnectionClosedException, WrongAssumption}
+import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
 import scala.concurrent.duration.DurationInt
@@ -322,6 +323,8 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
   import AccountDataChannel._
   import BinanceAccountDataChannel._
 
+  private val log = LoggerFactory.getLogger(getClass)
+
   // outboundAccountPosition is sent any time an account balance has changed and contains the assets
   // that were possibly changed by the event that generated the balance change
   val OutboundAccountPositionStreamName = "outboundAccountPosition"
@@ -358,12 +361,12 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
     case o: OrderExecutionReportJson    => o.toOrderUpdate(exchangeConfig.name, symbol => binanceTradePairsBySymbol(symbol).toTradePair)
     case o: OpenOrderJson               => o.toOrderUpdate(exchangeConfig.name, symbol => binanceTradePairsBySymbol(symbol).toTradePair)
     case o: CancelOrderResponseJson     => o.toOrderUpdate(exchangeConfig.name, symbol => binanceTradePairsBySymbol(symbol).toTradePair)
-    case x                              => context.log.debug(s"$x"); throw new NotImplementedError
+    case x                              => log.error(s"don't know hot wo map $x"); throw new NotImplementedError
     // @formatter:on
   }
 
   def onStreamSubscribeResponse(j: JsObject): Unit = {
-    if (context.log.isDebugEnabled) context.log.debug(s"received $j")
+    if (log.isTraceEnabled) log.trace(s"received $j")
     val channelId = j.fields("id").convertTo[Int]
 
     val initialized: Boolean = synchronized {
@@ -372,7 +375,7 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
     }
 
     if (initialized) {
-      context.log.debug("all streams running")
+      log.debug("all streams running")
       context.self ! OnStreamsRunning()
     }
   }
@@ -390,32 +393,32 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
             case j: JsObject if j.fields.contains("e") =>
               j.fields("e").convertTo[String] match {
                 case OutboundAccountPositionStreamName =>
-                  if (context.log.isDebugEnabled) context.log.debug(s"received $j")
+                  if (log.isTraceEnabled) log.trace(s"received $j")
                   List(j.convertTo[OutboundAccountPositionJson])
                 case BalanceUpdateStreamName =>
-                  if (context.log.isDebugEnabled) context.log.debug(s"received $j")
+                  if (log.isTraceEnabled) log.trace(s"received $j")
                   List(j.convertTo[BalanceUpdateJson])
                 case OrderExecutionReportStreamName =>
-                  if (context.log.isDebugEnabled) context.log.debug(s"received $j")
+                  if (log.isTraceEnabled) log.trace(s"received $j")
                   List(j.convertTo[OrderExecutionReportJson])
                 case "outboundAccountInfo" =>
-                  if (context.log.isDebugEnabled) context.log.debug(s"watching obsolete outboundAccountInfo: $j")
+                  if (log.isTraceEnabled) log.trace(s"watching obsolete outboundAccountInfo: $j")
                   Nil
                 case name =>
-                  context.log.error(s"Unknown data stream '$name' received: $j")
+                  log.error(s"Unknown data stream '$name' received: $j")
                   Nil
               }
             case j: JsObject =>
-              context.log.warn(s"Unknown json object received: $j")
+              log.warn(s"Unknown json object received: $j")
               Nil
           }
       } catch {
         case e: Throwable =>
-          context.log.error("decodeMessage failed", e)
+          log.error("decodeMessage failed", e)
           Future.failed(e)
       }
     case x =>
-      context.log.warn(s"Received non TextMessage: $x")
+      log.warn(s"Received non TextMessage: $x")
       Future.successful(Nil)
   }
 
@@ -425,10 +428,10 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
       HttpMethods.GET, s"$BinanceBaseRestEndpoint/api/v3/account", None, exchangeConfig.secrets, sign = true)
       .map {
         case Left(response) =>
-          if (context.log.isDebugEnabled) context.log.debug(s"received initial account information: $response")
+          if (log.isTraceEnabled) log.trace(s"received initial account information: $response")
           IncomingAccountData(exchangeDataMapping(Seq(response)))
         case Right(errorResponse) =>
-          context.log.error(s"deliverAccountInformation failed: $errorResponse")
+          log.error(s"deliverAccountInformation failed: $errorResponse")
           throw new RuntimeException()
       }.foreach(data => exchange ! data)
   }
@@ -439,10 +442,10 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
       HttpMethods.GET, s"$BinanceBaseRestEndpoint/api/v3/openOrders", None, exchangeConfig.secrets, sign = true)
       .map {
         case Left(response) =>
-          if (context.log.isDebugEnabled) context.log.debug(s"received initial open orders: $response")
+          if (log.isTraceEnabled) log.trace(s"received initial open orders: $response")
           IncomingAccountData(exchangeDataMapping(response))
         case Right(errorResponse) =>
-          context.log.error(s"deliverOpenOrders failed: $errorResponse")
+          log.error(s"deliverOpenOrders failed: $errorResponse")
           throw new RuntimeException()
       }.foreach(data => exchange ! data)
   }
@@ -462,7 +465,7 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
       ticker <- tf
     } yield (wallet, ticker)).foreach {
       case (wallet, ticker) =>
-        context.log.info(s"[${exchangeConfig.name}] Wallet available crypto: ${wallet.availableCryptoValues()}\n" +
+        log.info(s"[${exchangeConfig.name}] Wallet available crypto: ${wallet.availableCryptoValues()}\n" +
           s"liquid crypto: ${wallet.liquidCryptoValues(exchangeConfig.usdEquivalentCoin, ticker)}");
     }
   }
@@ -475,7 +478,7 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
     val quantity: Double = alignToStepSizeCeil(o.amountBaseAsset, binanceTradePair.lotSize.stepSize) match {
       case q: Double if price * q < binanceTradePair.minNotional =>
         val newQuantity = alignToStepSizeCeil(binanceTradePair.minNotional / price, binanceTradePair.lotSize.stepSize)
-        context.log.info(s"binance: ${o.shortDesc} increasing quantity from ${o.amountBaseAsset} to ${formatDecimal(newQuantity)} to match min_notional filter")
+        log.info(s"binance: ${o.shortDesc} increasing quantity from ${o.amountBaseAsset} to ${formatDecimal(newQuantity)} to match min_notional filter")
         newQuantity
       case q: Double => q
     }
@@ -513,7 +516,7 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
         throw new RuntimeException(s"newLimitOrder(${o.shortDesc}) failed: $errorResponse")
     } recover {
       case e: Exception =>
-        context.log.error(s"NewLimitOrder(${o.shortDesc}) failed. Request body:\n$requestBody\nbinanceTradePair:$binanceTradePair\n", e)
+        log.error(s"NewLimitOrder(${o.shortDesc}) failed. Request body:\n$requestBody\nbinanceTradePair:$binanceTradePair\n", e)
         throw e
     }
 
@@ -531,11 +534,11 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
       sign = true
     ).map {
       case Left(response) =>
-        if (context.log.isDebugEnabled) context.log.debug(s"Order successfully canceled: $response")
+        if (log.isTraceEnabled) log.trace(s"Order successfully canceled: $response")
         exchange ! IncomingAccountData(exchangeDataMapping(Seq(response)))
         CancelOrderResult(exchangeConfig.name, ref.pair, ref.externalOrderId, success = true)
       case Right(errorResponse) =>
-        context.log.debug(s"CancelOrder failed: $errorResponse")
+        log.debug(s"CancelOrder failed: $errorResponse")
         val orderUnknown: Boolean = errorResponse.code match {
           case BinanceErrorCodes.NoSuchOrder => true
           case BinanceErrorCodes.CancelRejected if errorResponse.msg == "Unknown order sent." => true
@@ -555,7 +558,7 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
       case Left(response) => response.listenKey
       case Right(errorResponse) => throw new RuntimeException(s"createListenKey failed: $errorResponse")
     }
-    context.log.debug(s"got listenKey: $listenKey")
+    log.debug(s"got listenKey: $listenKey")
   }
 
   def pullBinanceTradePairs(): Unit = {
@@ -598,34 +601,34 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
   def createConnected: Future[Done.type] =
     ws._1.flatMap { upgrade =>
       if (upgrade.response.status == StatusCodes.SwitchingProtocols) {
-        context.log.info("connected")
+        log.info("connected")
         timers.startTimerAtFixedRate(SendPing(), 30.minutes)
         Future.successful(Done)
       } else {
-        context.log.error(s"Connection failed: ${upgrade.response.status}")
+        log.error(s"Connection failed: ${upgrade.response.status}")
         throw new RuntimeException()
       }
     }
 
   def connect(): Unit = {
-    context.log.info(s"connecting WebSocket $WebSocketEndpoint ...")
+    log.info(s"connecting WebSocket $WebSocketEndpoint ...")
     ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow)
     ws._2.future.onComplete { e =>
-      context.log.info(s"connection closed")
+      log.info(s"connection closed")
       context.self ! ConnectionClosed("BinanceAccountDataChannel")
     }
     connected = createConnected
   }
 
   def init(): Unit = {
-    context.log.info("initializing binance account data channel")
+    log.info("initializing binance account data channel")
     try {
       createListenKey()
       pullBinanceTradePairs()
       context.self ! Connect()
     } catch {
       case e: Exception =>
-        context.log.error("init failed", e)
+        log.error("init failed", e)
         throw new RuntimeException()
     }
   }
@@ -649,7 +652,7 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
   override def onSignal: PartialFunction[Signal, Behavior[AccountDataChannel.Command]] = {
     case PostStop =>
       postStop()
-      context.log.info(s"${this.getClass.getSimpleName} stopped")
+      log.info(s"${this.getClass.getSimpleName} stopped")
       this
   }
 

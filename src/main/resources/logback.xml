@@ -3,16 +3,20 @@
 
     <statusListener class="ch.qos.logback.core.status.NopStatusListener"/>
 
-    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <layout class="ch.qos.logback.classic.PatternLayout">
             <Pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level %logger{36} - %msg%n</Pattern>
         </layout>
+    </appender>
+
+    <appender name="ASYNC" class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="CONSOLE" />
     </appender>
 
     <logger name="org.purevalue.arbitrage" level="INFO"/>
     <logger name="org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator" level="DEBUG"/>
 
     <root level="INFO">
-        <appender-ref ref="STDOUT"/>
+        <appender-ref ref="ASYNC"/>
     </root>
 </configuration>

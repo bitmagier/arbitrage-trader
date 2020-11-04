@@ -16,6 +16,7 @@ import org.purevalue.arbitrage.traderoom.exchange.Exchange.IncomingPublicData
 import org.purevalue.arbitrage.traderoom.exchange.{Exchange, ExchangePublicStreamData, Ticker}
 import org.purevalue.arbitrage.util.Emoji
 import org.purevalue.arbitrage.util.HttpUtil.httpGetJson
+import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
 import scala.collection.Set
@@ -78,6 +79,8 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
 
   import PublicDataChannel._
 
+  private val log = LoggerFactory.getLogger(getClass)
+
   val BaseRestEndpoint = "https://api.binance.com"
   val WebSocketEndpoint: Uri = Uri(s"wss://stream.binance.com:9443/stream")
   val IdBookTickerStream: Int = 1
@@ -92,7 +95,7 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
     symbol => binanceTradePairBySymbol(symbol).toTradePair
 
   def onStreamSubscribeResponse(j: JsObject): Unit = {
-    context.log.debug(s"received $j")
+    if (log.isTraceEnabled) log.trace(s"received $j")
     val channelId = j.fields("id").convertTo[Int]
     synchronized {
       outstandingStreamSubscribeResponses = outstandingStreamSubscribeResponses - channelId
@@ -107,7 +110,7 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
     case t: RawBookTickerRestJson   => t.toTicker(exchangeConfig.name, resolveTradePairSymbol)
     case t: RawBookTickerStreamJson => t.toTicker(exchangeConfig.name, resolveTradePairSymbol)
     case other                      =>
-      context.log.error(s"binance unhandled object: $other")
+      log.error(s"binance unhandled object: $other")
       throw new RuntimeException()
     // @formatter:on
   }
@@ -118,11 +121,11 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
         j.fields("data").convertTo[RawBookTickerStreamJson] match {
           case t if binanceTradePairBySymbol.contains(t.s) => Seq(t)
           case other =>
-            if (context.log.isDebugEnabled) context.log.debug(s"ignoring data message, because its not in our symbol list: $other")
+            if (log.isTraceEnabled) log.trace(s"ignoring data message, because its not in our symbol list: $other")
             Nil
         }
       case name: String =>
-        context.log.warn(s"${Emoji.Confused}  Unhandled data stream '$name' received: $j")
+        log.warn(s"${Emoji.Confused}  Unhandled data stream '$name' received: $j")
         Nil
     }
   }
@@ -138,11 +141,11 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
           case j: JsObject if j.fields.contains("stream") =>
             decodeDataMessage(j)
           case j: JsObject =>
-            context.log.warn(s"Unknown json object received: $j")
+            log.warn(s"Unknown json object received: $j")
             Nil
         })
     case _ =>
-      context.log.warn(s"Received non TextMessage")
+      log.warn(s"Received non TextMessage")
       Future.successful(Nil)
   }
 
@@ -177,7 +180,7 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
   def createConnected: Future[Done.type] =
     ws._1.flatMap { upgrade =>
       if (upgrade.response.status == StatusCodes.SwitchingProtocols) {
-        context.log.info("connected")
+        log.info("connected")
         Future.successful(Done)
       } else {
         throw new RuntimeException(s"Connection failed: ${upgrade.response.status}")
@@ -185,13 +188,13 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
     }
 
   def connect(): Unit = {
-    context.log.info("initializing binance public data channel")
+    log.info("initializing binance public data channel")
     initBinanceTradePairBySymbol()
 
-    context.log.info(s"connecting WebSocket $WebSocketEndpoint ...")
+    log.info(s"connecting WebSocket $WebSocketEndpoint ...")
     ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow)
     ws._2.future.onComplete { _ =>
-      context.log.info(s"connection closed")
+      log.info(s"connection closed")
       context.self ! Disconnected()
     }
     connected = createConnected
@@ -202,8 +205,8 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
       case Success(Left(tickers)) =>
         val rawTicker = tickers.filter(e => binanceTradePairBySymbol.keySet.contains(e.symbol))
         exchange ! IncomingPublicData(exchangeDataMapping(rawTicker))
-      case Success(Right(errorResponse)) => context.log.error(s"deliverBookTickerState failed: $errorResponse")
-      case Failure(e) => context.log.error("Query/Transform RawBookTickerRestJson failed", e)
+      case Success(Right(errorResponse)) => log.error(s"deliverBookTickerState failed: $errorResponse")
+      case Failure(e) => log.error("Query/Transform RawBookTickerRestJson failed", e)
     }
   }
 

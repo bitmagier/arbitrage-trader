@@ -9,6 +9,7 @@ import org.purevalue.arbitrage.Main.actorSystem
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager._
 import org.purevalue.arbitrage.{Config, ExchangeConfig}
+import org.slf4j.LoggerFactory
 
 import scala.concurrent.ExecutionContextExecutor
 
@@ -100,6 +101,8 @@ class LiquidityManager(context: ActorContext[Command],
 
   import LiquidityManager._
 
+  private val log = LoggerFactory.getLogger(getClass)
+
   case class LiquidityDemand(exchange: String,
                              tradePattern: String,
                              coins: Seq[CryptoValue],
@@ -114,14 +117,12 @@ class LiquidityManager(context: ActorContext[Command],
 
   private implicit val executionContext: ExecutionContextExecutor = actorSystem.executionContext
 
-  private var shutdownInitiated: Boolean = false
-
   // Map(uk:"trade-pattern + asset", UniqueDemand))
   private var liquidityDemand: Map[String, UniqueDemand] = Map()
   private var liquidityLocks: Map[UUID, LiquidityLock] = Map()
 
   def noticeUniqueDemand(d: UniqueDemand): Unit = {
-    if (context.log.isDebugEnabled) context.log.debug(s"noticed $d")
+    if (log.isTraceEnabled) log.trace(s"noticed $d")
     liquidityDemand = liquidityDemand + (d.uk -> d)
   }
 
@@ -133,12 +134,12 @@ class LiquidityManager(context: ActorContext[Command],
 
   def clearLock(id: UUID): Unit = {
     liquidityLocks = liquidityLocks - id
-    if (context.log.isDebugEnabled) context.log.debug(s"Liquidity lock with ID $id cleared")
+    if (log.isTraceEnabled) log.trace(s"Liquidity lock with ID $id cleared")
   }
 
   def addLock(l: LiquidityLock): Unit = {
     liquidityLocks = liquidityLocks + (l.liquidityRequestId -> l)
-    if (context.log.isDebugEnabled) context.log.debug(s"Liquidity locked: $l")
+    if (log.isTraceEnabled) log.trace(s"Liquidity locked: $l")
   }
 
   def clearObsoleteDemands(): Unit = {
@@ -186,7 +187,7 @@ class LiquidityManager(context: ActorContext[Command],
       addLock(lock)
       Some(lock)
     } else {
-      context.log.debug(s"refused liquidity-lock request on ${r.exchange} for ${r.coins.mkString(" ,")} (don't use: ${r.dontUseTheseReserveAssets})")
+      log.debug(s"refused liquidity-lock request on ${r.exchange} for ${r.coins.mkString(" ,")} (don't use: ${r.dontUseTheseReserveAssets})")
       None
     }
   }
@@ -197,15 +198,12 @@ class LiquidityManager(context: ActorContext[Command],
   }
 
   def liquidityLockRequest(r: LiquidityLockRequest): Option[LiquidityLock] = {
-    if (shutdownInitiated) None
-    else {
-      houseKeeping()
-      checkValidity(r)
-      if (!r.isForLiquidityTx) {
-        noticeDemand(LiquidityDemand(r)) // notice/refresh the demand, when 'someone' wants to lock liquidity for trading
-      }
-      lockLiquidity(r)
+    houseKeeping()
+    checkValidity(r)
+    if (!r.isForLiquidityTx) {
+      noticeDemand(LiquidityDemand(r)) // notice/refresh the demand, when 'someone' wants to lock liquidity for trading
     }
+    lockLiquidity(r)
   }
 
   override def onMessage(message: Command): Behavior[Command] = {

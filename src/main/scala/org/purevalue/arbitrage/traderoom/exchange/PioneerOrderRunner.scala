@@ -15,6 +15,7 @@ import org.purevalue.arbitrage.traderoom.exchange.PioneerOrderRunner.Message
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.util.{InitSequence, InitStep, Util, WaitingFor}
 import org.purevalue.arbitrage.{Config, ExchangeConfig, Main, UserRootGuardian}
+import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, ExecutionContextExecutor, Future}
@@ -42,6 +43,8 @@ class PioneerOrderRunner(context: ActorContext[Message],
                          exchange: ActorRef[Exchange.Message]) extends AbstractBehavior[Message](context) {
 
   import PioneerOrderRunner._
+
+  private val log = LoggerFactory.getLogger(getClass)
 
   case class PioneerOrder(request: OrderRequest, ref: OrderRef)
 
@@ -170,12 +173,12 @@ class PioneerOrderRunner(context: ActorContext[Message],
         activeOrders.get(o.ref) match {
           case Some(order) if order.orderStatus.isFinal =>
             validationMethod(o.request, order)
-            context.log.info(s"[$exchangeName]  pioneer order ${o.request.shortDesc} successfully validated")
+            log.info(s"[$exchangeName]  pioneer order ${o.request.shortDesc} successfully validated")
             arrival.arrived()
             exchange ! RemoveActiveOrder(o.ref)
 
           case Some(order) =>
-            context.log.debug(s"[$exchangeName] pioneer order in progress: $order")
+            log.debug(s"[$exchangeName] pioneer order in progress: $order")
             validationMethod(o.request, order)
 
           case None => // nop
@@ -215,15 +218,14 @@ class PioneerOrderRunner(context: ActorContext[Message],
           .map(e => convert(e, exchangeConfig.usdEquivalentCoin))
       ).foreach { balanceDiffInUSD =>
         if (!balanceDiffInUSD.exists(_.amount > SignificantBalanceDeviationInUSD)) {
-          context.log.debug(s"[$exchangeName] expected wallet balance arrived")
+          log.debug(s"[$exchangeName] expected wallet balance arrived")
           arrival.arrived()
         } else {
-          context.log.debug(s"diff between expected minus actual balance is $balanceDiffInUSD")
+          log.debug(s"diff between expected minus actual balance is $balanceDiffInUSD")
         }
       }
     }
   }
-
 
   def watchNextEvent(): Unit = {
     try {
@@ -238,11 +240,11 @@ class PioneerOrderRunner(context: ActorContext[Message],
       else if (pioneerOrder3.get().isDefined && !order3Validated.isArrived)
         watchOrder(pioneerOrder3.get().get, (r, o) => validateCanceledPioneerOrder(r, o), order3Validated)
       else
-        context.log.debug(s"nothing to watch: orders: [\n${pioneerOrder1.get()}, \n${pioneerOrder2.get()}, \n${pioneerOrder3.get()}] \n" +
+        log.debug(s"nothing to watch: orders: [\n${pioneerOrder1.get()}, \n${pioneerOrder2.get()}, \n${pioneerOrder3.get()}] \n" +
           s"validated: [${order1Validated.isArrived}, ${order2Validated.isArrived}, ${order3Validated.isArrived}]")
     } catch {
       case e: Throwable =>
-        context.log.debug(s"[$exchangeName] PioneerOrderRunner failed", e)
+        log.debug(s"[$exchangeName] PioneerOrderRunner failed", e)
         exchange ! PioneerOrderFailed(e)
         context.self ! Finished()
     }
@@ -267,7 +269,7 @@ class PioneerOrderRunner(context: ActorContext[Message],
 
           val orderRequest = OrderRequest(UUID.randomUUID(), None, exchangeName, pair, side, exchangeConfig.feeRate, amountBaseAsset, limit)
 
-          context.log.debug(s"[$exchangeName] pioneer order: ${orderRequest.shortDesc}")
+          log.debug(s"[$exchangeName] pioneer order: ${orderRequest.shortDesc}")
 
           exchange.ask(ref => Exchange.NewLimitOrder(orderRequest, ref)).mapTo[NewOrderAck]
             .map(_.toOrderRef)
@@ -276,13 +278,13 @@ class PioneerOrderRunner(context: ActorContext[Message],
   }
 
   def cancelPioneerOrder(o: PioneerOrder): Unit = {
-    context.log.debug(s"[$exchangeName] performing intended cancel of ${o.request.shortDesc}")
+    log.debug(s"[$exchangeName] performing intended cancel of ${o.request.shortDesc}")
     implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
     exchange.ask((ref: ActorRef[CancelOrderResult]) => Exchange.CancelOrder(o.ref, Some(ref))).foreach { result =>
       if (result.success) {
-        context.log.info(s"Intended cancel of PioneerOrder $o ${o.request.shortDesc} succeeded")
+        log.info(s"Intended cancel of PioneerOrder $o ${o.request.shortDesc} succeeded")
       } else {
-        context.log.error(s"Intended cancel of PioneerOrder ${o.request.shortDesc} failed: " +
+        log.error(s"Intended cancel of PioneerOrder ${o.request.shortDesc} failed: " +
           (if (result.orderUnknown) "(order unknown) " else "") + result.text.getOrElse(""))
       }
     }
@@ -358,10 +360,10 @@ class PioneerOrderRunner(context: ActorContext[Message],
   }
 
   def setup(): Unit = {
-    context.log.info(s"running pioneer order for $exchangeName")
+    log.info(s"running pioneer order for $exchangeName")
 
     val maxWaitTime = config.global.internalCommunicationTimeoutDuringInit.duration
-    val InitSequence = new InitSequence(context.log, s"$exchangeName  PioneerOrderRunner",
+    val InitSequence = new InitSequence(log, s"$exchangeName  PioneerOrderRunner",
       List(
         InitStep(s"Submit pioneer order 1 (buy ${secondaryReserveAsset.officialSymbol} from ${primaryReserveAsset.officialSymbol})", () => submitFirstPioneerOrder()),
         InitStep("Waiting until Pioneer order 1 is validated", () => order1Validated.await(maxWaitTime)),
@@ -375,12 +377,12 @@ class PioneerOrderRunner(context: ActorContext[Message],
 
     Future(InitSequence.run()).onComplete {
       case Success(_) =>
-        context.log.info(s"[$exchangeName] PioneerOrderRunner successful completed")
+        log.info(s"[$exchangeName] PioneerOrderRunner successful completed")
         exchange ! PioneerOrderSucceeded()
         context.self ! Finished()
 
       case Failure(e) =>
-        context.log.error(s"[$exchangeName] PioneerOrderRunner failed", e)
+        log.error(s"[$exchangeName] PioneerOrderRunner failed", e)
         exchange ! PioneerOrderFailed(e)
         context.self ! Finished()
     }

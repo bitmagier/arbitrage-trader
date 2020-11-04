@@ -23,6 +23,7 @@ import org.purevalue.arbitrage.traderoom.exchange.{Balance, CompleteWalletUpdate
 import org.purevalue.arbitrage.util.HttpUtil
 import org.purevalue.arbitrage.util.Util.{alignToStepSizeCeil, alignToStepSizeNearest, formatDecimalWithFixPrecision}
 import org.purevalue.arbitrage.{Config, ExchangeConfig}
+import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsonParser, RootJsonFormat, enrichAny}
 
 import scala.concurrent.duration.DurationInt
@@ -261,6 +262,8 @@ private[coinbase] class CoinbaseAccountDataChannel(context: ActorContext[Account
   import AccountDataChannel._
   import CoinbaseAccountDataChannel._
 
+  private val log = LoggerFactory.getLogger(getClass)
+
   val UserChannelName: String = "user"
 
   var coinbaseTradePairsByProductId: Map[String, CoinbaseTradePair] = _
@@ -289,7 +292,7 @@ private[coinbase] class CoinbaseAccountDataChannel(context: ActorContext[Account
   def decodeJsObject(messageType: String, j: JsObject): Seq[IncomingCoinbaseAccountJson] = {
     messageType match {
       case "subscriptions" =>
-        if (context.log.isDebugEnabled) context.log.debug(j.compactPrint)
+        if (log.isDebugEnabled) log.debug(j.compactPrint)
         context.self ! OnStreamsRunning()
         Nil
       case "received"      => Seq(j.convertTo[CoinbaseOrderReceivedJson])
@@ -298,8 +301,8 @@ private[coinbase] class CoinbaseAccountDataChannel(context: ActorContext[Account
       case "open"          => Nil // ignore: This message will only be sent for orders which are not fully filled immediately.
       case "match"         => Nil // ignore: A trade occurred between two orders.
       case "activate"      => Nil // ignore: An activate message is sent when a stop order is placed.
-      case "error"         => context.log.error(j.prettyPrint); throw new RuntimeException()
-      case _               => context.log.warn(s"received unhandled message type: $j"); Nil
+      case "error"         => log.error(j.prettyPrint); throw new RuntimeException()
+      case _               => log.warn(s"received unhandled message type: $j"); Nil
     }
   } // // @formatter:on
 
@@ -312,11 +315,11 @@ private[coinbase] class CoinbaseAccountDataChannel(context: ActorContext[Account
             import DefaultJsonProtocol._
             decodeJsObject(j.fields("type").convertTo[String], j)
           case j: JsObject =>
-            context.log.warn(s"Unknown json object received: $j")
+            log.warn(s"Unknown json object received: $j")
             Nil
         })
     case _ =>
-      context.log.warn(s"Received non TextMessage")
+      log.warn(s"Received non TextMessage")
       Future.successful(Nil)
   }
 
@@ -363,7 +366,7 @@ private[coinbase] class CoinbaseAccountDataChannel(context: ActorContext[Account
   def createConnected: Future[Done.type] =
     ws._1.flatMap { upgrade =>
       if (upgrade.response.status == StatusCodes.SwitchingProtocols) {
-        context.log.info("connected")
+        log.info("connected")
         Future.successful(Done)
       } else {
         throw new RuntimeException(s"Connection failed: ${upgrade.response.status}")
@@ -371,10 +374,10 @@ private[coinbase] class CoinbaseAccountDataChannel(context: ActorContext[Account
     }
 
   def connect(): Unit = {
-    context.log.info(s"starting WebSocket $CoinbaseWebSocketEndpoint ...")
+    log.info(s"starting WebSocket $CoinbaseWebSocketEndpoint ...")
     ws = Http().singleWebSocketRequest(WebSocketRequest(CoinbaseWebSocketEndpoint), wsFlow())
     ws._2.future.onComplete { e =>
-      context.log.info(s"connection closed")
+      log.info(s"connection closed")
       context.self ! ConnectionClosed(getClass.getSimpleName)
     }
     connected = createConnected
@@ -412,11 +415,11 @@ private[coinbase] class CoinbaseAccountDataChannel(context: ActorContext[Account
             exchange ! IncomingAccountData(Seq(newOrderResponse.toOrderUpdate(exchangeConfig.name, id => coinbaseTradePairsByProductId(id).toTradePair)))
             newOrderResponse.toNewOrderAck(exchangeConfig.name, id => coinbaseTradePairsByProductId(id).toTradePair, o.id)
           case Right(error) =>
-            context.log.error(s"newLimitOrder(${o.shortDesc}) failed: $error")
+            log.error(s"newLimitOrder(${o.shortDesc}) failed: $error")
             throw new RuntimeException()
         } recover {
         case e: Exception =>
-          context.log.error(s"NewLimitOrder(${o.shortDesc}) failed. Request body:\n$requestBody\ncoinbaseTradePair:$coinbaseTradepair\n", e)
+          log.error(s"NewLimitOrder(${o.shortDesc}) failed. Request body:\n$requestBody\ncoinbaseTradePair:$coinbaseTradepair\n", e)
           throw e
       }
     }
@@ -441,7 +444,7 @@ private[coinbase] class CoinbaseAccountDataChannel(context: ActorContext[Account
       ) map {
         case (statusCode, j) if statusCode.isSuccess() => CancelOrderResult(exchangeConfig.name, ref.pair, productId, success = true, orderUnknown = false, Some(s"HTTP-$statusCode $j"))
         case (statusCode, j) =>
-          context.log.warn(s"DELETE $uri failed with: $statusCode, $j")
+          log.warn(s"DELETE $uri failed with: $statusCode, $j")
           CancelOrderResult(exchangeConfig.name, ref.pair, productId, success = false, orderUnknown = true, Some(s"HTTP-$statusCode $j")) // TODO decode error message to check if reason = Order unknown. For now we always say orderUnknown=true here
       }
     }
@@ -465,7 +468,7 @@ private[coinbase] class CoinbaseAccountDataChannel(context: ActorContext[Account
                 .toMap
             ))
           case Right(error) =>
-            context.log.warn(s"coinbase: queryAccounts() failed: $error")
+            log.warn(s"coinbase: queryAccounts() failed: $error")
             Nil
         }
         .map(e => IncomingAccountData(e))
@@ -479,7 +482,7 @@ private[coinbase] class CoinbaseAccountDataChannel(context: ActorContext[Account
   }
 
   def init(): Unit = {
-    context.log.info("initializing coinbase account data channel")
+    log.info("initializing coinbase account data channel")
     try {
       pullCoinbaseTradePairs()
       connect()
@@ -489,7 +492,7 @@ private[coinbase] class CoinbaseAccountDataChannel(context: ActorContext[Account
         timers.startTimerAtFixedRate(DeliverAccounts(), 1500.millis)
       }
     } catch {
-      case e: Exception => context.log.error("init failed", e)
+      case e: Exception => log.error("init failed", e)
     }
   }
 

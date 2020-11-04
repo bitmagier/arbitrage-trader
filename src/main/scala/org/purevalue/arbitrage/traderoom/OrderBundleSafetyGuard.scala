@@ -18,7 +18,7 @@ case object OrderLimitFarAwayFromTicker extends SafetyGuardDecision
 case object SameTradePairOrderStillActive extends SafetyGuardDecision
 case object TotalTransactionUneconomic extends SafetyGuardDecision
 
-class OrderBundleSafetyGuard(val config: Config) {
+class OrderBundleSafetyGuard(config: Config) {
   private val log = LoggerFactory.getLogger(getClass)
   private var warningAlreadyWritten: Set[String] = Set()
   private var stats: Map[SafetyGuardDecision, Int] = Map()

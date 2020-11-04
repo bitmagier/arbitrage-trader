@@ -17,6 +17,7 @@ import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.IncomingPublicData
 import org.purevalue.arbitrage.traderoom.exchange.{Ask, Bid, Exchange, ExchangePublicStreamData, OrderBook, OrderBookUpdate, Ticker}
 import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig}
+import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsonParser, RootJsonFormat, enrichAny}
 
 import scala.concurrent.duration.DurationInt
@@ -104,6 +105,7 @@ private[coinbase] class CoinbasePublicDataChannel(context: ActorContext[PublicDa
                                                   relevantTradePairs: Set[TradePair],
                                                   exchange: ActorRef[Exchange.Message],
                                                   publicDataInquirer: ActorRef[PublicDataInquirer.Command]) extends PublicDataChannel(context) {
+  private val log = LoggerFactory.getLogger(getClass)
 
   val TickerChannelName: String = "ticker"
   val OrderBookChannelname: String = "level2"
@@ -124,14 +126,14 @@ private[coinbase] class CoinbasePublicDataChannel(context: ActorContext[PublicDa
 
   // @formatter:off
   def decodeJsObject(messageType: String, j: JsObject): Seq[IncomingPublicCoinbaseJson] = {
-    if (context.log.isDebugEnabled) context.log.debug(s"received: $j")
+    if (log.isDebugEnabled) log.debug(s"received: $j")
     messageType match {
-      case "subscriptions"   => context.log.debug(s"$j"); Nil
+      case "subscriptions"   => log.debug(s"$j"); Nil
       case TickerChannelName => Seq(j.convertTo[TickerJson])
       case "snapshot"        => Seq(j.convertTo[OrderBookSnapshotJson])
       case "l2update"        => Seq(j.convertTo[OrderBookUpdateJson])
-      case "error"           => context.log.error(j.prettyPrint); throw new RuntimeException()
-      case _                 => context.log.warn("received unhandled messageType: $j"); Nil
+      case "error"           => log.error(j.prettyPrint); throw new RuntimeException()
+      case _                 => log.warn("received unhandled messageType: $j"); Nil
     }
   } // @formatter:on
 
@@ -143,11 +145,11 @@ private[coinbase] class CoinbasePublicDataChannel(context: ActorContext[PublicDa
           case j: JsObject if j.fields.contains("type") =>
             decodeJsObject(j.fields("type").convertTo[String], j)
           case j: JsObject =>
-            context.log.warn(s"Unknown json object received: $j")
+            log.warn(s"Unknown json object received: $j")
             Nil
         })
     case _ =>
-      context.log.warn(s"Received non TextMessage")
+      log.warn(s"Received non TextMessage")
       Future.successful(Nil)
   }
 
@@ -182,7 +184,7 @@ private[coinbase] class CoinbasePublicDataChannel(context: ActorContext[PublicDa
   def createConnected: Future[Done.type] =
     ws._1.flatMap { upgrade =>
       if (upgrade.response.status == StatusCodes.SwitchingProtocols) {
-        context.log.info("connected")
+        log.info("connected")
         Future.successful(Done)
       } else {
         throw new RuntimeException(s"Connection failed: ${upgrade.response.status}")
@@ -190,11 +192,11 @@ private[coinbase] class CoinbasePublicDataChannel(context: ActorContext[PublicDa
     }
 
   def connect(): Unit = {
-    context.log.info(s"connect WebSocket $CoinbaseWebSocketEndpoint...")
+    log.info(s"connect WebSocket $CoinbaseWebSocketEndpoint...")
 
     ws = Http().singleWebSocketRequest(WebSocketRequest(CoinbaseWebSocketEndpoint), wsFlow)
     ws._2.future.onComplete { e =>
-      context.log.info(s"connection closed")
+      log.info(s"connection closed")
       context.self ! Disconnected()
     }
     connected = createConnected
@@ -213,7 +215,7 @@ private[coinbase] class CoinbasePublicDataChannel(context: ActorContext[PublicDa
 
 
   def init(): Unit = {
-    context.log.info("initializing coinbase public data channel")
+    log.info("initializing coinbase public data channel")
     initCoinbaseTradePairBySymbol()
     connect()
   }
