@@ -10,8 +10,7 @@ import akka.actor.typed.scaladsl.{AbstractBehavior, ActorContext, Behaviors, Tim
 import akka.actor.typed.{ActorRef, ActorSystem, Behavior, PostStop, Signal}
 import akka.util.Timeout
 import org.purevalue.arbitrage._
-import org.purevalue.arbitrage.trader.FooTrader
-import org.purevalue.arbitrage.trader.FooTrader.SearchRun
+import org.purevalue.arbitrage.trader.{FooTrader, TemporaryLowDetector}
 import org.purevalue.arbitrage.traderoom.OrderSetPlacer.NewOrderSet
 import org.purevalue.arbitrage.traderoom.TradeRoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
@@ -119,7 +118,9 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
   private val logScheduleRate: FiniteDuration = FiniteDuration(config.tradeRoom.statsReportInterval.toNanos, TimeUnit.NANOSECONDS)
   timers.startTimerAtFixedRate(LogStats(), logScheduleRate)
 
-  private var fooTrader: Option[ActorRef[FooTrader.Command]] = None
+  private var tradersStarted: Boolean = false
+  private var fooTrader: ActorRef[FooTrader.Command] = _
+  private var temporaryLowDetector: ActorRef[TemporaryLowDetector.Command] = _
 
   private val feeRates: Map[String, Double] = config.exchanges.values.map(e => (e.name, e.feeRate)).toMap // TODO query from exchange
   private val doNotTouchAssets: Map[String, Set[Asset]] = config.exchanges.values.map(e => (e.name, e.doNotTouchTheseAssets)).toMap
@@ -575,14 +576,16 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
   var exchangesJoined: Set[String] = Set()
 
   def startTraders(): Unit = {
-    fooTrader = Some(context.spawn(FooTrader(Config.trader("foo-trader"), context.self), "FooTrader"))
+    fooTrader = context.spawn(FooTrader(Config.trader("foo-trader"), context.self), "FooTrader")
     val traderScheduleDelay: FiniteDuration = FiniteDuration(config.tradeRoom.traderTriggerInterval.toMillis, TimeUnit.MILLISECONDS)
     timers.startTimerWithFixedDelay(TriggerTrader(), traderScheduleDelay)
+
+    tradersStarted = true
   }
 
   def onExchangeJoined(exchange: String): Unit = {
     exchangesJoined = exchangesJoined + exchange
-    if (exchangesJoined == exchanges.keySet && fooTrader.isEmpty) {
+    if (exchangesJoined == exchanges.keySet && !tradersStarted) {
       log.info(s"${Emoji.Satisfied}  All exchanges initialized")
       startTraders()
     }
@@ -603,6 +606,13 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
     exchanges(config.tradeRoom.referenceTickerExchange).ask(ref => GetTickerSnapshot(ref))
   }
 
+  def triggerTrader(): Unit = {
+    collectTradeContext().foreach { tc =>
+        fooTrader ! FooTrader.SearchRun(tc)
+        temporaryLowDetector ! TemporaryLowDetector.SearchRun(tc)
+    }
+  }
+
   override def onMessage(message: Message): Behavior[Message] = {
     message match {
       // @formatter:off
@@ -618,7 +628,7 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
 
       case LogStats()                                               => logStats()
       case HouseKeeping()                                           => houseKeeping()
-      case TriggerTrader()                                          => collectTradeContext().foreach(tc => fooTrader.get ! SearchRun(tc))
+      case TriggerTrader()                                          => triggerTrader()
       // @formatter:on
     }
     this
