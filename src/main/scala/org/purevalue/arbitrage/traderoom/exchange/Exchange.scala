@@ -59,6 +59,7 @@ object Exchange {
   case class RemoveOrphanOrder(ref: OrderRef) extends Message
 
   case class StartStreaming(replyTo: ActorRef[StreamingStarted]) extends Message
+  case class Initialized() extends Message
   case class AccountDataChannelInitialized() extends Message
   case class WalletUpdateTrigger() extends Message
   case class PioneerOrderSucceeded() extends Message
@@ -210,7 +211,7 @@ class Exchange(context: ActorContext[Exchange.Message],
     joinedTradeRoom.arrived()
   }
 
-  def switchToInitializedMode(): Behavior[Message] = {
+  def switchToInitializedMode(): Unit = {
     timers.startTimerAtFixedRate(DataHouseKeeping(), 1.minute)
     Future {
       concurrent.blocking {
@@ -220,11 +221,8 @@ class Exchange(context: ActorContext[Exchange.Message],
     }
     log.info(s"${Emoji.Excited}  [$exchangeName] completely initialized and running")
 
+    context.self ! Initialized()
     tradeRoom.get ! TradeRoomJoined(exchangeName)
-
-    Behaviors.receiveMessage[Message] {
-      message => initializedModeReceive(message)
-    }
   }
 
   val accountDataChannelInitialized: WaitingFor = WaitingFor()
@@ -313,7 +311,6 @@ class Exchange(context: ActorContext[Exchange.Message],
     case AccountDataChannelInitialized()          => accountDataChannelInitialized.arrived(); Behaviors.same
     case PioneerOrderSucceeded()                  => pioneerOrdersSucceeded.arrived(); Behaviors.same
     case PioneerOrderFailed(e)                    => log.error(s"[$exchangeName] Pioneer order failed", e); stop()
-    case j: JoinTradeRoom                         => joinTradeRoom(j); Behaviors.same
 
     case GetAllTradePairs(replyTo)                => replyTo ! TradeRoomInitCoordinator.AllTradePairs(exchangeName, allTradePairs); Behaviors.same
     case GetActiveOrders(replyTo)                 => replyTo ! accountData.activeOrders; Behaviors.same
@@ -331,6 +328,9 @@ class Exchange(context: ActorContext[Exchange.Message],
     case DetermineRealisticLimit(pair, side, quantity, replyTo) =>
       replyTo ! determineRealisticLimit(pair, side, quantity)
       Behaviors.same
+
+    case j: JoinTradeRoom                         => joinTradeRoom(j); Behaviors.same
+    case Initialized()                            => Behaviors.receiveMessage(initializedModeReceive)
     // @formatter:on
   }
 
