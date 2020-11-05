@@ -46,7 +46,7 @@ object Exchange {
   case class IncomingAccountData(data: Seq[ExchangeAccountStreamData]) extends Message
   case class SimulatedAccountData(dataset: ExchangeAccountStreamData) extends Message
 
-  case class GetAllTradePairs(replyTo: ActorRef[TradeRoomInitCoordinator.Reply]) extends Message // request from TradeRommInitCoordinator
+  case class GetAllTradePairs(replyTo: ActorRef[TradeRoomInitCoordinator.Reply]) extends Message
   case class GetTickerSnapshot(replyTo: ActorRef[TickerSnapshot]) extends Message
   case class GetWallet(replyTo: ActorRef[Wallet]) extends Message
   case class GetFullDataSnapshot(replyTo: ActorRef[TradeRoom.FullDataSnapshot]) extends Message
@@ -321,6 +321,8 @@ class Exchange(context: ActorContext[Exchange.Message],
     case GetWalletLiquidCrypto(replyTo)           =>
       replyTo ! accountData.wallet.liquidCryptoValues(exchangeConfig.usdEquivalentCoin, publicData.ticker)
       Behaviors.same
+
+    case GetTickerSnapshot(replyTo)      => replyTo ! TickerSnapshot(exchangeName, publicData.ticker); Behaviors.same
 
     case ConvertValue(value, target, replyTo)     =>
       replyTo ! value.convertTo(target, publicData.ticker)
