@@ -319,11 +319,8 @@ class Exchange(context: ActorContext[Exchange.Message],
       replyTo ! accountData.wallet.liquidCryptoValues(exchangeConfig.usdEquivalentCoin, publicData.ticker)
       Behaviors.same
 
-    case GetTickerSnapshot(replyTo)      => replyTo ! TickerSnapshot(exchangeName, publicData.ticker); Behaviors.same
-
-    case ConvertValue(value, target, replyTo)     =>
-      replyTo ! value.convertTo(target, publicData.ticker)
-      Behaviors.same
+    case GetTickerSnapshot(replyTo)               => replyTo ! TickerSnapshot(exchangeName, publicData.ticker); Behaviors.same
+    case ConvertValue(value, target, replyTo)     => replyTo ! value.convertTo(target, publicData.ticker); Behaviors.same
 
     case DetermineRealisticLimit(pair, side, quantity, replyTo) =>
       replyTo ! determineRealisticLimit(pair, side, quantity)
