@@ -23,5 +23,5 @@ object Emoji {
   val Judgemental = "{ಠʖಠ}"
   val NoSupport = "乁( ◔ ౪◔)「"
   val Zoned = "(⊙_◎)"
-  val HappyHug = "\(ᵔᵕᵔ)/"
+  val HappyHug = """\(ᵔᵕᵔ)/"""
 }
