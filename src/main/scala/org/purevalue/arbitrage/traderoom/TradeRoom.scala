@@ -575,9 +575,10 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
 
   def startTraders(): Unit = {
     fooTrader = context.spawn(FooTrader(Config.trader("foo-trader"), context.self), "FooTrader")
+    temporaryLowDetector = context.spawn(TemporaryLowDetector(config.exchanges), "TemporaryLowDetector")
+
     val traderScheduleDelay: FiniteDuration = FiniteDuration(config.tradeRoom.traderTriggerInterval.toMillis, TimeUnit.MILLISECONDS)
     timers.startTimerWithFixedDelay(TriggerTrader(), traderScheduleDelay)
-
     tradersStarted = true
   }
 
