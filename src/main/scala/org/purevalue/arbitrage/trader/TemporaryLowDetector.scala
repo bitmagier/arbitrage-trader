@@ -85,24 +85,30 @@ class TemporaryLowDetector(context: ActorContext[TemporaryLowDetector.Command],
   def average(values: Iterable[Double]): Double = values.sum / values.size
 
   def preparePrices(tc: TradeContext): Map[TradePair, Map[String, Double]] = {
-    // pairs with more than one exchange
+    // only pairs with more than one exchange
     val pairs: Iterable[TradePair] = tc.tradePairs.values.flatten
       .foldLeft(Map[TradePair, Int]())((a, b) => if (a.contains(b)) a + (b -> (a(b) + 1)) else a + (b -> 1))
       .filter(_._2 > 1)
       .keys
 
     var result: Map[TradePair, Map[String, Double]] = Map()
+
     for (pair <- pairs) {
       var subMap: Map[String, Double] = Map()
       val exchanges = tc.tradePairs.filter(_._2.contains(pair)).keys
       for (exchange <- exchanges) {
+
         val price = if (exchangesConfig(exchange).tickerIsRealtime)
           tc.tickers(exchange)(pair).priceEstimate
-        else tc.orderBooks(exchange)(pair).lowestAsk.price
+        else
+          (tc.orderBooks(exchange)(pair).highestBid.price + tc.orderBooks(exchange)(pair).lowestAsk.price) / 2
+
         subMap = subMap + (exchange -> price)
       }
+
       result = result + (pair -> subMap)
     }
+
     result
   }
 
