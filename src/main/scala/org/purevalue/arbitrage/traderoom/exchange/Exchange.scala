@@ -139,7 +139,7 @@ class Exchange(context: ActorContext[Exchange.Message],
       s"${exchangeConfig.name}-PublicDataChannel")
   }
 
-  def initLiquidityManager(j: JoinTradeRoom): Unit = {
+  def initLiquidityManager(): Unit = {
     liquidityManager = context.spawn(
       LiquidityManager(
         config,
@@ -207,7 +207,7 @@ class Exchange(context: ActorContext[Exchange.Message],
 
   def joinTradeRoom(j: JoinTradeRoom): Unit = {
     this.tradeRoom = Some(j.tradeRoom)
-    initLiquidityManager(j)
+    initLiquidityManager()
     joinedTradeRoom.arrived()
   }
 
@@ -222,7 +222,6 @@ class Exchange(context: ActorContext[Exchange.Message],
     log.info(s"${Emoji.Excited}  [$exchangeName] completely initialized and running")
 
     context.self ! Initialized()
-    tradeRoom.get ! TradeRoomJoined(exchangeName)
   }
 
   val accountDataChannelInitialized: WaitingFor = WaitingFor()
@@ -327,7 +326,7 @@ class Exchange(context: ActorContext[Exchange.Message],
       Behaviors.same
 
     case j: JoinTradeRoom                         => joinTradeRoom(j); Behaviors.same
-    case Initialized()                            => Behaviors.receiveMessage(initializedModeReceive)
+    case Initialized()                            => tradeRoom.get ! TradeRoomJoined(exchangeName); Behaviors.receiveMessage(initializedModeReceive)
     // @formatter:on
   }
 

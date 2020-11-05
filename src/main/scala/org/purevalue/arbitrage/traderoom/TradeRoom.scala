@@ -113,8 +113,6 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
 
   private val orderBundleSafetyGuard = new OrderBundleSafetyGuard(config)
 
-  timers.startTimerAtFixedRate(HouseKeeping(), 3.seconds)
-
   private val logScheduleRate: FiniteDuration = FiniteDuration(config.tradeRoom.statsReportInterval.toNanos, TimeUnit.NANOSECONDS)
   timers.startTimerAtFixedRate(LogStats(), logScheduleRate)
 
@@ -587,6 +585,7 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
     exchangesJoined = exchangesJoined + exchange
     if (exchangesJoined == exchanges.keySet && !tradersStarted) {
       log.info(s"${Emoji.Satisfied}  All exchanges initialized")
+      timers.startTimerAtFixedRate(HouseKeeping(), 3.seconds)
       startTraders()
     }
   }
