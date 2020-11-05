@@ -85,7 +85,7 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
   val WebSocketEndpoint: Uri = Uri(s"wss://stream.binance.com:9443/stream")
   val IdBookTickerStream: Int = 1
 
-  var outstandingStreamSubscribeResponses: Set[Int] = Set(IdBookTickerStream)
+  @volatile var outstandingStreamSubscribeResponses: Set[Int] = Set(IdBookTickerStream)
 
   private var binanceTradePairBySymbol: Map[String, BinanceTradePair] = _
 
@@ -97,11 +97,15 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
   def onStreamSubscribeResponse(j: JsObject): Unit = {
     if (log.isTraceEnabled) log.trace(s"received $j")
     val channelId = j.fields("id").convertTo[Int]
-    synchronized {
-      outstandingStreamSubscribeResponses = outstandingStreamSubscribeResponses - channelId
-    }
-    if (outstandingStreamSubscribeResponses.isEmpty) {
-      context.self ! PublicDataChannel.OnStreamsRunning()
+    if (outstandingStreamSubscribeResponses.nonEmpty) {
+      synchronized {
+        outstandingStreamSubscribeResponses = outstandingStreamSubscribeResponses - channelId
+      }
+      if (outstandingStreamSubscribeResponses.isEmpty) {
+        context.self ! PublicDataChannel.OnStreamsRunning()
+      }
+    } else {
+      log.warn(s"received stream subscribe response for channelId $channelId, but we were not waiting for this one ${Emoji.NoSupport}")
     }
   }
 

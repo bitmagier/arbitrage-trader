@@ -9,8 +9,8 @@ import scala.concurrent.ExecutionContext
 
 object PublicDataChannel {
   trait Event
-  case class OnStreamsRunning() extends Event()
-  case class Disconnected() extends Event()
+  case class OnStreamsRunning() extends Event
+  case class Disconnected() extends Event
 }
 abstract class PublicDataChannel(context: ActorContext[PublicDataChannel.Event]) extends AbstractBehavior[PublicDataChannel.Event](context) {
 
