@@ -25,7 +25,7 @@ abstract class PublicDataChannel(context: ActorContext[PublicDataChannel.Event])
 
   override def onMessage(message: Event): Behavior[Event] = message match {
     // @formatter:off
-    case OnStreamsRunning() => onStreamsRunning(); Behaviors.unhandled
+    case OnStreamsRunning() => onStreamsRunning(); Behaviors.empty
     case Disconnected()     => throw new ConnectionClosedException(getClass.getSimpleName)
     // @formatter:on
   }

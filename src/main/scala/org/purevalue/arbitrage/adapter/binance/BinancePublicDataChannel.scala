@@ -64,7 +64,8 @@ object BinancePublicDataChannel {
             exchange: ActorRef[Exchange.Message],
             binancePublicDataInquirer: ActorRef[PublicDataInquirer.Command]):
   Behavior[PublicDataChannel.Event] =
-    Behaviors.setup(context => new BinancePublicDataChannel(context, globalConfig, exchangeConfig, relevantTradePairs, exchange, binancePublicDataInquirer))
+    Behaviors.setup(context =>
+      new BinancePublicDataChannel(context, globalConfig, exchangeConfig, relevantTradePairs, exchange, binancePublicDataInquirer))
 }
 /**
  * Binance TradePair-based data channel
@@ -206,9 +207,11 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
 
   def deliverBookTickerState(): Unit = {
     httpGetJson[Seq[RawBookTickerRestJson], JsValue](s"$BaseRestEndpoint/api/v3/ticker/bookTicker") onComplete {
+
       case Success(Left(tickers)) =>
         val rawTicker = tickers.filter(e => binanceTradePairBySymbol.keySet.contains(e.symbol))
         exchange ! IncomingPublicData(exchangeDataMapping(rawTicker))
+
       case Success(Right(errorResponse)) => log.error(s"deliverBookTickerState failed: $errorResponse")
       case Failure(e) => log.error("Query/Transform RawBookTickerRestJson failed", e)
     }

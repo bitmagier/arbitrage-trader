@@ -40,7 +40,7 @@ class OrderSetPlacer(context: ActorContext[NewOrderSet],
           exchanges(o.exchange) ! NewLimitOrder(o, ackCollector.get)
         }
         context.watch(ackCollector.get)
-        Behaviors.unhandled
+        Behaviors.empty
     }
 
   override def onSignal: PartialFunction[Signal, Behavior[NewOrderSet]] = {
