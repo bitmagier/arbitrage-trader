@@ -16,8 +16,9 @@ package object exchange {
   trait ExchangePublicStreamData extends Retryable
 
   case class Heartbeat(ts: Instant) extends ExchangePublicStreamData
+
   case class Ticker(exchange: String,
-                    tradePair: TradePair,
+                    pair: TradePair,
                     highestBidPrice: Double,
                     highestBidQuantity: Option[Double],
                     lowestAskPrice: Double,
@@ -46,7 +47,7 @@ package object exchange {
   }
 
   case class OrderBook(exchange: String,
-                       tradePair: TradePair,
+                       pair: TradePair,
                        bids: Map[Double, Bid], // price-level -> bid
                        asks: Map[Double, Ask] // price-level -> ask
                       ) extends ExchangePublicStreamData {
@@ -63,7 +64,7 @@ package object exchange {
   }
 
   case class OrderBookUpdate(exchange: String,
-                             tradePair: TradePair,
+                             pair: TradePair,
                              bidUpdates: Seq[Bid], // quantity == 0.0 means: remove position from our OrderBook
                              askUpdates: Seq[Ask]) extends ExchangePublicStreamData
 

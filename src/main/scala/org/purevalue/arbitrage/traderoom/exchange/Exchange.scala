@@ -99,7 +99,8 @@ class Exchange(context: ActorContext[Exchange.Message],
                                         var orderBook: Map[TradePair, OrderBook],
                                         var heartbeatTS: Option[Instant],
                                         var tickerTS: Option[Instant],
-                                        var orderBookTS: Option[Instant])
+                                        var orderBookTS: Option[Instant]
+                                        )
 
   private case class ExchangeAccountData(var wallet: Wallet,
                                          var activeOrders: Map[OrderRef, Order])
@@ -379,16 +380,16 @@ class Exchange(context: ActorContext[Exchange.Message],
         publicData.heartbeatTS = Some(h.ts)
 
       case t: Ticker =>
-        publicData.ticker = publicData.ticker.updated(t.tradePair, t)
+        publicData.ticker = publicData.ticker.updated(t.pair, t)
         publicData.tickerTS = Some(Instant.now)
         onTickerUpdate()
 
       case b: OrderBook =>
-        publicData.orderBook = publicData.orderBook.updated(b.tradePair, b)
+        publicData.orderBook = publicData.orderBook.updated(b.pair, b)
         publicData.orderBookTS = Some(Instant.now)
 
       case b: OrderBookUpdate =>
-        val book: Option[OrderBook] = publicData.orderBook.get(b.tradePair)
+        val book: Option[OrderBook] = publicData.orderBook.get(b.pair)
         if (book.isEmpty) {
           guardedRetry(b)
         } else {
@@ -398,7 +399,7 @@ class Exchange(context: ActorContext[Exchange.Message],
           val newAsks: Map[Double, Ask] =
             (book.get.asks -- b.askUpdates.filter(_.quantity == 0.0).map(_.price)) ++ b.askUpdates.filter(_.quantity != 0.0).map(e => e.price -> e)
 
-          publicData.orderBook = publicData.orderBook.updated(b.tradePair, OrderBook(book.get.exchange, book.get.tradePair, newBids, newAsks))
+          publicData.orderBook = publicData.orderBook.updated(b.pair, OrderBook(book.get.exchange, book.get.pair, newBids, newAsks))
           publicData.orderBookTS = Some(Instant.now)
         }
     }
@@ -497,26 +498,24 @@ class Exchange(context: ActorContext[Exchange.Message],
 
     val f1 = liquidityManager.ask(ref => LiquidityManager.GetState(ref))
     val f2 = tradeRoom.get.ask(ref => TradeRoom.GetReferenceTicker(ref))
-    (for {
+    Await.result(for {
       lmState <- f1
       referenceTicker <- f2
-    } yield (lmState, referenceTicker.ticker)).onComplete {
-
-      case Success((lmState, referenceTicker)) =>
-        val wc =
-          WorkingContext(
-            publicData.ticker,
-            referenceTicker,
-            publicData.orderBook,
-            accountData.wallet.balance.map(e => e._1 -> e._2),
-            lmState.liquidityDemand,
-            lmState.liquidityLocks)
+    } yield (lmState, referenceTicker.ticker),
+      config.global.internalCommunicationTimeout.duration
+    ) match {
+      case (lmState, referenceTicker) =>
+        val wc = WorkingContext(
+          publicData.ticker,
+          referenceTicker,
+          publicData.orderBook,
+          accountData.wallet.balance.map(e => e._1 -> e._2),
+          lmState.liquidityDemand,
+          lmState.liquidityLocks)
 
         liquidityBalancerRunTempActor = context.spawn(
           LiquidityBalancerRun(config, exchangeConfig, usableTradePairs, context.self, tradeRoom.get, wc),
           s"${exchangeConfig.name}-liquidity-balancer-run")
-
-      case Failure(cause) => log.error(s"[$exchangeName]  liquidityHouseKeeping()", cause)
     }
   }
 
@@ -529,7 +528,9 @@ class Exchange(context: ActorContext[Exchange.Message],
     val order = accountData.activeOrders.get(ref)
     accountData.activeOrders = accountData.activeOrders - ref
     if (order.isDefined) {
-      log.info(s"[$exchangeName] cleaned up orphan finished order ${order.get}")
+      log.info(s"[$exchangeName] cleaned up orphan finished order ${
+        order.get
+      }")
     }
   }
 

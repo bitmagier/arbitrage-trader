@@ -38,7 +38,7 @@ class TemporaryLowDetector(context: ActorContext[TemporaryLowDetector.Command],
   case class MeasuringPoint(time: Instant, price: Double, mainStreamPrice: Double)
   case class LowEvent(key: LowEventKey, var points: Vector[MeasuringPoint], var ended: Boolean) {
 
-    def snapshots(num:Int): Seq[Double] = {
+    def snapshots(num: Int): Seq[Double] = {
       val inc: Double = (points.size - 1) / num
       val indexes: Seq[Int] = (0 to num).map(_ * inc).map(_.round.toInt)
       indexes.map(i => points(i)).map(e => e.price / e.mainStreamPrice)
@@ -48,7 +48,7 @@ class TemporaryLowDetector(context: ActorContext[TemporaryLowDetector.Command],
       s"""${Duration.between(key.startingTime, points.last.time).toSeconds} s: ${snapshots(6).map(e => formatDecimal(e, 4, 4)).mkString(", ")}}"""
   }
 
-  var events: Map[LowEventKey, LowEvent] = Map()
+  private var events: Map[LowEventKey, LowEvent] = Map()
 
   def newEvent(event: LowEvent): Unit = {
     events = events + (event.key -> event)
@@ -85,10 +85,11 @@ class TemporaryLowDetector(context: ActorContext[TemporaryLowDetector.Command],
   def average(values: Iterable[Double]): Double = values.sum / values.size
 
   def preparePrices(tc: TradeContext): Map[TradePair, Map[String, Double]] = {
-    // only pairs with more than one exchange
+
     val pairs: Iterable[TradePair] = tc.tradePairs.values.flatten
       .foldLeft(Map[TradePair, Int]())((a, b) => if (a.contains(b)) a + (b -> (a(b) + 1)) else a + (b -> 1))
-      .filter(_._2 > 1)
+      .filter(_._2 > 1) // only pairs available at more than one exchange
+      // TODO limit to exchange:pair with 24h volume > 1M USD
       .keys
 
     var result: Map[TradePair, Map[String, Double]] = Map()
@@ -154,10 +155,18 @@ class TemporaryLowDetector(context: ActorContext[TemporaryLowDetector.Command],
     }
   }
 
+  def cleanStats(): Unit = {
+    events = events.filterNot(_._2.ended)
+  }
+
   override def onMessage(message: TemporaryLowDetector.Command): Behavior[TemporaryLowDetector.Command] = {
     message match {
-      case SearchRun(tc) => searchRun(tc)
-      case LogStats() => logStats()
+      case SearchRun(tc) =>
+        searchRun(tc)
+
+      case LogStats() =>
+        logStats()
+        cleanStats()
     }
     this
   }

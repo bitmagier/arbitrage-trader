@@ -42,7 +42,7 @@ class OrderLimitChooser(private val orderBook: Option[OrderBook], private val ti
       val stackIterator = bids.values.map(e => (e.price, e.quantity)).toSeq.sortBy(_._1).reverseIterator // (price,quantity) sorted with highest price first
       val result = fillAmount(amount, stackIterator)
       if (result.isEmpty) {
-        log.debug(s"Order book [${orderBook.map(_.exchange)} ${orderBook.map(_.tradePair)}] not filled enough to take our order: $tradeSide $amount. Bids: $bids")
+        log.debug(s"Order book [${orderBook.map(_.exchange)} ${orderBook.map(_.pair)}] not filled enough to take our order: $tradeSide $amount. Bids: $bids")
       }
       result
     }
@@ -54,7 +54,7 @@ class OrderLimitChooser(private val orderBook: Option[OrderBook], private val ti
       val stackIterator = asks.values.map(e => (e.price, e.quantity)).toSeq.sortBy(_._1).iterator // (price,quantity) sorted with lowest price first
       val result = fillAmount(amount, stackIterator)
       if (result.isEmpty) {
-        log.debug(s"Order book [${orderBook.map(_.exchange)} ${orderBook.map(_.tradePair)}] not filled enough to take our order: $tradeSide $amount. Bids: $asks")
+        log.debug(s"Order book [${orderBook.map(_.exchange)} ${orderBook.map(_.pair)}] not filled enough to take our order: $tradeSide $amount. Bids: $asks")
       }
       result
     }
