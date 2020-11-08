@@ -23,7 +23,8 @@ case class ExchangeConfig(name: String,
                           tickerIsRealtime: Boolean, // whether we get a realtime ticker from that exchange or not
                           secrets: SecretsConfig,
                           refCode: Option[String],
-                          assetSourceWeight: Int) {
+                          assetSourceWeight: Int,
+                          pullTradePairStatsInterval: Duration) {
   def primaryReserveAsset: Asset = reserveAssets.head
 }
 
@@ -56,7 +57,8 @@ object ExchangeConfig {
       c.getBoolean("ticker-is-realtime"),
       secretsConfig(c.getConfig("secrets")),
       if (c.hasPath("ref-code")) Some(c.getString("ref-code")) else None,
-      c.getInt("asset-source-weight")
+      c.getInt("asset-source-weight"),
+      c.getDuration("pull-trade-pair-stats-interval")
     )
   }
 

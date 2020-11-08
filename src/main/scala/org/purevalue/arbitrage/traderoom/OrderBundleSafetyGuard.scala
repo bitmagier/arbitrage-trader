@@ -43,7 +43,7 @@ class OrderBundleSafetyGuard(config: Config) {
   }
 
   private def dataUpToDate(o: OrderRequest)(implicit tc: TradeContext): Boolean = {
-    val lastSeen = (tc.heartbeatTS(o.exchange).toSeq ++ tc.tickerTS(o.exchange).toSeq ++ tc.orderBooksTS(o.exchange).toSeq).max
+    val lastSeen = tc.dataAge(o.exchange).latest
     val age = Duration.between(lastSeen, Instant.now)
     val r = age.compareTo(config.tradeRoom.orderBundleSafetyGuard.maxTickerAge) < 0
     if (!r) {

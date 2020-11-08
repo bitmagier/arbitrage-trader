@@ -97,10 +97,8 @@ class Exchange(context: ActorContext[Exchange.Message],
 
   private case class ExchangePublicData(var ticker: Map[TradePair, Ticker],
                                         var orderBook: Map[TradePair, OrderBook],
-                                        var heartbeatTS: Option[Instant],
-                                        var tickerTS: Option[Instant],
-                                        var orderBookTS: Option[Instant]
-                                        )
+                                        var dataAge: DataAge,
+                                        var stats: Map[TradePair, TradePairStats])
 
   private case class ExchangeAccountData(var wallet: Wallet,
                                          var activeOrders: Map[OrderRef, Order])
@@ -109,7 +107,7 @@ class Exchange(context: ActorContext[Exchange.Message],
   private implicit val system: ActorSystem[UserRootGuardian.Reply] = Main.actorSystem
   private implicit val executionContext: ExecutionContextExecutor = system.executionContext
 
-  private val publicData: ExchangePublicData = ExchangePublicData(Map(), Map(), None, None, None)
+  private val publicData: ExchangePublicData = ExchangePublicData(Map(), Map(), DataAge(None, None, None), Map())
   private val accountData: ExchangeAccountData = ExchangeAccountData(
     Wallet(exchangeName, exchangeConfig.doNotTouchTheseAssets, Map()),
     Map())
@@ -374,35 +372,36 @@ class Exchange(context: ActorContext[Exchange.Message],
     }
   }
 
-  private def applyPublicDataset(data: Seq[ExchangePublicStreamData]): Unit = {
-    data.foreach {
-      case h: Heartbeat =>
-        publicData.heartbeatTS = Some(h.ts)
+  private def applyPublicDataset(data: Seq[ExchangePublicStreamData]): Unit = data.foreach {
+    case h: Heartbeat =>
+      publicData.dataAge = publicData.dataAge.withHeartBeatTS(h.ts)
 
-      case t: Ticker =>
-        publicData.ticker = publicData.ticker.updated(t.pair, t)
-        publicData.tickerTS = Some(Instant.now)
-        onTickerUpdate()
+    case t: Ticker =>
+      publicData.ticker = publicData.ticker.updated(t.pair, t)
+      publicData.dataAge = publicData.dataAge.withTickerTS(Instant.now)
+      onTickerUpdate()
 
-      case b: OrderBook =>
-        publicData.orderBook = publicData.orderBook.updated(b.pair, b)
-        publicData.orderBookTS = Some(Instant.now)
+    case b: OrderBook =>
+      publicData.orderBook = publicData.orderBook.updated(b.pair, b)
+      publicData.dataAge = publicData.dataAge.withOrderBookTS(Instant.now)
 
-      case b: OrderBookUpdate =>
-        val book: Option[OrderBook] = publicData.orderBook.get(b.pair)
-        if (book.isEmpty) {
-          guardedRetry(b)
-        } else {
-          if (book.get.exchange != b.exchange) throw new IllegalArgumentException
-          val newBids: Map[Double, Bid] =
-            (book.get.bids -- b.bidUpdates.filter(_.quantity == 0.0).map(_.price)) ++ b.bidUpdates.filter(_.quantity != 0.0).map(e => e.price -> e)
-          val newAsks: Map[Double, Ask] =
-            (book.get.asks -- b.askUpdates.filter(_.quantity == 0.0).map(_.price)) ++ b.askUpdates.filter(_.quantity != 0.0).map(e => e.price -> e)
+    case b: OrderBookUpdate =>
+      val book: Option[OrderBook] = publicData.orderBook.get(b.pair)
+      if (book.isEmpty) {
+        guardedRetry(b)
+      } else {
+        if (book.get.exchange != b.exchange) throw new IllegalArgumentException
+        val newBids: Map[Double, Bid] =
+          (book.get.bids -- b.bidUpdates.filter(_.quantity == 0.0).map(_.price)) ++ b.bidUpdates.filter(_.quantity != 0.0).map(e => e.price -> e)
+        val newAsks: Map[Double, Ask] =
+          (book.get.asks -- b.askUpdates.filter(_.quantity == 0.0).map(_.price)) ++ b.askUpdates.filter(_.quantity != 0.0).map(e => e.price -> e)
 
-          publicData.orderBook = publicData.orderBook.updated(b.pair, OrderBook(book.get.exchange, book.get.pair, newBids, newAsks))
-          publicData.orderBookTS = Some(Instant.now)
-        }
-    }
+        publicData.orderBook = publicData.orderBook.updated(b.pair, OrderBook(book.get.exchange, book.get.pair, newBids, newAsks))
+        publicData.dataAge = publicData.dataAge.withOrderBookTS(Instant.now)
+      }
+
+    case s: TradePairStats =>
+      publicData.stats = publicData.stats.updated(s.pair, s)
   }
 
   private def guardedRetry(e: ExchangeAccountStreamData): Unit = {
@@ -478,7 +477,7 @@ class Exchange(context: ActorContext[Exchange.Message],
    * Will trigger a restart of the TradeRoom if stale data is found
    */
   def checkIfWeHaveStalePublicData(): Boolean = {
-    val lastSeen: Instant = (publicData.heartbeatTS.toSeq ++ publicData.tickerTS.toSeq ++ publicData.orderBookTS.toSeq).max
+    val lastSeen: Instant = publicData.dataAge.latest
     if (Duration.between(lastSeen, Instant.now).compareTo(config.tradeRoom.restarWhenDataStreamIsOlderThan) > 0) {
       val msg = s"[$exchangeName] public data is outdated!"
       log.error(msg) // TODO check if we need to log here too. Better only the exception get caught and logged
@@ -550,7 +549,8 @@ class Exchange(context: ActorContext[Exchange.Message],
       exchangeName,
       publicData.ticker,
       publicData.orderBook,
-      publicData.heartbeatTS, publicData.tickerTS, publicData.orderBookTS,
+      publicData.dataAge,
+      publicData.stats,
       accountData.wallet
     )
 

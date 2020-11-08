@@ -15,7 +15,7 @@ import org.purevalue.arbitrage.traderoom.OrderSetPlacer.NewOrderSet
 import org.purevalue.arbitrage.traderoom.TradeRoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityLockRequest}
-import org.purevalue.arbitrage.traderoom.exchange.{Exchange, LiquidityBalancerStats, LiquidityManager, OrderBook, Ticker, TickerSnapshot, Wallet}
+import org.purevalue.arbitrage.traderoom.exchange.{DataAge, Exchange, LiquidityBalancerStats, LiquidityManager, OrderBook, Ticker, TickerSnapshot, TradePairStats, Wallet}
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.util.{Emoji, WrongAssumption}
 import org.slf4j.LoggerFactory
@@ -29,9 +29,8 @@ import scala.util.{Failure, Success}
 case class TradeContext(tradePairs: Map[String, Set[TradePair]],
                         tickers: Map[String, Map[TradePair, Ticker]],
                         orderBooks: Map[String, Map[TradePair, OrderBook]],
-                        heartbeatTS: Map[String, Option[Instant]],
-                        tickerTS: Map[String, Option[Instant]],
-                        orderBooksTS: Map[String, Option[Instant]],
+                        dataAge: Map[String, DataAge],
+                        stats: Map[String, Map[TradePair, TradePairStats]],
                         wallets: Map[String, Wallet],
                         referenceTickerExchange: String,
                         feeRates: Map[String, Double],
@@ -74,9 +73,8 @@ object TradeRoom {
   case class FullDataSnapshot(exchange: String,
                               ticker: Map[TradePair, Ticker],
                               orderBook: Map[TradePair, OrderBook],
-                              heartbeatTS: Option[Instant],
-                              tickerTS: Option[Instant],
-                              orderBookTS: Option[Instant],
+                              dataAge: DataAge,
+                              stats: Map[TradePair, TradePairStats],
                               wallet: Wallet)
 
   // communication
@@ -144,9 +142,8 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
         usableTradePairs,
         d.map(e => e.exchange -> e.ticker).toMap,
         d.map(e => e.exchange -> e.orderBook).toMap,
-        d.map(e => e.exchange -> e.heartbeatTS).toMap,
-        d.map(e => e.exchange -> e.tickerTS).toMap,
-        d.map(e => e.exchange -> e.orderBookTS).toMap,
+        d.map(e => e.exchange -> e.dataAge).toMap,
+        d.map(e => e.exchange -> e.stats).toMap,
         d.map(e => e.exchange -> e.wallet).toMap,
         config.tradeRoom.referenceTickerExchange,
         feeRates,

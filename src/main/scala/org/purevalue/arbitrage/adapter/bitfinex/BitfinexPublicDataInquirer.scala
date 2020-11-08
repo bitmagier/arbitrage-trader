@@ -4,7 +4,7 @@ import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
 import akka.actor.typed.{ActorRef, Behavior}
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.PublicDataInquirer
-import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.{GetBitfinexAssets, GetBitfinexTradePairs}
+import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.{BitfinexBaseRestEndpointPublic, GetBitfinexAssets, GetBitfinexTradePairs}
 import org.purevalue.arbitrage.traderoom.{Asset, TradePair}
 import org.purevalue.arbitrage.util.HttpUtil.httpGetJson
 import org.slf4j.LoggerFactory
@@ -25,6 +25,8 @@ object BitfinexPublicDataInquirer {
   Behavior[PublicDataInquirer.Command] =
     Behaviors.setup(context => new BitfinexPublicDataInquirer(context, globalConfig, exchangeConfig))
 
+  val BitfinexBaseRestEndpointPublic = "https://api-pub.bitfinex.com"
+
   case class GetBitfinexTradePairs(replyTo: ActorRef[Set[BitfinexTradePair]]) extends PublicDataInquirer.Command
   case class GetBitfinexAssets(replyTo: ActorRef[Set[BitfinexAsset]]) extends PublicDataInquirer.Command
 }
@@ -40,8 +42,6 @@ private[bitfinex] class BitfinexPublicDataInquirer(context: ActorContext[PublicD
 
   private val log = LoggerFactory.getLogger(getClass)
 
-  val BaseRestEndpointPublic = "https://api-pub.bitfinex.com"
-
   var bitfinexAssets: Set[BitfinexAsset] = _
   var bitfinexTradePairs: Set[BitfinexTradePair] = _
 
@@ -52,7 +52,7 @@ private[bitfinex] class BitfinexPublicDataInquirer(context: ActorContext[PublicD
 
     val apiSymbolToOfficialCurrencySymbolMapping: Map[String, String] =
       Await.result(
-        httpGetJson[List[List[Tuple2[String, String]]], JsValue](s"$BaseRestEndpointPublic/v2/conf/pub:map:currency:sym"),
+        httpGetJson[List[List[Tuple2[String, String]]], JsValue](s"$BitfinexBaseRestEndpointPublic/v2/conf/pub:map:currency:sym"),
         globalConfig.httpTimeout.plus(500.millis)) match {
         case Left(response) =>
           response.head
@@ -66,7 +66,7 @@ private[bitfinex] class BitfinexPublicDataInquirer(context: ActorContext[PublicD
     // currency->verbose name
     val currencyNames: Map[String, String] =
       Await.result(
-        httpGetJson[List[List[Tuple2[String, String]]], JsValue](s"$BaseRestEndpointPublic/v2/conf/pub:map:currency:label"),
+        httpGetJson[List[List[Tuple2[String, String]]], JsValue](s"$BitfinexBaseRestEndpointPublic/v2/conf/pub:map:currency:label"),
         globalConfig.httpTimeout.plus(500.millis)) match {
         case Left(response) =>
           response.head
@@ -80,7 +80,7 @@ private[bitfinex] class BitfinexPublicDataInquirer(context: ActorContext[PublicD
     if (log.isTraceEnabled) log.trace(s"pub:map:currency:label: $currencyNames")
 
     val rawBitfinexCurrencies: Set[String] = Await.result(
-      httpGetJson[List[List[String]], JsValue](s"$BaseRestEndpointPublic/v2/conf/pub:list:currency"),
+      httpGetJson[List[List[String]], JsValue](s"$BitfinexBaseRestEndpointPublic/v2/conf/pub:list:currency"),
       globalConfig.httpTimeout.plus(500.millis)) match {
       case Left(response) => response.head.toSet
       case Right(errorResponse) => throw new RuntimeException(s"query currencies failed: $errorResponse")
@@ -101,7 +101,7 @@ private[bitfinex] class BitfinexPublicDataInquirer(context: ActorContext[PublicD
 
     val rawTradePairs: List[String] =
       Await.result(
-        httpGetJson[List[List[String]], JsValue](s"$BaseRestEndpointPublic/v2/conf/pub:list:pair:exchange"),
+        httpGetJson[List[List[String]], JsValue](s"$BitfinexBaseRestEndpointPublic/v2/conf/pub:list:pair:exchange"),
         globalConfig.httpTimeout) match {
         case Left(response) => response.head
         case Right(errorResponse) =>

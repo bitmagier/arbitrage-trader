@@ -2,7 +2,7 @@ package org.purevalue.arbitrage.adapter.binance
 
 import akka.Done
 import akka.actor.typed.scaladsl.AskPattern.{Askable, schedulerFromActorSystem}
-import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
+import akka.actor.typed.scaladsl.{ActorContext, Behaviors, TimerScheduler}
 import akka.actor.typed.{ActorRef, Behavior}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
@@ -10,12 +10,13 @@ import akka.http.scaladsl.model.{StatusCodes, Uri}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
 import org.purevalue.arbitrage._
+import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.BinanceBaseRestEndpoint
 import org.purevalue.arbitrage.adapter.{PublicDataChannel, PublicDataInquirer}
 import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.IncomingPublicData
-import org.purevalue.arbitrage.traderoom.exchange.{Exchange, ExchangePublicStreamData, Ticker}
-import org.purevalue.arbitrage.util.Emoji
+import org.purevalue.arbitrage.traderoom.exchange.{Exchange, ExchangePublicStreamData, Ticker, TradePairStats}
 import org.purevalue.arbitrage.util.HttpUtil.httpGetJson
+import org.purevalue.arbitrage.util.{Emoji, HttpUtil}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
@@ -50,10 +51,14 @@ private[binance] case class RawBookTickerStreamJson(u: Long, // order book updat
     Ticker(exchange, resolveSymbol(s), b.toDouble, Some(B.toDouble), a.toDouble, Some(A.toDouble), None)
 }
 
+private[binance] case class TickerStatisticsJson(symbol: String,
+                                                 volume:String)
+
 private[binance] object WebSocketJsonProtocol extends DefaultJsonProtocol {
   implicit val subscribeMsg: RootJsonFormat[StreamSubscribeRequestJson] = jsonFormat3(StreamSubscribeRequestJson)
   implicit val rawBookTickerRest: RootJsonFormat[RawBookTickerRestJson] = jsonFormat5(RawBookTickerRestJson)
   implicit val rawBookTickerStream: RootJsonFormat[RawBookTickerStreamJson] = jsonFormat6(RawBookTickerStreamJson)
+  implicit val tickerStatisticsJson: RootJsonFormat[TickerStatisticsJson] = jsonFormat2(TickerStatisticsJson)
 }
 
 
@@ -63,20 +68,24 @@ object BinancePublicDataChannel {
             relevantTradePairs: Set[TradePair],
             exchange: ActorRef[Exchange.Message],
             binancePublicDataInquirer: ActorRef[PublicDataInquirer.Command]):
-  Behavior[PublicDataChannel.Event] =
-    Behaviors.setup(context =>
-      new BinancePublicDataChannel(context, globalConfig, exchangeConfig, relevantTradePairs, exchange, binancePublicDataInquirer))
+  Behavior[PublicDataChannel.Event] = {
+    Behaviors.withTimers(timers =>
+      Behaviors.setup(context =>
+        new BinancePublicDataChannel(context, timers, globalConfig, exchangeConfig, relevantTradePairs, exchange, binancePublicDataInquirer)))
+  }
 }
 /**
  * Binance TradePair-based data channel
  * Converts Raw TradePair-based data to unified ExchangeTPStreamData
  */
 private[binance] class BinancePublicDataChannel(context: ActorContext[PublicDataChannel.Event],
+                                                timers: TimerScheduler[PublicDataChannel.Event],
                                                 globalConfig: GlobalConfig,
                                                 exchangeConfig: ExchangeConfig,
                                                 relevantTradePairs: Set[TradePair],
                                                 exchange: ActorRef[Exchange.Message],
-                                                binancePublicDataInquirer: ActorRef[PublicDataInquirer.Command]) extends PublicDataChannel(context) {
+                                                binancePublicDataInquirer: ActorRef[PublicDataInquirer.Command])
+  extends PublicDataChannel(context, timers, exchangeConfig) {
 
   import PublicDataChannel._
 
@@ -231,11 +240,26 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
     deliverBookTickerState()
   }
 
+  override def deliverTradePairStats(): Unit = {
+    binanceTradePairBySymbol.foreach {
+      case (symbol,pair) =>
+        HttpUtil.httpGetJson[TickerStatisticsJson, JsValue](s"$BinanceBaseRestEndpoint/api/v3/ticker/24hr") foreach {
+          case Left(tickerStats) =>
+            exchange ! Exchange.IncomingPublicData(
+              Seq(TradePairStats(exchangeConfig.name, pair.toTradePair, tickerStats.volume.toDouble))
+            )
+
+          case Right(error) => log.error(s"query ticker stats for ${pair.toTradePair} failed: $error")
+        }
+    }
+  }
+
   override def postStop(): Unit = {
     if (ws != null && !ws._2.isCompleted) ws._2.success(None)
   }
 
   connect()
+
 }
 
 // A single connection to stream.binance.com is only valid for 24 hours; expect to be disconnected at the 24 hour mark

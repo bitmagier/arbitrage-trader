@@ -6,7 +6,7 @@ import akka.actor.typed.Behavior
 import akka.actor.typed.scaladsl.{AbstractBehavior, ActorContext, Behaviors, TimerScheduler}
 import org.purevalue.arbitrage.ExchangeConfig
 import org.purevalue.arbitrage.trader.TemporaryLowDetector.{LogStats, SearchRun}
-import org.purevalue.arbitrage.traderoom.{TradeContext, TradePair}
+import org.purevalue.arbitrage.traderoom.{CryptoValue, TradeContext, TradePair}
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.slf4j.LoggerFactory
 
@@ -36,6 +36,7 @@ class TemporaryLowDetector(context: ActorContext[TemporaryLowDetector.Command],
 
   case class LowEventKey(exchange: String, pair: TradePair, startingTime: Instant)
   case class MeasuringPoint(time: Instant, price: Double, mainStreamPrice: Double)
+
   case class LowEvent(key: LowEventKey, var points: Vector[MeasuringPoint], var ended: Boolean) {
 
     def snapshots(num: Int): Seq[Double] = {
@@ -86,28 +87,49 @@ class TemporaryLowDetector(context: ActorContext[TemporaryLowDetector.Command],
 
   def preparePrices(tc: TradeContext): Map[TradePair, Map[String, Double]] = {
 
-    val pairs: Iterable[TradePair] = tc.tradePairs.values.flatten
-      .foldLeft(Map[TradePair, Int]())((a, b) => if (a.contains(b)) a + (b -> (a(b) + 1)) else a + (b -> 1))
-      .filter(_._2 > 1) // only pairs available at more than one exchange
-      // TODO limit to exchange:pair with 24h volume > 1M USD
-      .keys
+    def sufficientVolume(exchange: String, pair: TradePair): Boolean = {
+      val volume = tc.stats(exchange)(pair).volume24h
+      val volumeUSD = CryptoValue(pair.baseAsset, volume)
+        .convertTo(exchangesConfig(exchange).usdEquivalentCoin, tc.tickers(exchange))
+        .amount
+      volumeUSD >= 1000000 // TODO config
+    }
 
-    var result: Map[TradePair, Map[String, Double]] = Map()
+    def determineUsablePairs: Map[String, Set[TradePair]] = {
+      val pairsWithSufficientVolume: Map[String, Set[TradePair]] =
+        tc.tradePairs
+          .map(e => (e._1, e._2.filter(p => sufficientVolume(e._1, p))))
 
-    for (pair <- pairs) {
-      var subMap: Map[String, Double] = Map()
-      val exchanges = tc.tradePairs.filter(_._2.contains(pair)).keys
-      for (exchange <- exchanges) {
+      val usablePairs: Set[TradePair] = pairsWithSufficientVolume.values.flatten
+        .foldLeft(Map[TradePair, Int]())((a, b) => if (a.contains(b)) a + (b -> (a(b) + 1)) else a + (b -> 1))
+        .filter(_._2 > 1) // only pairs available at more than one exchange
+        .keys
+        .toSet
 
-        val price = if (exchangesConfig(exchange).tickerIsRealtime)
-          tc.tickers(exchange)(pair).priceEstimate
-        else
-          (tc.orderBooks(exchange)(pair).highestBid.price + tc.orderBooks(exchange)(pair).lowestAsk.price) / 2
+      pairsWithSufficientVolume
+        .map(e => (e._1, e._2.intersect(usablePairs)))
+    }
 
-        subMap = subMap + (exchange -> price)
+    def price(exchange:String, pair:TradePair): Double = {
+      if (exchangesConfig(exchange).tickerIsRealtime)
+        tc.tickers(exchange)(pair).priceEstimate
+      else
+        (tc.orderBooks(exchange)(pair).highestBid.price + tc.orderBooks(exchange)(pair).lowestAsk.price) / 2
+    }
+
+    var result: Map[TradePair, Map[String, Double]] = Map() // Map[pair -> Map[exchange, price]]
+    val usablePairsPerExchange: Map[String, Set[TradePair]] = determineUsablePairs
+
+    for (pair: TradePair <- usablePairsPerExchange.values.flatten.toSet) {
+      var pricePerExchange: Map[String, Double] = Map()
+
+      for (exchange <- usablePairsPerExchange.keys) {
+        if (usablePairsPerExchange(exchange).contains(pair)) {
+          pricePerExchange += (exchange -> price(exchange, pair))
+        }
       }
 
-      result = result + (pair -> subMap)
+      result = result + (pair -> pricePerExchange)
     }
 
     result
@@ -116,9 +138,10 @@ class TemporaryLowDetector(context: ActorContext[TemporaryLowDetector.Command],
   def searchRun(tc: TradeContext): Unit = {
     val time = Instant.now
     val open: Iterable[LowEvent] = openEvents
-
     val prices: Map[TradePair, Map[String, Double]] = preparePrices(tc)
+
     for (pair <- prices.keySet) {
+
       open.find(e => e.key.pair == pair) match {
 
         case Some(lowEvent) =>

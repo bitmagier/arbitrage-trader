@@ -4,7 +4,7 @@ import java.time.Instant
 
 import akka.Done
 import akka.actor.typed.scaladsl.AskPattern.{Askable, schedulerFromActorSystem}
-import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
+import akka.actor.typed.scaladsl.{ActorContext, Behaviors, TimerScheduler}
 import akka.actor.typed.{ActorRef, Behavior}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage, WebSocketRequest, WebSocketUpgradeResponse}
@@ -13,12 +13,12 @@ import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.PublicDataChannel.Disconnected
-import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.GetBitfinexTradePairs
+import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.{BitfinexBaseRestEndpointPublic, GetBitfinexTradePairs}
 import org.purevalue.arbitrage.adapter.{PublicDataChannel, PublicDataInquirer}
 import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.IncomingPublicData
 import org.purevalue.arbitrage.traderoom.exchange._
-import org.purevalue.arbitrage.util.Emoji
+import org.purevalue.arbitrage.util.{Emoji, HttpUtil}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
@@ -129,6 +129,8 @@ private[bitfinex] object RawOrderBookUpdateJson {
   def apply(v: Tuple2[Int, RawOrderBookEntryJson]): RawOrderBookUpdateJson = RawOrderBookUpdateJson(v._1, v._2)
 }
 
+private[bitfinex] case class TickerJson(symbol:String, volume:Double)
+
 private[bitfinex] object WebSocketJsonProtocoll extends DefaultJsonProtocol {
   implicit val subscribeRequest: RootJsonFormat[SubscribeRequestJson] = jsonFormat3(SubscribeRequestJson)
 
@@ -162,6 +164,14 @@ private[bitfinex] object WebSocketJsonProtocoll extends DefaultJsonProtocol {
 
     def write(v: RawOrderBookUpdateJson): JsValue = throw new NotImplementedError
   }
+
+  implicit object tickerJsonFormat extends RootJsonFormat[TickerJson] {
+    def read(value: JsValue): TickerJson = {
+      val v = value.convertTo[Vector[JsValue]]
+      TickerJson(v(0).convertTo[String], v(8).convertTo[Double])
+    }
+    def write(v: TickerJson): JsValue = throw new NotImplementedError
+  }
 }
 
 
@@ -173,8 +183,11 @@ object BitfinexPublicDataChannel {
             relevantTradePairs: Set[TradePair],
             exchange: ActorRef[Exchange.Message],
             publicDataInquirer: ActorRef[PublicDataInquirer.Command]):
-  Behavior[PublicDataChannel.Event] =
-    Behaviors.setup(context => new BitfinexPublicDataChannel(context, globalConfig, exchangeConfig, relevantTradePairs, exchange, publicDataInquirer))
+  Behavior[PublicDataChannel.Event] = {
+    Behaviors.withTimers(timers =>
+      Behaviors.setup(context =>
+        new BitfinexPublicDataChannel(context, timers, globalConfig, exchangeConfig, relevantTradePairs, exchange, publicDataInquirer)))
+  }
 }
 
 /**
@@ -182,11 +195,14 @@ object BitfinexPublicDataChannel {
  * Converts Raw data to unified ExchangeTPStreamData
  */
 private[bitfinex] class BitfinexPublicDataChannel(context: ActorContext[PublicDataChannel.Event],
+                                                  timers: TimerScheduler[PublicDataChannel.Event],
                                                   globalConfig: GlobalConfig,
                                                   exchangeConfig: ExchangeConfig,
                                                   relevantTradePairs: Set[TradePair],
                                                   exchange: ActorRef[Exchange.Message],
-                                                  publicDataInquirer: ActorRef[PublicDataInquirer.Command]) extends PublicDataChannel(context) {
+                                                  publicDataInquirer: ActorRef[PublicDataInquirer.Command])
+  extends PublicDataChannel(context, timers, exchangeConfig) {
+
   private val log = LoggerFactory.getLogger(getClass)
 
   val WebSocketEndpoint: Uri = Uri(s"wss://api-pub.bitfinex.com/ws/2")
@@ -403,6 +419,23 @@ private[bitfinex] class BitfinexPublicDataChannel(context: ActorContext[PublicDa
       connectedList = createConnected(ws._1) :: connectedList
     }
     log.info(s"${wsList.size} WebSockets started")
+  }
+
+  override def deliverTradePairStats(): Unit = {
+    val tradePairSymbols = bitfinexTradePairByApiSymbol.keys.mkString(",")
+    HttpUtil.httpGetJson[Seq[TickerJson], JsValue](s"$BitfinexBaseRestEndpointPublic/v2/tickers?symbols=$tradePairSymbols") foreach {
+      case Left(tickers) =>
+        exchange ! Exchange.IncomingPublicData(
+          tickers.map( e =>
+            TradePairStats(
+              exchangeConfig.name,
+              bitfinexTradePairByApiSymbol(e.symbol).toTradePair,
+              e.volume
+            )
+          ))
+
+      case Right(error) => log.error(s"query product tickers failed: $error")
+    }
   }
 
   override def postStop(): Unit = {

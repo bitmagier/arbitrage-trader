@@ -2,7 +2,7 @@ package org.purevalue.arbitrage.adapter.coinbase
 
 import akka.Done
 import akka.actor.typed.scaladsl.AskPattern.{Askable, schedulerFromActorSystem}
-import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
+import akka.actor.typed.scaladsl.{ActorContext, Behaviors, TimerScheduler}
 import akka.actor.typed.{ActorRef, Behavior}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.StatusCodes
@@ -11,14 +11,15 @@ import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
 import org.purevalue.arbitrage.adapter.PublicDataChannel.Disconnected
 import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataChannel.CoinbaseWebSocketEndpoint
-import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataInquirer.GetCoinbaseTradePairs
+import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataInquirer.{CoinbaseBaseRestEndpoint, GetCoinbaseTradePairs}
 import org.purevalue.arbitrage.adapter.{PublicDataChannel, PublicDataInquirer}
 import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.IncomingPublicData
-import org.purevalue.arbitrage.traderoom.exchange.{Ask, Bid, Exchange, ExchangePublicStreamData, OrderBook, OrderBookUpdate, Ticker}
+import org.purevalue.arbitrage.traderoom.exchange.{Ask, Bid, Exchange, ExchangePublicStreamData, OrderBook, OrderBookUpdate, Ticker, TradePairStats}
+import org.purevalue.arbitrage.util.HttpUtil
 import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig}
 import org.slf4j.LoggerFactory
-import spray.json.{DefaultJsonProtocol, JsObject, JsonParser, RootJsonFormat, enrichAny}
+import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, Future, Promise}
@@ -79,11 +80,14 @@ private[coinbase] case class OrderBookUpdateJson(`type`: String,
   )
 }
 
+private[coinbase] case class ProductTickerJson(volume: String)
+
 private[coinbase] object CoinbasePublicJsonProtocol extends DefaultJsonProtocol {
   implicit val subscribeRequestJson: RootJsonFormat[SubscribeRequestJson] = jsonFormat3(SubscribeRequestJson)
   implicit val tickerJson: RootJsonFormat[TickerJson] = jsonFormat5(TickerJson)
   implicit val orderBookSnapshotJson: RootJsonFormat[OrderBookSnapshotJson] = jsonFormat4(OrderBookSnapshotJson)
   implicit val orderBookUpdateJson: RootJsonFormat[OrderBookUpdateJson] = jsonFormat4(OrderBookUpdateJson)
+  implicit val productTickerJson: RootJsonFormat[ProductTickerJson] = jsonFormat1(ProductTickerJson)
 }
 
 object CoinbasePublicDataChannel {
@@ -92,19 +96,24 @@ object CoinbasePublicDataChannel {
             relevantTradePairs: Set[TradePair],
             exchange: ActorRef[Exchange.Message],
             publicDataInquirer: ActorRef[PublicDataInquirer.Command]):
-  Behavior[PublicDataChannel.Event] =
-    Behaviors.setup(context =>
-      new CoinbasePublicDataChannel(context, globalConfig, exchangeConfig, relevantTradePairs, exchange, publicDataInquirer))
+  Behavior[PublicDataChannel.Event] = {
+    Behaviors.withTimers(timers =>
+      Behaviors.setup(context =>
+        new CoinbasePublicDataChannel(context, timers, globalConfig, exchangeConfig, relevantTradePairs, exchange, publicDataInquirer)))
+  }
 
   // The websocket feed is publicly available, but connections to it are rate-limited to 1 per 4 seconds per IP.
   val CoinbaseWebSocketEndpoint: String = "wss://ws-feed.pro.coinbase.com" // "wss://ws-feed-public.sandbox.pro.coinbase.com"
 }
 private[coinbase] class CoinbasePublicDataChannel(context: ActorContext[PublicDataChannel.Event],
+                                                  timers: TimerScheduler[PublicDataChannel.Event],
                                                   globalConfig: GlobalConfig,
                                                   exchangeConfig: ExchangeConfig,
                                                   relevantTradePairs: Set[TradePair],
                                                   exchange: ActorRef[Exchange.Message],
-                                                  publicDataInquirer: ActorRef[PublicDataInquirer.Command]) extends PublicDataChannel(context) {
+                                                  publicDataInquirer: ActorRef[PublicDataInquirer.Command])
+  extends PublicDataChannel(context, timers, exchangeConfig) {
+
   private val log = LoggerFactory.getLogger(getClass)
 
   val TickerChannelName: String = "ticker"
@@ -195,7 +204,7 @@ private[coinbase] class CoinbasePublicDataChannel(context: ActorContext[PublicDa
     log.info(s"connect WebSocket $CoinbaseWebSocketEndpoint...")
 
     ws = Http().singleWebSocketRequest(WebSocketRequest(CoinbaseWebSocketEndpoint), wsFlow)
-    ws._2.future.onComplete { e =>
+    ws._2.future.onComplete { _ =>
       log.info(s"connection closed")
       context.self ! Disconnected()
     }
@@ -213,6 +222,19 @@ private[coinbase] class CoinbasePublicDataChannel(context: ActorContext[PublicDa
       .toMap
   }
 
+
+  override def deliverTradePairStats(): Unit = {
+    coinbaseTradePairByProductId.foreach {
+      case (productId,pair) => HttpUtil.httpGetJson[ProductTickerJson, JsValue](
+        s"$CoinbaseBaseRestEndpoint/products/$productId/ticker").foreach {
+
+        case Left(ticker) => exchange ! Exchange.IncomingPublicData(
+            Seq(TradePairStats(exchangeConfig.name, pair.toTradePair, ticker.volume.toDouble)))
+
+        case Right(error) => log.error(s"query product ticker (${pair.toTradePair}) failed: $error")
+      }
+    }
+  }
 
   def init(): Unit = {
     log.info("initializing coinbase public data channel")

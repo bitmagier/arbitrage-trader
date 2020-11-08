@@ -17,6 +17,22 @@ package object exchange {
 
   case class Heartbeat(ts: Instant) extends ExchangePublicStreamData
 
+  case class DataAge(heartbeatTS: Option[Instant],
+                     tickerTS: Option[Instant],
+                     orderBookTS: Option[Instant]) {
+    def withHeartBeatTS(ts: Instant): DataAge = DataAge(Some(ts), tickerTS, orderBookTS)
+
+    def withTickerTS(ts: Instant): DataAge = DataAge(heartbeatTS, Some(ts), orderBookTS)
+
+    def withOrderBookTS(ts: Instant): DataAge = DataAge(heartbeatTS, tickerTS, Some(ts))
+
+    def latest: Instant = (heartbeatTS.toSeq ++ tickerTS.toSeq ++ orderBookTS.toSeq).max
+  }
+
+  case class TradePairStats(exchange: String,
+                            pair: TradePair,
+                            volume24h: Double) extends ExchangePublicStreamData
+
   case class Ticker(exchange: String,
                     pair: TradePair,
                     highestBidPrice: Double,
