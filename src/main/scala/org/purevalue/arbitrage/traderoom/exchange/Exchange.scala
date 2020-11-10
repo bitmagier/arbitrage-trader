@@ -1,5 +1,6 @@
 package org.purevalue.arbitrage.traderoom.exchange
 
+import java.time.temporal.ChronoUnit
 import java.time.{Duration, Instant}
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -204,6 +205,28 @@ class Exchange(context: ActorContext[Exchange.Message],
       s"PioneerOrderRunner-$exchangeName")
   }
 
+  def waitForTradePairStatistics(): Unit = {
+    val reportInterval = Duration.of(5, ChronoUnit.SECONDS)
+    var lastReportTS = Instant.now
+
+    def statisticsComplete: Boolean = {
+      usableTradePairs.subsetOf(publicData.stats.keySet)
+    }
+
+    def potentiallyReport(): Unit = {
+      val now = Instant.now
+      if (lastReportTS.plus(reportInterval).isBefore(now)) {
+        log.info(s"[$exchangeName] still waiting for trade pair statistic of pairs: ${usableTradePairs -- publicData.stats.keySet}")
+        lastReportTS = now
+      }
+    }
+
+    while (!statisticsComplete) concurrent.blocking {
+      potentiallyReport()
+      Thread.sleep(500)
+    }
+  }
+
   def joinTradeRoom(j: JoinTradeRoom): Unit = {
     this.tradeRoom = Some(j.tradeRoom)
     initLiquidityManager()
@@ -249,6 +272,7 @@ class Exchange(context: ActorContext[Exchange.Message],
         InitStep("warmup channels for 3 seconds", () => Thread.sleep(3000)),
         InitStep(s"initiate pioneers", () => self ! InitiatePioneerOrders()),
         InitStep("waiting for pioneer orders to succeed", () => pioneerOrdersSucceeded.await(pioneerOrderMaxWaitTime)),
+        InitStep("waiting for trade pair statistics", () => waitForTradePairStatistics()),
         InitStep("send streaming-started", () => replyTo ! StreamingStarted(exchangeName)),
         InitStep("wait until joined trade-room", () => joinedTradeRoom.await(maxWaitTime * 3))
       ))
