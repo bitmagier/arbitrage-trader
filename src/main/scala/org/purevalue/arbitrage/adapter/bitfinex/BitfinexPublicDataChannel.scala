@@ -425,6 +425,7 @@ private[bitfinex] class BitfinexPublicDataChannel(context: ActorContext[PublicDa
     val tradePairSymbols = bitfinexTradePairByApiSymbol.keys.mkString(",")
     HttpUtil.httpGetJson[Seq[TickerJson], JsValue](s"$BitfinexBaseRestEndpointPublic/v2/tickers?symbols=$tradePairSymbols") foreach {
       case Left(tickers) =>
+        log.debug(s"received tickers: $tickers")
         exchange ! Exchange.IncomingPublicData(
           tickers.map( e =>
             TradePairStats(

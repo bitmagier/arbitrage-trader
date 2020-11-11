@@ -216,7 +216,7 @@ class Exchange(context: ActorContext[Exchange.Message],
     def potentiallyReport(): Unit = {
       val now = Instant.now
       if (lastReportTS.plus(reportInterval).isBefore(now)) {
-        log.info(s"[$exchangeName] still waiting for trade pair statistic of pairs: ${usableTradePairs -- publicData.stats.keySet}")
+        log.info(s"[$exchangeName] still waiting for ${(usableTradePairs -- publicData.stats.keySet).size} trade pair statistic")
         lastReportTS = now
       }
     }
