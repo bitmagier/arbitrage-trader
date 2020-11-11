@@ -43,5 +43,6 @@ abstract class PublicDataChannel(context: ActorContext[PublicDataChannel.Event],
     case PostStop => postStop(); Behaviors.same
   }
 
+  context.self ! DeliverTradePairStats()
   timers.startTimerAtFixedRate(DeliverTradePairStats(), FiniteDuration(exchangeConfig.pullTradePairStatsInterval.toMillis, TimeUnit.MILLISECONDS))
 }
