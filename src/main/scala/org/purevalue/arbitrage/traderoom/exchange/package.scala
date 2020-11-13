@@ -29,10 +29,6 @@ package object exchange {
     def latest: Instant = (heartbeatTS.toSeq ++ tickerTS.toSeq ++ orderBookTS.toSeq).max
   }
 
-  case class TradePairStats(exchange: String,
-                            pair: TradePair,
-                            volume24h: Double) extends ExchangePublicStreamData
-
   case class Ticker(exchange: String,
                     pair: TradePair,
                     highestBidPrice: Double,
@@ -77,6 +73,24 @@ package object exchange {
     def highestBid: Bid = bids(bids.keySet.max)
 
     def lowestAsk: Ask = asks(asks.keySet.min)
+
+    /**
+     * @return sum of bid quantity (want to buy) in the price range from current-price till price level at (1-rate) * current-price
+     */
+    def bidDepthAround(rate: Double): CryptoValue = {
+      val limit = highestBid.price * (1.0 - rate)
+      val quantity = bids.filter(_._1 >= limit).values.foldLeft(0.0)((sum, e) => sum + e.quantity)
+      CryptoValue(pair.baseAsset, quantity)
+    }
+
+    /**
+     * @return summed of ask auantity (want to sell) in the price range from current-price till price level at (1+rate) * current-price
+     */
+    def askDepthAround(rate:Double): CryptoValue = {
+      val limit = lowestAsk.price * (1.0 + rate)
+      val quantity = asks.filter(_._1 <= limit).values.foldLeft(0.0)((sum, e) => sum + e.quantity)
+      CryptoValue(pair.baseAsset, quantity)
+    }
   }
 
   case class OrderBookUpdate(exchange: String,

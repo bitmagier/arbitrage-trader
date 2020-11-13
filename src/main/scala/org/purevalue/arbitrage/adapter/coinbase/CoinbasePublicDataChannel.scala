@@ -11,15 +11,14 @@ import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
 import org.purevalue.arbitrage.adapter.PublicDataChannel.Disconnected
 import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataChannel.CoinbaseWebSocketEndpoint
-import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataInquirer.{CoinbaseBaseRestEndpoint, GetCoinbaseTradePairs}
+import org.purevalue.arbitrage.adapter.coinbase.CoinbasePublicDataInquirer.GetCoinbaseTradePairs
 import org.purevalue.arbitrage.adapter.{PublicDataChannel, PublicDataInquirer}
 import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.IncomingPublicData
-import org.purevalue.arbitrage.traderoom.exchange.{Ask, Bid, Exchange, ExchangePublicStreamData, OrderBook, OrderBookUpdate, Ticker, TradePairStats}
-import org.purevalue.arbitrage.util.HttpUtil
+import org.purevalue.arbitrage.traderoom.exchange.{Ask, Bid, Exchange, ExchangePublicStreamData, OrderBook, OrderBookUpdate, Ticker}
 import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig}
 import org.slf4j.LoggerFactory
-import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
+import spray.json.{DefaultJsonProtocol, JsObject, JsonParser, RootJsonFormat, enrichAny}
 
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, Future, Promise}
@@ -211,7 +210,6 @@ private[coinbase] class CoinbasePublicDataChannel(context: ActorContext[PublicDa
     connected = createConnected
   }
 
-
   def initCoinbaseTradePairBySymbol(): Unit = {
     implicit val timeout: Timeout = globalConfig.internalCommunicationTimeoutDuringInit
     coinbaseTradePairByProductId = Await.result(
@@ -220,20 +218,6 @@ private[coinbase] class CoinbasePublicDataChannel(context: ActorContext[PublicDa
       .filter(e => relevantTradePairs.contains(e.toTradePair))
       .map(e => (e.id, e))
       .toMap
-  }
-
-
-  override def deliverTradePairStats(): Unit = {
-    coinbaseTradePairByProductId.foreach {
-      case (productId,pair) => HttpUtil.httpGetJson[ProductTickerJson, JsValue](
-        s"$CoinbaseBaseRestEndpoint/products/$productId/ticker").foreach {
-
-        case Left(ticker) => exchange ! Exchange.IncomingPublicData(
-            Seq(TradePairStats(exchangeConfig.name, pair.toTradePair, ticker.volume.toDouble)))
-
-        case Right(error) => log.error(s"query product ticker (${pair.toTradePair}) failed: $error")
-      }
-    }
   }
 
   def init(): Unit = {

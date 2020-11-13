@@ -10,13 +10,12 @@ import akka.http.scaladsl.model.{StatusCodes, Uri}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
 import org.purevalue.arbitrage._
-import org.purevalue.arbitrage.adapter.binance.BinancePublicDataInquirer.BinanceBaseRestEndpoint
 import org.purevalue.arbitrage.adapter.{PublicDataChannel, PublicDataInquirer}
 import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.IncomingPublicData
-import org.purevalue.arbitrage.traderoom.exchange.{Exchange, ExchangePublicStreamData, Ticker, TradePairStats}
+import org.purevalue.arbitrage.traderoom.exchange.{Exchange, ExchangePublicStreamData, Ticker}
+import org.purevalue.arbitrage.util.Emoji
 import org.purevalue.arbitrage.util.HttpUtil.httpGetJson
-import org.purevalue.arbitrage.util.{Emoji, HttpUtil}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
@@ -238,20 +237,6 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
 
   override def onStreamsRunning(): Unit = {
     deliverBookTickerState()
-  }
-
-  override def deliverTradePairStats(): Unit = {
-    binanceTradePairBySymbol.foreach {
-      case (symbol,pair) =>
-        HttpUtil.httpGetJson[TickerStatisticsJson, JsValue](s"$BinanceBaseRestEndpoint/api/v3/ticker/24hr") foreach {
-          case Left(tickerStats) =>
-            exchange ! Exchange.IncomingPublicData(
-              Seq(TradePairStats(exchangeConfig.name, pair.toTradePair, tickerStats.volume.toDouble))
-            )
-
-          case Right(error) => log.error(s"query ticker stats for ${pair.toTradePair} failed: $error")
-        }
-    }
   }
 
   override def postStop(): Unit = {

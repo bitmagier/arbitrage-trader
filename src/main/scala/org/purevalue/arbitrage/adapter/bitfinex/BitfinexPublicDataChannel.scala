@@ -13,12 +13,12 @@ import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.util.Timeout
 import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.PublicDataChannel.Disconnected
-import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.{BitfinexBaseRestEndpointPublic, GetBitfinexTradePairs}
+import org.purevalue.arbitrage.adapter.bitfinex.BitfinexPublicDataInquirer.GetBitfinexTradePairs
 import org.purevalue.arbitrage.adapter.{PublicDataChannel, PublicDataInquirer}
 import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.IncomingPublicData
 import org.purevalue.arbitrage.traderoom.exchange._
-import org.purevalue.arbitrage.util.{Emoji, HttpUtil}
+import org.purevalue.arbitrage.util.Emoji
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
@@ -419,23 +419,6 @@ private[bitfinex] class BitfinexPublicDataChannel(context: ActorContext[PublicDa
       connectedList = createConnected(ws._1) :: connectedList
     }
     log.info(s"${wsList.size} WebSockets started")
-  }
-
-  override def deliverTradePairStats(): Unit = {
-    val tradePairSymbols = bitfinexTradePairByApiSymbol.keys.mkString(",")
-    HttpUtil.httpGetJson[Seq[TickerJson], JsValue](s"$BitfinexBaseRestEndpointPublic/v2/tickers?symbols=$tradePairSymbols") foreach {
-      case Left(tickers) =>
-        exchange ! Exchange.IncomingPublicData(
-          tickers.map( e =>
-            TradePairStats(
-              exchangeConfig.name,
-              bitfinexTradePairByApiSymbol(e.symbol).toTradePair,
-              e.volume
-            )
-          ))
-
-      case Right(error) => log.error(s"query product tickers failed: $error")
-    }
   }
 
   override def postStop(): Unit = {

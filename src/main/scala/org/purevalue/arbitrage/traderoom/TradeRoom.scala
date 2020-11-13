@@ -15,7 +15,7 @@ import org.purevalue.arbitrage.traderoom.OrderSetPlacer.NewOrderSet
 import org.purevalue.arbitrage.traderoom.TradeRoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityLockRequest}
-import org.purevalue.arbitrage.traderoom.exchange.{DataAge, Exchange, LiquidityBalancerStats, LiquidityManager, OrderBook, Ticker, TickerSnapshot, TradePairStats, Wallet}
+import org.purevalue.arbitrage.traderoom.exchange.{DataAge, Exchange, LiquidityBalancerStats, LiquidityManager, OrderBook, Ticker, TickerSnapshot, Wallet}
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.util.{Emoji, WrongAssumption}
 import org.slf4j.LoggerFactory
@@ -30,7 +30,6 @@ case class TradeContext(tradePairs: Map[String, Set[TradePair]],
                         tickers: Map[String, Map[TradePair, Ticker]],
                         orderBooks: Map[String, Map[TradePair, OrderBook]],
                         dataAge: Map[String, DataAge],
-                        stats: Map[String, Map[TradePair, TradePairStats]],
                         wallets: Map[String, Wallet],
                         referenceTickerExchange: String,
                         feeRates: Map[String, Double],
@@ -74,7 +73,6 @@ object TradeRoom {
                               ticker: Map[TradePair, Ticker],
                               orderBook: Map[TradePair, OrderBook],
                               dataAge: DataAge,
-                              stats: Map[TradePair, TradePairStats],
                               wallet: Wallet)
 
   // communication
@@ -143,7 +141,6 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
         d.map(e => e.exchange -> e.ticker).toMap,
         d.map(e => e.exchange -> e.orderBook).toMap,
         d.map(e => e.exchange -> e.dataAge).toMap,
-        d.map(e => e.exchange -> e.stats).toMap,
         d.map(e => e.exchange -> e.wallet).toMap,
         config.tradeRoom.referenceTickerExchange,
         feeRates,

@@ -1,6 +1,5 @@
 package org.purevalue.arbitrage.traderoom.exchange
 
-import java.time.temporal.ChronoUnit
 import java.time.{Duration, Instant}
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -98,8 +97,7 @@ class Exchange(context: ActorContext[Exchange.Message],
 
   private case class ExchangePublicData(var ticker: Map[TradePair, Ticker],
                                         var orderBook: Map[TradePair, OrderBook],
-                                        var dataAge: DataAge,
-                                        var stats: Map[TradePair, TradePairStats])
+                                        var dataAge: DataAge)
 
   private case class ExchangeAccountData(var wallet: Wallet,
                                          var activeOrders: Map[OrderRef, Order])
@@ -108,7 +106,7 @@ class Exchange(context: ActorContext[Exchange.Message],
   private implicit val system: ActorSystem[UserRootGuardian.Reply] = Main.actorSystem
   private implicit val executionContext: ExecutionContextExecutor = system.executionContext
 
-  private val publicData: ExchangePublicData = ExchangePublicData(Map(), Map(), DataAge(None, None, None), Map())
+  private val publicData: ExchangePublicData = ExchangePublicData(Map(), Map(), DataAge(None, None, None))
   private val accountData: ExchangeAccountData = ExchangeAccountData(
     Wallet(exchangeName, exchangeConfig.doNotTouchTheseAssets, Map()),
     Map())
@@ -205,28 +203,6 @@ class Exchange(context: ActorContext[Exchange.Message],
       s"PioneerOrderRunner-$exchangeName")
   }
 
-  def waitForTradePairStatistics(): Unit = {
-    val reportInterval = Duration.of(5, ChronoUnit.SECONDS)
-    var lastReportTS = Instant.now
-
-    def statisticsComplete: Boolean = {
-      usableTradePairs.subsetOf(publicData.stats.keySet)
-    }
-
-    def potentiallyReport(): Unit = {
-      val now = Instant.now
-      if (lastReportTS.plus(reportInterval).isBefore(now)) {
-        log.info(s"[$exchangeName] still waiting for ${(usableTradePairs -- publicData.stats.keySet).size} trade pair statistic")
-        lastReportTS = now
-      }
-    }
-
-    while (!statisticsComplete) concurrent.blocking {
-      potentiallyReport()
-      Thread.sleep(500)
-    }
-  }
-
   def joinTradeRoom(j: JoinTradeRoom): Unit = {
     this.tradeRoom = Some(j.tradeRoom)
     initLiquidityManager()
@@ -272,7 +248,6 @@ class Exchange(context: ActorContext[Exchange.Message],
         InitStep("warmup channels for 3 seconds", () => Thread.sleep(3000)),
         InitStep(s"initiate pioneers", () => self ! InitiatePioneerOrders()),
         InitStep("waiting for pioneer orders to succeed", () => pioneerOrdersSucceeded.await(pioneerOrderMaxWaitTime)),
-        InitStep("waiting for trade pair statistics", () => waitForTradePairStatistics()),
         InitStep("send streaming-started", () => replyTo ! StreamingStarted(exchangeName)),
         InitStep("wait until joined trade-room", () => joinedTradeRoom.await(maxWaitTime * 3))
       ))
@@ -423,9 +398,6 @@ class Exchange(context: ActorContext[Exchange.Message],
         publicData.orderBook = publicData.orderBook.updated(b.pair, OrderBook(book.get.exchange, book.get.pair, newBids, newAsks))
         publicData.dataAge = publicData.dataAge.withOrderBookTS(Instant.now)
       }
-
-    case s: TradePairStats =>
-      publicData.stats = publicData.stats.updated(s.pair, s)
   }
 
   private def guardedRetry(e: ExchangeAccountStreamData): Unit = {
@@ -574,7 +546,6 @@ class Exchange(context: ActorContext[Exchange.Message],
       publicData.ticker,
       publicData.orderBook,
       publicData.dataAge,
-      publicData.stats,
       accountData.wallet
     )
 

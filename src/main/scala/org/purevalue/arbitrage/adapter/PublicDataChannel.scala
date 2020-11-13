@@ -1,14 +1,11 @@
 package org.purevalue.arbitrage.adapter
 
-import java.util.concurrent.TimeUnit
-
 import akka.actor.typed.scaladsl.{AbstractBehavior, ActorContext, Behaviors, TimerScheduler}
 import akka.actor.typed.{ActorSystem, Behavior, PostStop, Signal}
 import org.purevalue.arbitrage.util.ConnectionClosedException
 import org.purevalue.arbitrage.{ExchangeConfig, Main, UserRootGuardian}
 
 import scala.concurrent.ExecutionContext
-import scala.concurrent.duration.FiniteDuration
 
 object PublicDataChannel {
   trait Event
@@ -27,14 +24,11 @@ abstract class PublicDataChannel(context: ActorContext[PublicDataChannel.Event],
 
   def onStreamsRunning(): Unit = {}
 
-  def deliverTradePairStats(): Unit
-
   def postStop(): Unit = {}
 
   override def onMessage(message: Event): Behavior[Event] = message match {
     // @formatter:off
     case OnStreamsRunning()      => onStreamsRunning(); Behaviors.same
-    case DeliverTradePairStats() => deliverTradePairStats(); Behaviors.same
     case Disconnected()          => throw new ConnectionClosedException(getClass.getSimpleName)
     // @formatter:on
   }
@@ -42,7 +36,4 @@ abstract class PublicDataChannel(context: ActorContext[PublicDataChannel.Event],
   override def onSignal: PartialFunction[Signal, Behavior[Event]] = {
     case PostStop => postStop(); Behaviors.same
   }
-
-  context.self ! DeliverTradePairStats()
-  timers.startTimerAtFixedRate(DeliverTradePairStats(), FiniteDuration(exchangeConfig.pullTradePairStatsInterval.toMillis, TimeUnit.MILLISECONDS))
 }
