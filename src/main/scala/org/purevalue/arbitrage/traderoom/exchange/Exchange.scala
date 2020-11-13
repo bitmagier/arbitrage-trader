@@ -23,7 +23,7 @@ import scala.concurrent.{Await, ExecutionContextExecutor, Future}
 import scala.util.{Failure, Success}
 
 case class TickerSnapshot(exchange: String, ticker: Map[TradePair, Ticker])
-case class OrderBookSnapshot(exchange: String, orderBook: Map[TradePair, OrderBook])
+// case class OrderBookSnapshot(exchange: String, orderBook: Map[TradePair, OrderBook])
 case class DataTSSnapshot(exchange: String, heartbeatTS: Option[Instant], tickerTS: Option[Instant], orderBookTS: Option[Instant])
 
 object Exchange {
