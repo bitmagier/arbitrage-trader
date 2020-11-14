@@ -137,9 +137,9 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
       synchronized {
         outstandingStreamSubscribeResponses = outstandingStreamSubscribeResponses - channelId
       }
-      if (outstandingStreamSubscribeResponses.isEmpty) {
-        context.self ! PublicDataChannel.OnStreamsRunning()
-      }
+    }
+    if (outstandingStreamSubscribeResponses.isEmpty) {
+      context.self ! PublicDataChannel.OnStreamsRunning()
     } else {
       log.warn(s"received stream subscribe response for channelId $channelId, but we were not waiting for this one ${Emoji.NoSupport}")
     }
@@ -195,8 +195,9 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
 
   def subscribeMessages: List[StreamSubscribeRequestJson] = List(
     StreamSubscribeRequestJson(params = Seq("!bookTicker"), id = IdBookTickerStream),
-    StreamSubscribeRequestJson(params = relevantTradePairs.map(e =>
-      s"${binanceTradePairBySymbol.values.find(_.toTradePair == e).get.symbol}@depth").toSeq, id = IdDiffDepthStream) // TODO test depth@100ms
+    StreamSubscribeRequestJson(params =
+      relevantTradePairs.map(e =>
+        s"${binanceTradePairBySymbol.values.find(_.toTradePair == e).get.symbol}@depth").toSeq, id = IdDiffDepthStream) // TODO test depth@100ms
   )
 
   // flow to us
@@ -293,7 +294,6 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
   }
 
   connect()
-
 }
 
 // A single connection to stream.binance.com is only valid for 24 hours; expect to be disconnected at the 24 hour mark
