@@ -190,8 +190,7 @@ class TemporaryLowDetector(context: ActorContext[TemporaryLowDetector.Command],
 
   override def onMessage(message: TemporaryLowDetector.Command): Behavior[TemporaryLowDetector.Command] = {
     message match {
-      case SearchRun(tc) =>
-        searchRun(tc)
+      case SearchRun(tc) => searchRun(tc)
 
       case LogStats() =>
         logStats()

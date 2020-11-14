@@ -68,7 +68,9 @@ class TradeRoomInitCoordinator(context: ActorContext[TradeRoomInitCoordinator.Re
   // - [4] plus all crypto-coin to USD equivalent coin pairs (for liquidity calculations & conversions)
   def determineUsableTradepairs(): Unit = {
     val allGlobalTradePairs = allTradePairs.values.flatten.toSet
-    val globalArbitragePairs = allGlobalTradePairs.filter(e => allTradePairs.count(_._2.contains(e)) > 1)
+    val globalArbitragePairs = allGlobalTradePairs
+      .filterNot(e => e.involvedAssets.exists(_.isFiat))
+      .filter(e => allTradePairs.count(_._2.contains(e)) > 1)
 
     val arbitrageAssets = globalArbitragePairs.flatMap(_.involvedAssets)
 

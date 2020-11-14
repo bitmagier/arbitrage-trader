@@ -23,7 +23,6 @@ import scala.concurrent.{Await, ExecutionContextExecutor, Future}
 import scala.util.{Failure, Success}
 
 case class TickerSnapshot(exchange: String, ticker: Map[TradePair, Ticker])
-// case class OrderBookSnapshot(exchange: String, orderBook: Map[TradePair, OrderBook])
 case class DataTSSnapshot(exchange: String, heartbeatTS: Option[Instant], tickerTS: Option[Instant], orderBookTS: Option[Instant])
 
 object Exchange {
@@ -147,13 +146,17 @@ class Exchange(context: ActorContext[Exchange.Message],
   }
 
   var tickerCompletelyInitialized: Boolean = false
+  var orderBookCompletelyInitialized: Boolean = false
 
-  def onTickerUpdate(): Unit = {
+  def onPublicDataUpdated(): Unit = {
     if (!tickerCompletelyInitialized) {
       tickerCompletelyInitialized = usableTradePairs.subsetOf(publicData.ticker.keySet)
-      if (tickerCompletelyInitialized) {
+    }
+    if (!orderBookCompletelyInitialized) {
+      orderBookCompletelyInitialized = usableTradePairs.subsetOf(publicData.orderBook.keySet)
+    }
+    if (tickerCompletelyInitialized && orderBookCompletelyInitialized) {
         publicDataChannelInitialized.arrived()
-      }
     }
   }
 
@@ -378,11 +381,12 @@ class Exchange(context: ActorContext[Exchange.Message],
     case t: Ticker =>
       publicData.ticker = publicData.ticker.updated(t.pair, t)
       publicData.dataAge = publicData.dataAge.withTickerTS(Instant.now)
-      onTickerUpdate()
+      onPublicDataUpdated()
 
     case b: OrderBook =>
       publicData.orderBook = publicData.orderBook.updated(b.pair, b)
       publicData.dataAge = publicData.dataAge.withOrderBookTS(Instant.now)
+      onPublicDataUpdated()
 
     case b: OrderBookUpdate =>
       val book: Option[OrderBook] = publicData.orderBook.get(b.pair)

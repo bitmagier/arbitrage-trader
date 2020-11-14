@@ -271,22 +271,26 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
   }
 
   def deliverOrderBooks(): Unit = {
-    relevantTradePairs.foreach { pair =>
-      val symbol = binanceTradePairBySymbol.values.find(_.toTradePair == pair).get.symbol
-        httpGetJson[OrderBookRestJson, JsValue](s"$BinanceBaseRestEndpoint/api/v3/depth?symbol=$symbol&limit=1000") onComplete {
-        case Success(Left(book)) => // TODO the pool currently does not process requests fast enough to handle the incoming request load
-          exchange ! IncomingPublicData(
-            Seq(book.toOrderBook(exchangeConfig.name, pair))
-          )
-        case Success(Right(errorResponse)) => log.error(s"deliverOrderBooks failed: $errorResponse")
-        case Failure(e) => log.error("Query/Transform OrderBookRestJson failed", e)
+    Future {
+      concurrent.blocking {
+        relevantTradePairs.foreach { pair =>
+          val symbol = binanceTradePairBySymbol.values.find(_.toTradePair == pair).get.symbol
+          httpGetJson[OrderBookRestJson, JsValue](s"$BinanceBaseRestEndpoint/api/v3/depth?symbol=$symbol&limit=1000") onComplete {
+            case Success(Left(book)) =>
+              exchange ! IncomingPublicData(
+                Seq(book.toOrderBook(exchangeConfig.name, pair))
+              )
+            case Success(Right(errorResponse)) => log.error(s"deliverOrderBook for $symbol failed: $errorResponse")
+            case Failure(e) => log.error(s"Query/Transform OrderBookRestJson for $symbol failed", e)
+          }
+        }
       }
     }
   }
 
   override def onStreamsRunning(): Unit = {
     deliverBookTickerState()
-//    deliverOrderBooks()
+    deliverOrderBooks()
   }
 
   override def postStop(): Unit = {
