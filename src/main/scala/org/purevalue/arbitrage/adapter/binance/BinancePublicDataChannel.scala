@@ -142,8 +142,6 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
     }
     if (outstandingStreamSubscribeResponses.isEmpty) {
       context.self ! PublicDataChannel.OnStreamsRunning()
-    } else {
-      log.warn(s"received stream subscribe response for channelId $channelId, but we were not waiting for this one ${Emoji.NoSupport}")
     }
   }
 
