@@ -272,8 +272,8 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
   def deliverOrderBooks(): Unit = {
     relevantTradePairs.foreach { pair =>
       val symbol = binanceTradePairBySymbol.values.find(_.toTradePair == pair).get.symbol
-      httpGetJson[OrderBookRestJson, JsValue](s"$BinanceBaseRestEndpoint/api/v3/depth?symbol=$symbol&limit=1000") onComplete {
-        case Success(Left(book)) =>
+        httpGetJson[OrderBookRestJson, JsValue](s"$BinanceBaseRestEndpoint/api/v3/depth?symbol=$symbol&limit=1000") onComplete {
+        case Success(Left(book)) => // TODO the pool currently does not process requests fast enough to handle the incoming request load
           exchange ! IncomingPublicData(
             Seq(book.toOrderBook(exchangeConfig.name, pair))
           )
@@ -285,7 +285,7 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
 
   override def onStreamsRunning(): Unit = {
     deliverBookTickerState()
-    deliverOrderBooks()
+//    deliverOrderBooks()
   }
 
   override def postStop(): Unit = {
