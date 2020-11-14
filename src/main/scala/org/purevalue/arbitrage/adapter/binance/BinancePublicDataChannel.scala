@@ -1,5 +1,7 @@
 package org.purevalue.arbitrage.adapter.binance
 
+import java.time.{Duration, Instant}
+
 import akka.Done
 import akka.actor.typed.scaladsl.AskPattern.{Askable, schedulerFromActorSystem}
 import akka.actor.typed.scaladsl.{ActorContext, Behaviors, TimerScheduler}
@@ -271,8 +273,11 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
   }
 
   def deliverOrderBooks(): Unit = {
+    val LogInterval = Duration.ofSeconds(5)
     Future {
       concurrent.blocking {
+        var booksReceived = 0
+        var lastLogged: Instant = Instant.now
         relevantTradePairs.foreach { pair =>
           val symbol = binanceTradePairBySymbol.values.find(_.toTradePair == pair).get.symbol
           try {
@@ -283,7 +288,14 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
                 exchange ! IncomingPublicData(
                   Seq(book.toOrderBook(exchangeConfig.name, pair))
                 )
+                booksReceived += 1
+
               case Right(errorResponse) => log.error(s"deliverOrderBook for $symbol failed: $errorResponse")
+            }
+
+            if (Instant.now.isAfter(lastLogged.plus(LogInterval))) {
+              log.info(s"[binance] received $booksReceived of ${relevantTradePairs.size} order books")
+              lastLogged = Instant.now
             }
           } catch {
             case t: Throwable => log.error(s"Query/Transform OrderBookRestJson for $symbol failed", t)
