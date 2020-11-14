@@ -275,13 +275,18 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
       concurrent.blocking {
         relevantTradePairs.foreach { pair =>
           val symbol = binanceTradePairBySymbol.values.find(_.toTradePair == pair).get.symbol
-          httpGetJson[OrderBookRestJson, JsValue](s"$BinanceBaseRestEndpoint/api/v3/depth?symbol=$symbol&limit=1000") onComplete {
-            case Success(Left(book)) =>
-              exchange ! IncomingPublicData(
-                Seq(book.toOrderBook(exchangeConfig.name, pair))
-              )
-            case Success(Right(errorResponse)) => log.error(s"deliverOrderBook for $symbol failed: $errorResponse")
-            case Failure(e) => log.error(s"Query/Transform OrderBookRestJson for $symbol failed", e)
+          try {
+            Await.result(
+              httpGetJson[OrderBookRestJson, JsValue](s"$BinanceBaseRestEndpoint/api/v3/depth?symbol=$symbol&limit=1000"),
+              globalConfig.httpTimeout.plus(1.second)) match {
+              case Left(book) =>
+                exchange ! IncomingPublicData(
+                  Seq(book.toOrderBook(exchangeConfig.name, pair))
+                )
+              case Right(errorResponse) => log.error(s"deliverOrderBook for $symbol failed: $errorResponse")
+            }
+          } catch {
+            case t: Throwable => log.error(s"Query/Transform OrderBookRestJson for $symbol failed", t)
           }
         }
       }
