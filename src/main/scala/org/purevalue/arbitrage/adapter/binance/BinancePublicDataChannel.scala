@@ -276,7 +276,7 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
         relevantTradePairs.foreach { pair =>
           val symbol = binanceTradePairBySymbol.values.find(_.toTradePair == pair).get.symbol
           try {
-            Await.result(
+            Await.result( // do sequential one after the other to avoid http overload situation
               httpGetJson[OrderBookRestJson, JsValue](s"$BinanceBaseRestEndpoint/api/v3/depth?symbol=$symbol&limit=1000"),
               globalConfig.httpTimeout.plus(1.second)) match {
               case Left(book) =>
