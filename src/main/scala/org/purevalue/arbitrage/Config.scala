@@ -26,7 +26,7 @@ case class ExchangeConfig(name: String,
                           secrets: SecretsConfig,
                           refCode: Option[String],
                           assetSourceWeight: Int,
-                          pullTradePairStatsInterval: Duration) {
+                          tradePairInitTimeout: Duration) {
   def primaryReserveAsset: Asset = reserveAssets.head
 }
 
@@ -62,7 +62,7 @@ object ExchangeConfig {
       secretsConfig(c.getConfig("secrets")),
       if (c.hasPath("ref-code")) Some(c.getString("ref-code")) else None,
       c.getInt("asset-source-weight"),
-      c.getDuration("pull-trade-pair-stats-interval")
+      c.getDuration("trade-pair-init-timeout")
     )
   }
 
