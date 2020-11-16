@@ -398,7 +398,7 @@ private[bitfinex] class BitfinexPublicDataChannel(context: ActorContext[PublicDa
       val subscribeMessages: List[SubscribeRequestJson] = partition.map(e => subscribeTickerMessage(e)).toList
       connectionId += 1
       val ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow(connectionId, subscribeMessages))
-      ws._2.future.onComplete { e =>
+      ws._2.future.onComplete { _ =>
         log.info(s"connection closed")
         context.self ! Disconnected()
       }
@@ -411,7 +411,7 @@ private[bitfinex] class BitfinexPublicDataChannel(context: ActorContext[PublicDa
       val subscribeMessages: List[SubscribeRequestJson] = partition.map(e => subscribeOrderBookMessage(e)).toList
       connectionId += 1
       val ws = Http().singleWebSocketRequest(WebSocketRequest(WebSocketEndpoint), wsFlow(connectionId, subscribeMessages))
-      ws._2.future.onComplete { e =>
+      ws._2.future.onComplete { _ =>
         log.info(s"connection closed")
         context.self ! Disconnected()
       }

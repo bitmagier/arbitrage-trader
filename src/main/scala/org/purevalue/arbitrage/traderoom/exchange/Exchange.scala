@@ -148,15 +148,21 @@ class Exchange(context: ActorContext[Exchange.Message],
 
   var tickerCompletelyInitialized: Boolean = false
   var orderBookCompletelyInitialized: Boolean = false
+  var stats24hCompletelyInitialized: Boolean = false
 
   def onPublicDataUpdated(): Unit = {
     if (!tickerCompletelyInitialized) {
       tickerCompletelyInitialized = usableTradePairs.subsetOf(publicData.ticker.keySet)
     }
-    if (!orderBookCompletelyInitialized) {
+    if (exchangeConfig.deliversOrderBook && !orderBookCompletelyInitialized) {
       orderBookCompletelyInitialized = usableTradePairs.subsetOf(publicData.orderBook.keySet)
     }
-    if (tickerCompletelyInitialized && orderBookCompletelyInitialized) {
+    if (exchangeConfig.deliversStats24h && !stats24hCompletelyInitialized) {
+      stats24hCompletelyInitialized = usableTradePairs.subsetOf(publicData.stats24h.keySet)
+    }
+    if (tickerCompletelyInitialized &&
+      (!exchangeConfig.deliversOrderBook || orderBookCompletelyInitialized) &&
+      (!exchangeConfig.deliversStats24h || stats24hCompletelyInitialized)) {
         publicDataChannelInitialized.arrived()
     }
   }
@@ -406,6 +412,7 @@ class Exchange(context: ActorContext[Exchange.Message],
 
     case v: Stats24h =>
       publicData.stats24h = publicData.stats24h.updated(v.pair, v)
+      onPublicDataUpdated()
   }
 
   private def guardedRetry(e: ExchangeAccountStreamData): Unit = {

@@ -115,8 +115,8 @@ class TemporaryLowDetector(context: ActorContext[TemporaryLowDetector.Command],
           .map(e => (
             e._1,
             e._2.filter(p =>
-              (tc.stats24h(e._1).nonEmpty && volume24hSufficient(e._1, p)) ||
-                (tc.orderBooks(e._1).nonEmpty && orderBookDepthSufficient(e._1, p)))))
+              (exchangesConfig(e._1).deliversStats24h && volume24hSufficient(e._1, p)) ||
+                (exchangesConfig(e._1).deliversOrderBook && orderBookDepthSufficient(e._1, p)))))
 
       val usablePairs: Set[TradePair] = pairsWithSufficientVolume.values.flatten
         .foldLeft(Map[TradePair, Int]())((a, b) => if (a.contains(b)) a + (b -> (a(b) + 1)) else a + (b -> 1))

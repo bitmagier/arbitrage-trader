@@ -15,6 +15,8 @@ case class SecretsConfig(apiKey: String,
                          apiKeyPassphrase: Option[String])
 
 case class ExchangeConfig(name: String,
+                          deliversOrderBook: Boolean,
+                          deliversStats24h: Boolean,
                           reserveAssets: List[Asset], // reserve assets in order of importance; first in list is the primary reserve asset
                           assetBlocklist: Set[Asset],
                           usdEquivalentCoin: Asset, // primary local USD equivalent coin. USDT, USDC etc. for amount calculations
@@ -49,6 +51,8 @@ object ExchangeConfig {
 
     ExchangeConfig(
       name,
+      c.getBoolean("delivers-order-book"),
+      c.getBoolean("delivers-stats24h"),
       reserveAssets,
       assetBlocklist.map(e => Asset(e)).toSet,
       Asset(usdEquivalentCoin),
