@@ -15,7 +15,7 @@ import org.purevalue.arbitrage.traderoom.OrderSetPlacer.NewOrderSet
 import org.purevalue.arbitrage.traderoom.TradeRoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLock, LiquidityLockClearance, LiquidityLockRequest}
-import org.purevalue.arbitrage.traderoom.exchange.{DataAge, Exchange, LiquidityBalancerStats, LiquidityManager, OrderBook, Ticker, TickerSnapshot, Wallet}
+import org.purevalue.arbitrage.traderoom.exchange.{DataAge, Exchange, LiquidityBalancerStats, LiquidityManager, OrderBook, Stats24h, Ticker, TickerSnapshot, Wallet}
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.purevalue.arbitrage.util.{Emoji, WrongAssumption}
 import org.slf4j.LoggerFactory
@@ -29,6 +29,7 @@ import scala.util.{Failure, Success}
 case class TradeContext(tradePairs: Map[String, Set[TradePair]],
                         tickers: Map[String, Map[TradePair, Ticker]],
                         orderBooks: Map[String, Map[TradePair, OrderBook]],
+                        stats24h: Map[String, Map[TradePair, Stats24h]],
                         dataAge: Map[String, DataAge],
                         wallets: Map[String, Wallet],
                         referenceTickerExchange: String,
@@ -72,6 +73,7 @@ object TradeRoom {
   case class FullDataSnapshot(exchange: String,
                               ticker: Map[TradePair, Ticker],
                               orderBook: Map[TradePair, OrderBook],
+                              stats24h: Map[TradePair, Stats24h],
                               dataAge: DataAge,
                               wallet: Wallet)
 
@@ -140,6 +142,7 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
         usableTradePairs,
         d.map(e => e.exchange -> e.ticker).toMap,
         d.map(e => e.exchange -> e.orderBook).toMap,
+        d.map(e => e.exchange -> e.stats24h).toMap,
         d.map(e => e.exchange -> e.dataAge).toMap,
         d.map(e => e.exchange -> e.wallet).toMap,
         config.tradeRoom.referenceTickerExchange,

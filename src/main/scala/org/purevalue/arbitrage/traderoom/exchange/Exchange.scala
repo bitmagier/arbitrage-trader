@@ -96,6 +96,7 @@ class Exchange(context: ActorContext[Exchange.Message],
 
   private case class ExchangePublicData(var ticker: Map[TradePair, Ticker],
                                         var orderBook: Map[TradePair, OrderBook],
+                                        var stats24h: Map[TradePair, Stats24h],
                                         var dataAge: DataAge)
 
   private case class ExchangeAccountData(var wallet: Wallet,
@@ -105,7 +106,7 @@ class Exchange(context: ActorContext[Exchange.Message],
   private implicit val system: ActorSystem[UserRootGuardian.Reply] = Main.actorSystem
   private implicit val executionContext: ExecutionContextExecutor = system.executionContext
 
-  private val publicData: ExchangePublicData = ExchangePublicData(Map(), Map(), DataAge(None, None, None))
+  private val publicData: ExchangePublicData = ExchangePublicData(Map(), Map(), Map(), DataAge(None, None, None))
   private val accountData: ExchangeAccountData = ExchangeAccountData(
     Wallet(exchangeName, exchangeConfig.doNotTouchTheseAssets, Map()),
     Map())
@@ -402,6 +403,9 @@ class Exchange(context: ActorContext[Exchange.Message],
         publicData.orderBook = publicData.orderBook.updated(b.pair, OrderBook(book.get.exchange, book.get.pair, newBids, newAsks))
         publicData.dataAge = publicData.dataAge.withOrderBookTS(Instant.now)
       }
+
+    case v: Stats24h =>
+      publicData.stats24h = publicData.stats24h.updated(v.pair, v)
   }
 
   private def guardedRetry(e: ExchangeAccountStreamData): Unit = {
@@ -549,6 +553,7 @@ class Exchange(context: ActorContext[Exchange.Message],
       exchangeName,
       publicData.ticker,
       publicData.orderBook,
+      publicData.stats24h,
       publicData.dataAge,
       accountData.wallet
     )

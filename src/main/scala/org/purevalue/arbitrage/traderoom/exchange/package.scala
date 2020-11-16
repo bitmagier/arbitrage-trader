@@ -86,7 +86,7 @@ package object exchange {
     /**
      * @return summed of ask auantity (want to sell) in the price range from current-price till price level at (1+rate) * current-price
      */
-    def askDepthAround(rate:Double): CryptoValue = {
+    def askDepthAround(rate: Double): CryptoValue = {
       val limit = lowestAsk.price * (1.0 + rate)
       val quantity = asks.filter(_._1 <= limit).values.foldLeft(0.0)((sum, e) => sum + e.quantity)
       CryptoValue(pair.baseAsset, quantity)
@@ -103,6 +103,11 @@ package object exchange {
     val MaxApplyDelay: Duration = Duration.ofMillis(200)
     var applyDeadline: Option[Instant] = None // when this dataset can be applied latest before timing out
   }
+
+  case class Stats24h(exchange: String,
+                      pair: TradePair,
+                      averagePrice: Double,
+                      volumeBaseAsset: Double) extends ExchangePublicStreamData
 
   trait ExchangeAccountStreamData extends Retryable
 

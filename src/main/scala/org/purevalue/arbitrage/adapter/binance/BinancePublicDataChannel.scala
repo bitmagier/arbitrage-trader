@@ -1,7 +1,5 @@
 package org.purevalue.arbitrage.adapter.binance
 
-import java.time.{Duration, Instant}
-
 import akka.Done
 import akka.actor.typed.scaladsl.AskPattern.{Askable, schedulerFromActorSystem}
 import akka.actor.typed.scaladsl.{ActorContext, Behaviors, TimerScheduler}
@@ -15,7 +13,7 @@ import org.purevalue.arbitrage._
 import org.purevalue.arbitrage.adapter.{PublicDataChannel, PublicDataInquirer}
 import org.purevalue.arbitrage.traderoom.TradePair
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.IncomingPublicData
-import org.purevalue.arbitrage.traderoom.exchange.{Ask, Bid, Exchange, ExchangePublicStreamData, OrderBook, OrderBookUpdate, Ticker}
+import org.purevalue.arbitrage.traderoom.exchange.{Exchange, ExchangePublicStreamData, Stats24h, Ticker}
 import org.purevalue.arbitrage.util.Emoji
 import org.purevalue.arbitrage.util.HttpUtil.httpGetJson
 import org.slf4j.LoggerFactory
@@ -41,18 +39,18 @@ private[binance] case class BookTickerRestJson(symbol: String,
   }
 }
 
-private[binance] case class OrderBookRestJson(lastUpdateId: Long,
-                                              bids: Vector[Tuple2[String, String]],
-                                              asks: Vector[Tuple2[String, String]]) extends IncomingPublicBinanceJson {
-  def toOrderBook(exchange: String, pair: TradePair): OrderBook = {
-    OrderBook(
-      exchange,
-      pair,
-      bids.map(e => e._1.toDouble -> Bid(e._1.toDouble, e._2.toDouble)).toMap,
-      asks.map(e => e._1.toDouble -> Ask(e._1.toDouble, e._2.toDouble)).toMap
-    )
-  }
-}
+//private[binance] case class OrderBookRestJson(lastUpdateId: Long,
+//                                              bids: Vector[Tuple2[String, String]],
+//                                              asks: Vector[Tuple2[String, String]]) extends IncomingPublicBinanceJson {
+//  def toOrderBook(exchange: String, pair: TradePair): OrderBook = {
+//    OrderBook(
+//      exchange,
+//      pair,
+//      bids.map(e => e._1.toDouble -> Bid(e._1.toDouble, e._2.toDouble)).toMap,
+//      asks.map(e => e._1.toDouble -> Ask(e._1.toDouble, e._2.toDouble)).toMap
+//    )
+//  }
+//}
 
 private[binance] case class BookTickerStreamJson(u: Long, // order book updateId
                                                  s: String, // symbol
@@ -65,28 +63,39 @@ private[binance] case class BookTickerStreamJson(u: Long, // order book updateId
     Ticker(exchange, resolveSymbol(s), b.toDouble, Some(B.toDouble), a.toDouble, Some(A.toDouble), None)
 }
 
-private[binance] case class DiffDepthStreamJson(e: String,
-                                                E: Long,
-                                                s: String,
-                                                U: Long,
-                                                u: Long,
-                                                b: Vector[Tuple2[String, String]],
-                                                a: Vector[Tuple2[String, String]]) extends IncomingPublicBinanceJson {
-  def toOrderBookUpdate(exchange: String, resolveSymbol: String => TradePair): OrderBookUpdate =
-    OrderBookUpdate(
-      exchange,
-      resolveSymbol(s),
-      b.map(e => Bid(e._1.toDouble, e._2.toDouble)),
-      a.map(e => Ask(e._1.toDouble, e._2.toDouble))
-    )
+private[binance] case class SymbolTickerStreamJson(e: String, // "24hrTicker"
+                                                   s:String, // symbol
+                                                   w: String, // weighted average price
+                                                   v: String, // total traded base asset volume
+                                                   q: String // total traded quote asset volume
+                                                  ) extends IncomingPublicBinanceJson {
+  def toStats24h(exchange: String, resolveSymbol: String => TradePair): Stats24h =
+    Stats24h(exchange, resolveSymbol(s), w.toDouble, v.toDouble)
 }
+
+//private[binance] case class DiffDepthStreamJson(e: String,
+//                                                E: Long,
+//                                                s: String,
+//                                                U: Long,
+//                                                u: Long,
+//                                                b: Vector[Tuple2[String, String]],
+//                                                a: Vector[Tuple2[String, String]]) extends IncomingPublicBinanceJson {
+//  def toOrderBookUpdate(exchange: String, resolveSymbol: String => TradePair): OrderBookUpdate =
+//    OrderBookUpdate(
+//      exchange,
+//      resolveSymbol(s),
+//      b.map(e => Bid(e._1.toDouble, e._2.toDouble)),
+//      a.map(e => Ask(e._1.toDouble, e._2.toDouble))
+//    )
+//}
 
 private[binance] object WebSocketJsonProtocol extends DefaultJsonProtocol {
   implicit val subscribeMsg: RootJsonFormat[StreamSubscribeRequestJson] = jsonFormat3(StreamSubscribeRequestJson)
   implicit val bookTickerRestJson: RootJsonFormat[BookTickerRestJson] = jsonFormat5(BookTickerRestJson)
   implicit val bookTickerStreamJson: RootJsonFormat[BookTickerStreamJson] = jsonFormat6(BookTickerStreamJson)
-  implicit val orderBookRestJson: RootJsonFormat[OrderBookRestJson] = jsonFormat3(OrderBookRestJson)
-  implicit val diffDepthStreamJson: RootJsonFormat[DiffDepthStreamJson] = jsonFormat7(DiffDepthStreamJson)
+  implicit val symbolTickerStreamJson: RootJsonFormat[SymbolTickerStreamJson] = jsonFormat5(SymbolTickerStreamJson)
+//  implicit val orderBookRestJson: RootJsonFormat[OrderBookRestJson] = jsonFormat3(OrderBookRestJson)
+//  implicit val diffDepthStreamJson: RootJsonFormat[DiffDepthStreamJson] = jsonFormat7(DiffDepthStreamJson)
 }
 
 
@@ -122,9 +131,9 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
   val BinanceBaseRestEndpoint = "https://api.binance.com"
   val WebSocketEndpoint: Uri = Uri(s"wss://stream.binance.com:9443/stream")
   val IdBookTickerStream: Int = 1
-  val IdDiffDepthStream: Int = 2
+  val IdSymbolTickerStream: Int = 2
 
-  @volatile var outstandingStreamSubscribeResponses: Set[Int] = Set(IdBookTickerStream, IdDiffDepthStream)
+  @volatile var outstandingStreamSubscribeResponses: Set[Int] = Set(IdBookTickerStream, IdSymbolTickerStream)
 
   private var binanceTradePairBySymbol: Map[String, BinanceTradePair] = _
 
@@ -147,9 +156,9 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
 
   def exchangeDataMapping(in: Seq[IncomingPublicBinanceJson]): Seq[ExchangePublicStreamData] = in.map {
     // @formatter:off
-    case t: BookTickerStreamJson => t.toTicker(exchangeConfig.name, resolveTradePairSymbol)
-    case b: DiffDepthStreamJson  => b.toOrderBookUpdate(exchangeConfig.name, resolveTradePairSymbol)
-    case other                   =>
+    case t: BookTickerStreamJson   => t.toTicker(exchangeConfig.name, resolveTradePairSymbol)
+    case t: SymbolTickerStreamJson => t.toStats24h(exchangeConfig.name, resolveTradePairSymbol)
+    case other                     =>
       log.error(s"binance unhandled object: $other")
       throw new RuntimeException()
     // @formatter:on
@@ -165,8 +174,11 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
             Nil
         }
 
-      case s: String if s.contains("@depth") =>
-        Seq(j.fields("data").convertTo[DiffDepthStreamJson])
+      case "!ticker@arr" =>
+        j.fields("data").convertTo[Vector[SymbolTickerStreamJson]] flatMap {
+          case t if binanceTradePairBySymbol.contains(t.s) => Some(t)
+          case _ => None
+        }
 
       case name: String =>
         log.warn(s"${Emoji.Confused}  Unhandled data stream '$name' received: $j")
@@ -195,9 +207,7 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
 
   def subscribeMessages: List[StreamSubscribeRequestJson] = List(
     StreamSubscribeRequestJson(params = Seq("!bookTicker"), id = IdBookTickerStream),
-    StreamSubscribeRequestJson(params =
-      relevantTradePairs.map(e =>
-        s"${binanceTradePairBySymbol.values.find(_.toTradePair == e).get.symbol}@depth").toSeq, id = IdDiffDepthStream) // TODO test depth@100ms
+    StreamSubscribeRequestJson(params = Seq("!ticker@arr"), id = IdSymbolTickerStream)
   )
 
   // flow to us
@@ -270,42 +280,8 @@ private[binance] class BinancePublicDataChannel(context: ActorContext[PublicData
     }
   }
 
-  def deliverOrderBooks(): Unit = {
-    val LogInterval = Duration.ofSeconds(5)
-    Future {
-      concurrent.blocking {
-        var booksReceived = 0
-        var lastLogged: Instant = Instant.now
-        relevantTradePairs.foreach { pair =>
-          val symbol = binanceTradePairBySymbol.values.find(_.toTradePair == pair).get.symbol
-          try {
-            Await.result( // do sequential one after the other to avoid http overload situation
-              httpGetJson[OrderBookRestJson, JsValue](s"$BinanceBaseRestEndpoint/api/v3/depth?symbol=$symbol&limit=1000"),
-              globalConfig.httpTimeout.plus(1.second)) match {
-              case Left(book) =>
-                exchange ! IncomingPublicData(
-                  Seq(book.toOrderBook(exchangeConfig.name, pair))
-                )
-                booksReceived += 1
-
-              case Right(errorResponse) => log.error(s"deliverOrderBook for $symbol failed: $errorResponse")
-            }
-
-            if (Instant.now.isAfter(lastLogged.plus(LogInterval))) {
-              log.info(s"[binance] received $booksReceived of ${relevantTradePairs.size} order books")
-              lastLogged = Instant.now
-            }
-          } catch {
-            case t: Throwable => log.error(s"Query/Transform OrderBookRestJson for $symbol failed", t)
-          }
-        }
-      }
-    }
-  }
-
   override def onStreamsRunning(): Unit = {
     deliverBookTickerState()
-    deliverOrderBooks()
   }
 
   override def postStop(): Unit = {

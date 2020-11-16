@@ -86,7 +86,15 @@ class TemporaryLowDetector(context: ActorContext[TemporaryLowDetector.Command],
   def average(values: Iterable[Double]): Double = values.sum / values.size
 
   def preparePrices(tc: TradeContext): Map[TradePair, Map[String, Double]] = {
-
+    /**
+     * @return true, if 24h volume > 1.5 Mio USD
+     */
+    def volume24hSufficient(exchange: String, pair: TradePair): Boolean = {
+      CryptoValue(
+        pair.baseAsset,
+        tc.stats24h(exchange)(pair).volumeBaseAsset
+      ).convertTo(exchangesConfig(exchange).usdEquivalentCoin, tc.tickers(exchange)).amount > 150000
+    }
     /**
      * Tests if order book is filled enough for smooth trading.
      * Algorithm: checks order book depth between current price +3% is greater than 10.000 USD
@@ -104,7 +112,11 @@ class TemporaryLowDetector(context: ActorContext[TemporaryLowDetector.Command],
     def determineUsablePairs: Map[String, Set[TradePair]] = {
       val pairsWithSufficientVolume: Map[String, Set[TradePair]] =
         tc.tradePairs
-          .map(e => (e._1, e._2.filter(p => orderBookDepthSufficient(e._1, p))))
+          .map(e => (
+            e._1,
+            e._2.filter(p =>
+              (tc.stats24h(e._1).nonEmpty && volume24hSufficient(e._1, p)) ||
+                (tc.orderBooks(e._1).nonEmpty && orderBookDepthSufficient(e._1, p)))))
 
       val usablePairs: Set[TradePair] = pairsWithSufficientVolume.values.flatten
         .foldLeft(Map[TradePair, Int]())((a, b) => if (a.contains(b)) a + (b -> (a(b) + 1)) else a + (b -> 1))
