@@ -157,15 +157,15 @@ class Exchange(context: ActorContext[Exchange.Message],
       var waitingList: ListBuffer[String] = ListBuffer()
       if (!tickerCompletelyInitialized) {
         tickerCompletelyInitialized = usableTradePairs.subsetOf(publicData.ticker.keySet)
-        waitingList += s"${(usableTradePairs -- publicData.ticker.keySet).size} tickers"
+        waitingList += s"tickers: ${usableTradePairs -- publicData.ticker.keySet}"
       }
       if (exchangeConfig.deliversOrderBook && !orderBookCompletelyInitialized) {
         orderBookCompletelyInitialized = usableTradePairs.subsetOf(publicData.orderBook.keySet)
-        waitingList += s"${(usableTradePairs -- publicData.orderBook.keySet).size} order books"
+        waitingList += s"order books: ${usableTradePairs -- publicData.orderBook.keySet}"
       }
       if (exchangeConfig.deliversStats24h && !stats24hCompletelyInitialized) {
         stats24hCompletelyInitialized = usableTradePairs.subsetOf(publicData.stats24h.keySet)
-        waitingList += s"${(usableTradePairs -- publicData.stats24h.keySet).size} stats24h"
+        waitingList += s"stats24: ${usableTradePairs -- publicData.stats24h.keySet}"
       }
       if (tickerCompletelyInitialized &&
         (!exchangeConfig.deliversOrderBook || orderBookCompletelyInitialized) &&
