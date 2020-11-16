@@ -150,7 +150,7 @@ class Exchange(context: ActorContext[Exchange.Message],
   var tickerCompletelyInitialized: Boolean = false
   var orderBookCompletelyInitialized: Boolean = false
   var stats24hCompletelyInitialized: Boolean = false
-  @volatile var lastPublicDataInitLogged: Instant = Instant.now
+  var lastPublicDataInitLogged: Instant = Instant.now
 
   def onPublicDataUpdated(): Unit = {
     if (!publicDataChannelInitialized.isArrived) {
@@ -172,7 +172,7 @@ class Exchange(context: ActorContext[Exchange.Message],
         (!exchangeConfig.deliversStats24h || stats24hCompletelyInitialized)) {
         publicDataChannelInitialized.arrived()
       } else {
-        if (lastPublicDataInitLogged.plusSeconds(5).isAfter(Instant.now)) {
+        if (lastPublicDataInitLogged.plusSeconds(5).isBefore(Instant.now)) {
           log.info(s"""[$exchangeName] still waiting for ${waitingList.mkString(",")}""")
           lastPublicDataInitLogged = Instant.now
         }
