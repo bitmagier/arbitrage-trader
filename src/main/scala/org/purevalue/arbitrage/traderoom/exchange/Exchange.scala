@@ -150,7 +150,7 @@ class Exchange(context: ActorContext[Exchange.Message],
   var tickerCompletelyInitialized: Boolean = false
   var orderBookCompletelyInitialized: Boolean = false
   var stats24hCompletelyInitialized: Boolean = false
-  var lastPublicDataInitLogged: Instant = Instant.now
+  @volatile var lastPublicDataInitLogged: Instant = Instant.now
 
   def onPublicDataUpdated(): Unit = {
     if (!publicDataChannelInitialized.isArrived) {
