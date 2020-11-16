@@ -18,6 +18,7 @@ import org.purevalue.arbitrage.util.{Emoji, InitSequence, InitStep, StaleDataExc
 import org.purevalue.arbitrage.{Config, ExchangeConfig, Main, UserRootGuardian}
 import org.slf4j.LoggerFactory
 
+import scala.collection.mutable.ListBuffer
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.concurrent.{Await, ExecutionContextExecutor, Future}
 import scala.util.{Failure, Success}
@@ -149,21 +150,33 @@ class Exchange(context: ActorContext[Exchange.Message],
   var tickerCompletelyInitialized: Boolean = false
   var orderBookCompletelyInitialized: Boolean = false
   var stats24hCompletelyInitialized: Boolean = false
+  var lastPublicDataInitLogged: Instant = Instant.now
 
   def onPublicDataUpdated(): Unit = {
-    if (!tickerCompletelyInitialized) {
-      tickerCompletelyInitialized = usableTradePairs.subsetOf(publicData.ticker.keySet)
-    }
-    if (exchangeConfig.deliversOrderBook && !orderBookCompletelyInitialized) {
-      orderBookCompletelyInitialized = usableTradePairs.subsetOf(publicData.orderBook.keySet)
-    }
-    if (exchangeConfig.deliversStats24h && !stats24hCompletelyInitialized) {
-      stats24hCompletelyInitialized = usableTradePairs.subsetOf(publicData.stats24h.keySet)
-    }
-    if (tickerCompletelyInitialized &&
-      (!exchangeConfig.deliversOrderBook || orderBookCompletelyInitialized) &&
-      (!exchangeConfig.deliversStats24h || stats24hCompletelyInitialized)) {
+    if (!publicDataChannelInitialized.isArrived) {
+      var waitingList: ListBuffer[String] = ListBuffer()
+      if (!tickerCompletelyInitialized) {
+        tickerCompletelyInitialized = usableTradePairs.subsetOf(publicData.ticker.keySet)
+        waitingList += s"${(usableTradePairs -- publicData.ticker.keySet).size} tickers"
+      }
+      if (exchangeConfig.deliversOrderBook && !orderBookCompletelyInitialized) {
+        orderBookCompletelyInitialized = usableTradePairs.subsetOf(publicData.orderBook.keySet)
+        waitingList += s"${(usableTradePairs -- publicData.orderBook.keySet).size} order books"
+      }
+      if (exchangeConfig.deliversStats24h && !stats24hCompletelyInitialized) {
+        stats24hCompletelyInitialized = usableTradePairs.subsetOf(publicData.stats24h.keySet)
+        waitingList += s"${(usableTradePairs -- publicData.stats24h.keySet).size} stats24h"
+      }
+      if (tickerCompletelyInitialized &&
+        (!exchangeConfig.deliversOrderBook || orderBookCompletelyInitialized) &&
+        (!exchangeConfig.deliversStats24h || stats24hCompletelyInitialized)) {
         publicDataChannelInitialized.arrived()
+      } else {
+        if (lastPublicDataInitLogged.plusSeconds(5).isAfter(Instant.now)) {
+          log.info(s"""[$exchangeName] still waiting for ${waitingList.mkString(",")}""")
+          lastPublicDataInitLogged = Instant.now
+        }
+      }
     }
   }
 
