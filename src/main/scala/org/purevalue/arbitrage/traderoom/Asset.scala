@@ -86,7 +86,7 @@ object Asset {
 
     def mergeName(a: Option[String], b: Option[String]): Option[String] = Seq(a, b).flatten.headOption
 
-    if (sourceWeight >= MaxSourceWeight) throw new WrongAssumption("dynamic registered asset has a too high source weight")
+    if (sourceWeight > MaxSourceWeight) throw new WrongAssumption("dynamic registered asset has a too high source weight")
 
     synchronized {
       allAssets =
