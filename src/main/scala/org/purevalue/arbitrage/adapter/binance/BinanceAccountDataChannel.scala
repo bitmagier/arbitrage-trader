@@ -370,12 +370,14 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
 
     val channelId = j.fields("id").convertTo[Int]
     synchronized {
-      outstandingStreamSubscribeResponses = outstandingStreamSubscribeResponses - channelId
+      outstandingStreamSubscribeResponses -= channelId
     }
 
     if (outstandingStreamSubscribeResponses.isEmpty) {
-      log.debug("all streams running")
+      log.info("all streams running")
       context.self ! OnStreamsRunning()
+    } else {
+      log.info(s"still waiting for stream subscribe responses: $outstandingStreamSubscribeResponses")
     }
   }
 
