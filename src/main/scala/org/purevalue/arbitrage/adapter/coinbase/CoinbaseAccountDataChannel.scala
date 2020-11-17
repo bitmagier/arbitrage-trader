@@ -230,6 +230,8 @@ private[coinbase] case class CoinbaseAccountJson(id: String,
   )
 }
 
+private[coinbase] case class ErrorMessageJson(message:String)
+
 private[coinbase] object CoinbaseAccountJsonProtocol extends DefaultJsonProtocol {
   implicit val subscribeRequestWithAuthJson: RootJsonFormat[SubscribeRequestWithAuthJson] = jsonFormat7(SubscribeRequestWithAuthJson)
   implicit val coinbaseOrderReceivedJson: RootJsonFormat[CoinbaseOrderReceivedJson] = jsonFormat9(CoinbaseOrderReceivedJson)
@@ -238,6 +240,7 @@ private[coinbase] object CoinbaseAccountJsonProtocol extends DefaultJsonProtocol
   implicit val newOrderRequestJson: RootJsonFormat[NewOrderRequestJson] = jsonFormat6(NewOrderRequestJson)
   implicit val newOrderResponseJson: RootJsonFormat[NewOrderResponseJson] = jsonFormat15(NewOrderResponseJson)
   implicit val coinbaseAccountJson: RootJsonFormat[CoinbaseAccountJson] = jsonFormat7(CoinbaseAccountJson)
+  implicit val errorMessageJson: RootJsonFormat[ErrorMessageJson] = jsonFormat1(ErrorMessageJson)
 }
 
 object CoinbaseAccountDataChannel {
@@ -462,28 +465,34 @@ private[coinbase] class CoinbaseAccountDataChannel(context: ActorContext[Account
 
   def deliverAccounts(): Unit = {
 
-    def queryAccounts(serverTime: Double): Future[IncomingAccountData] = {
-      httpRequestJsonCoinbaseAccount[Seq[CoinbaseAccountJson], JsObject](HttpMethods.GET, s"$CoinbaseBaseRestEndpoint/accounts", None, exchangeConfig.secrets, serverTime)
+    def queryAccounts(serverTime: Double, remainingTries:Int=3): Future[CompleteWalletUpdate] = {
+      httpRequestJsonCoinbaseAccount[Seq[CoinbaseAccountJson], ErrorMessageJson](HttpMethods.GET, s"$CoinbaseBaseRestEndpoint/accounts", None, exchangeConfig.secrets, serverTime)
         .map {
           case Left(accounts) =>
-            Seq(CompleteWalletUpdate(
+            CompleteWalletUpdate(
               accounts
                 .map(_.toBalance)
                 .map(e => e.asset -> e)
                 .toMap
-            ))
+            )
           case Right(error) =>
-            log.warn(s"coinbase: queryAccounts() failed: $error")
-            Nil
+            if (error.message == "ServiceUnavailable" && remainingTries > 0) {
+              Await.result(
+                queryAccounts(serverTime, remainingTries - 1),
+                config.global.httpTimeout.mul(remainingTries).plus(500.millis)
+              )
+            } else {
+              log.error(s"coinbase: queryAccounts() failed: ${error.message}")
+              throw new RuntimeException()
+            }
         }
-        .map(e => IncomingAccountData(e))
     }
 
     (for {
       serverTime <- queryServerTime()
       accounts <- queryAccounts(serverTime)
     } yield accounts) onComplete {
-      case Success(accounts) => exchange ! accounts
+      case Success(accounts) => exchange ! IncomingAccountData(Seq(accounts))
       case Failure(e) => log.error(s"query serverTime/accounts failed", e)
     }
   }
