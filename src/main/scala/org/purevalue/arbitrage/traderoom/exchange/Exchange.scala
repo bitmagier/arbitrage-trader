@@ -193,9 +193,9 @@ class Exchange(context: ActorContext[Exchange.Message],
           if (exchangeConfig.deliversOrderBook) pairsToRemove ++= (usableTradePairs -- publicData.orderBook.keySet)
           if (exchangeConfig.deliversStats24h) pairsToRemove ++= (usableTradePairs -- publicData.stats24h.keySet)
 
-          val tradePairsInitPortion = (usableTradePairs.size - pairsToRemove.size) / usableTradePairs.size
+          val tradePairsInitPortion = (usableTradePairs.size - pairsToRemove.size).toDouble / usableTradePairs.size
           if (tradePairsInitPortion < exchangeConfig.tradePairsInitMinPortion) {
-            throw new InitializationException(s"Only ${formatDecimal(tradePairsInitPortion*100.0, 0, 0)}% " +
+            throw new InitializationException(s"Only ${formatDecimal(tradePairsInitPortion * 100.0, 0, 0)}% " +
               s"of all usable trade pairs were initialized in ${exchangeConfig.tradePairsInitTimeout.toSeconds}s. This is insufficient!")
           } else {
             log.warn(s"[$exchangeName] removing pairs from usable trade pairs due to init timeout: $pairsToRemove")
