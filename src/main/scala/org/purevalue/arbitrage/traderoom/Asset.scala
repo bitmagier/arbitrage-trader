@@ -1,8 +1,9 @@
 package org.purevalue.arbitrage.traderoom
 
-import org.purevalue.arbitrage.traderoom.Asset.BTC
+import org.purevalue.arbitrage.traderoom.Asset.{BTC, ETH}
 import org.purevalue.arbitrage.traderoom.exchange.Ticker
 import org.purevalue.arbitrage.util.Util.formatDecimal
+import org.purevalue.arbitrage.util.{IsoFiatCurrencies, WrongAssumption}
 
 
 // Crypto asset / coin.
@@ -49,15 +50,15 @@ class Asset(val officialSymbol: String,
 }
 
 object Asset {
-  private val KnownFiatAssets: Set[String] = Set("EUR", "USD", "GBP", "AUD", "CAD", "IDR", "HKD", "INR", "CHF", "MAD", "PLN", "RUB", "TRY", "CNY")
-
+  private val MaxSourceWeight = 10
   // some essential values we need everywhere
   private val PredefinedAssets: Seq[Asset] = Seq(
-    new Asset("EUR", Some("Euro"), isFiat = true, 2, 10),
-    new Asset("USD", Some("U.S. Dollar"), isFiat = true, 2, 10),
-    new Asset("BTC", Some("Bitcoin"), isFiat = false, 8, 10),
-    new Asset("USDT", Some("Tether"), isFiat = false, 2, 10),
-    new Asset("USDC", Some("USD Coin"), isFiat = false, 2, 10)
+    new Asset("EUR", Some("Euro"), isFiat = true, 2, MaxSourceWeight),
+    new Asset("USD", Some("U.S. Dollar"), isFiat = true, 2, MaxSourceWeight),
+    new Asset("BTC", Some("Bitcoin"), isFiat = false, 8, MaxSourceWeight),
+    new Asset("ETH", Some("Ethereum"), isFiat = false, 5, MaxSourceWeight),
+    new Asset("USDT", Some("Tether"), isFiat = false, 2, MaxSourceWeight),
+    new Asset("USDC", Some("USD Coin"), isFiat = false, 2, MaxSourceWeight)
   )
 
   // often used assets
@@ -66,6 +67,7 @@ object Asset {
   lazy val USD: Asset = Asset("USD")
   lazy val USDT: Asset = Asset("USDT")
   lazy val USDC: Asset = Asset("USDC")
+  lazy val ETH: Asset = Asset("ETH")
 
   lazy val UsdEquivalentCoins: Set[Asset] = Set(USDT, USDC)
 
@@ -79,18 +81,29 @@ object Asset {
   def register(officialSymbol: String, name: String, isFiat: Boolean): Unit = register(officialSymbol, Some(name), Some(isFiat))
 
   def register(officialSymbol: String, name: Option[String], _isFiat: Option[Boolean], defaultFractionDigits: Int = 5, sourceWeight: Int = 0): Unit = {
-    val isFiat: Boolean = KnownFiatAssets.contains(officialSymbol) || _isFiat.contains(true)
+    val FiatDefaultFractionDigits = 2
+    val isFiat: Boolean = IsoFiatCurrencies.contains(officialSymbol) || _isFiat.contains(true)
 
     def mergeName(a: Option[String], b: Option[String]): Option[String] = Seq(a, b).flatten.headOption
+
+    if (sourceWeight >= MaxSourceWeight) throw new WrongAssumption("dynamic registered asset has a too high source weight")
 
     synchronized {
       allAssets =
         allAssets.get(officialSymbol) match {
-          case None => allAssets + (officialSymbol -> new Asset(officialSymbol, name, isFiat, defaultFractionDigits, sourceWeight))
+          case None => allAssets + (
+            IsoFiatCurrencies.get(officialSymbol) match {
+              case Some(currencyName: String) => officialSymbol -> new Asset(officialSymbol, Some(currencyName), true, FiatDefaultFractionDigits, MaxSourceWeight)
+              case None => officialSymbol -> new Asset(officialSymbol, name, isFiat, defaultFractionDigits, sourceWeight)
+            })
+
           case Some(oldValue) if oldValue.sourceWeight < sourceWeight =>
             allAssets + (officialSymbol -> new Asset(officialSymbol, mergeName(name, oldValue.name), isFiat, defaultFractionDigits, sourceWeight))
-          case Some(oldValue) if oldValue.name.isEmpty && name.isDefined => allAssets + // merge name
-            (oldValue.officialSymbol -> new Asset(oldValue.officialSymbol, name, oldValue.isFiat, oldValue.defaultFractionDigits, oldValue.sourceWeight))
+
+          case Some(oldValue) if oldValue.name.isEmpty && name.isDefined =>
+            allAssets + // merge name
+              (oldValue.officialSymbol -> new Asset(oldValue.officialSymbol, name, oldValue.isFiat, oldValue.defaultFractionDigits, oldValue.sourceWeight))
+
           case _ => allAssets
         }
     }
@@ -140,26 +153,39 @@ case class CryptoValue(asset: Asset, amount: Double) {
   def canConvertTo(targetAsset: Asset, tradePairs: Set[TradePair]): Boolean =
     this.asset.canConvertTo(targetAsset, tradePairs)
 
+  def directConversion(to: Asset, findConversionRate: TradePair => Option[Double]): Option[CryptoValue] = {
+    findConversionRate(TradePair(asset, to)) match { // try direct conversion first
+      case Some(rate) => Some(CryptoValue(to, amount * rate))
+      case None =>
+        findConversionRate(TradePair(to, asset)) match { // try reverse trade pair
+          case Some(rate) => Some(CryptoValue(to, amount / rate))
+          case None => None
+        }
+    }
+  }
+
   def convertTo(targetAsset: Asset, findConversionRate: TradePair => Option[Double]): CryptoValue = {
-    if (this.asset == targetAsset)
-      this
+
+    def tryConvertVia(viaAsset: Asset): Option[CryptoValue] = {
+      if ((this.asset != viaAsset && targetAsset != viaAsset) &&
+        (findConversionRate(TradePair(this.asset, viaAsset)).isDefined || findConversionRate(TradePair(viaAsset, this.asset)).isDefined) &&
+        (findConversionRate(TradePair(targetAsset, viaAsset)).isDefined || findConversionRate(TradePair(viaAsset, targetAsset)).isDefined)) {
+        directConversion(viaAsset, findConversionRate).get
+          .directConversion(targetAsset, findConversionRate)
+      } else None
+    }
+
+    if (this.asset == targetAsset) this
     else {
-      // try direct conversion first
-      findConversionRate(TradePair(this.asset, targetAsset)) match {
-        case Some(rate) =>
-          CryptoValue(targetAsset, amount * rate)
-        case None =>
-          findConversionRate(TradePair(targetAsset, this.asset)) match { // try reverse ticker
-            case Some(rate) => CryptoValue(targetAsset, amount / rate)
-            case None => // try conversion via BTC as last option
-              if ((this.asset != BTC && targetAsset != BTC)
-                && (findConversionRate(TradePair(this.asset, BTC)).isDefined || findConversionRate(TradePair(BTC, this.asset)).isDefined)
-                && (findConversionRate(TradePair(targetAsset, BTC)).isDefined || findConversionRate(TradePair(BTC, targetAsset)).isDefined)) {
-                this.convertTo(BTC, findConversionRate).convertTo(targetAsset, findConversionRate)
-              } else {
-                throw new RuntimeException(s"No option available to convert $asset -> $targetAsset")
-              }
+      directConversion(targetAsset, findConversionRate) match {
+        case Some(r) => r
+        case None => tryConvertVia(BTC) match {
+          case Some(r) => r
+          case None => tryConvertVia(ETH) match {
+            case Some(r) => r
+            case None => throw new RuntimeException(s"No option available to convert $asset -> $targetAsset")
           }
+        }
       }
     }
   }

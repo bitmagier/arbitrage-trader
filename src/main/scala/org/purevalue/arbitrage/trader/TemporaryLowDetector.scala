@@ -105,8 +105,10 @@ class TemporaryLowDetector(context: ActorContext[TemporaryLowDetector.Command],
       val bidDepth: CryptoValue = book.bidDepthAround(0.03)
       val askDepth: CryptoValue = book.askDepthAround(0.03)
 
-      bidDepth.convertTo(exchangesConfig(exchange).usdEquivalentCoin, tc.tickers(exchange)).amount >= 10000 &&
-        askDepth.convertTo(exchangesConfig(exchange).usdEquivalentCoin, tc.tickers(exchange)).amount >= 10000
+      try {
+        bidDepth.convertTo(exchangesConfig(exchange).usdEquivalentCoin, tc.tickers(exchange)).amount >= 10000 &&
+          askDepth.convertTo(exchangesConfig(exchange).usdEquivalentCoin, tc.tickers(exchange)).amount >= 10000
+      }
     }
 
     def determineUsablePairs: Map[String, Set[TradePair]] = {
