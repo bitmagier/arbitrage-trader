@@ -28,6 +28,7 @@ import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonF
 
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, Future, Promise}
+import scala.util.{Failure, Success}
 
 
 private[binance] case class ListenKeyJson(listenKey: String)
@@ -426,29 +427,33 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
   def deliverAccountInformation(): Unit = {
     import BinanceAccountDataJsonProtocoll._
     httpRequestJsonBinanceAccount[AccountInformationJson, JsValue](
-      HttpMethods.GET, s"$BinanceBaseRestEndpoint/api/v3/account", None, exchangeConfig.secrets, sign = true)
-      .map {
-        case Left(response) =>
-          if (log.isTraceEnabled) log.trace(s"received initial account information: $response")
-          IncomingAccountData(exchangeDataMapping(Seq(response)))
-        case Right(errorResponse) =>
-          log.error(s"deliverAccountInformation failed: $errorResponse")
-          throw new RuntimeException()
-      }.foreach(data => exchange ! data)
+      HttpMethods.GET, s"$BinanceBaseRestEndpoint/api/v3/account", None, exchangeConfig.secrets, sign = true).onComplete {
+      case Success(Left(response)) =>
+        if (log.isTraceEnabled) log.trace(s"received initial account information: $response")
+        exchange ! IncomingAccountData(exchangeDataMapping(Seq(response)))
+      case Success(Right(errorResponse)) =>
+        log.error(s"deliverAccountInformation failed: $errorResponse")
+        throw new RuntimeException()
+      case Failure(e) =>
+        log.error(s"deliverAccountInformation failed", e)
+        throw new RuntimeException()
+    }
   }
 
   def deliverOpenOrders(): Unit = {
     import BinanceAccountDataJsonProtocoll._
     httpRequestJsonBinanceAccount[List[OpenOrderJson], JsValue](
-      HttpMethods.GET, s"$BinanceBaseRestEndpoint/api/v3/openOrders", None, exchangeConfig.secrets, sign = true)
-      .map {
-        case Left(response) =>
-          if (log.isTraceEnabled) log.trace(s"received initial open orders: $response")
-          IncomingAccountData(exchangeDataMapping(response))
-        case Right(errorResponse) =>
-          log.error(s"deliverOpenOrders failed: $errorResponse")
-          throw new RuntimeException()
-      }.foreach(data => exchange ! data)
+      HttpMethods.GET, s"$BinanceBaseRestEndpoint/api/v3/openOrders", None, exchangeConfig.secrets, sign = true).onComplete {
+      case Success(Left(response)) =>
+        if (log.isTraceEnabled) log.trace(s"received initial open orders: $response")
+        exchange ! IncomingAccountData(exchangeDataMapping(response))
+      case Success(Right(errorResponse)) =>
+        log.error(s"deliverOpenOrders failed: $errorResponse")
+        throw new RuntimeException()
+      case Failure(e) =>
+        log.error(s"deliverOpenOrders failed", e)
+        throw new RuntimeException()
+    }
   }
 
   def pingUserStream(): Unit = {
