@@ -168,26 +168,29 @@ class PioneerOrderRunner(context: ActorContext[Message],
     }
 
     implicit val timeout: Timeout = config.global.internalCommunicationTimeout
-    exchange.ask(ref => Exchange.GetActiveOrders(ref)).mapTo[Map[OrderRef, Order]].foreach { activeOrders =>
-      try {
-        activeOrders.get(o.ref) match {
-          case Some(order) if order.orderStatus.isFinal =>
-            validationMethod(o.request, order)
-            log.info(s"[$exchangeName]  pioneer order ${o.request.shortDesc} successfully validated")
-            arrival.arrived()
-            exchange ! RemoveActiveOrder(o.ref)
+    exchange.ask(ref => Exchange.GetActiveOrders(ref)).mapTo[Map[OrderRef, Order]].onComplete {
+      case Success(activeOrders) =>
+        try {
+          activeOrders.get(o.ref) match {
+            case Some(order) if order.orderStatus.isFinal =>
+              validationMethod(o.request, order)
+              log.info(s"[$exchangeName]  pioneer order ${o.request.shortDesc} successfully validated")
+              arrival.arrived()
+              exchange ! RemoveActiveOrder(o.ref)
 
-          case Some(order) =>
-            log.debug(s"[$exchangeName] pioneer order in progress: $order")
-            validationMethod(o.request, order)
+            case Some(order) =>
+              log.debug(s"[$exchangeName] pioneer order in progress: $order")
+              validationMethod(o.request, order)
 
-          case None => // nop
+            case None => // nop
+          }
+        } catch {
+          case e: Exception =>
+            exchange ! PioneerOrderFailed(e)
+            context.self ! Finished()
         }
-      } catch {
-        case e: Exception =>
-          exchange ! PioneerOrderFailed(e)
-          context.self ! Finished()
-      }
+
+      case Failure(e) => log.error("GetActiveOrders failed", e)
     }
   }
 
@@ -205,25 +208,31 @@ class PioneerOrderRunner(context: ActorContext[Message],
 
     var balanceDiff: Map[Asset, Double] = expectedBalance.map(e => e.asset -> e.amount).toMap
 
-    walletLiquidCryptoValues().foreach { liquidCryptoValues =>
-      for (walletCryptoValue <- liquidCryptoValues) {
-        val diffAmount = balanceDiff.getOrElse(walletCryptoValue.asset, 0.0) - walletCryptoValue.amount
-        balanceDiff = balanceDiff + (walletCryptoValue.asset -> diffAmount)
-      }
-
-      implicit val timeout: Timeout = config.global.internalCommunicationTimeout
-      Future.sequence(
-        balanceDiff
-          .map(e => CryptoValue(e._1, e._2))
-          .map(e => convert(e, exchangeConfig.usdEquivalentCoin))
-      ).foreach { balanceDiffInUSD =>
-        if (!balanceDiffInUSD.exists(_.amount > SignificantBalanceDeviationInUSD)) {
-          log.debug(s"[$exchangeName] expected wallet balance arrived")
-          arrival.arrived()
-        } else {
-          log.debug(s"diff between expected minus actual balance is $balanceDiffInUSD")
+    walletLiquidCryptoValues().onComplete {
+      case Success(liquidCryptoValues) =>
+        for (walletCryptoValue <- liquidCryptoValues) {
+          val diffAmount = balanceDiff.getOrElse(walletCryptoValue.asset, 0.0) - walletCryptoValue.amount
+          balanceDiff = balanceDiff + (walletCryptoValue.asset -> diffAmount)
         }
-      }
+
+        implicit val timeout: Timeout = config.global.internalCommunicationTimeout
+        Future.sequence(
+          balanceDiff
+            .map(e => CryptoValue(e._1, e._2))
+            .map(e => convert(e, exchangeConfig.usdEquivalentCoin))
+        ).onComplete {
+          case Success(balanceDiffInUSD) =>
+            if (!balanceDiffInUSD.exists(_.amount > SignificantBalanceDeviationInUSD)) {
+              log.debug(s"[$exchangeName] expected wallet balance arrived")
+              arrival.arrived()
+            } else {
+              log.debug(s"diff between expected minus actual balance is $balanceDiffInUSD")
+            }
+
+          case Failure(e) => log.error("convert failed", e)
+        }
+
+      case Failure(e) => log.error("walletLiquidCryptoValues failed", e)
     }
   }
 
@@ -280,13 +289,16 @@ class PioneerOrderRunner(context: ActorContext[Message],
   def cancelPioneerOrder(o: PioneerOrder): Unit = {
     log.debug(s"[$exchangeName] performing intended cancel of ${o.request.shortDesc}")
     implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
-    exchange.ask((ref: ActorRef[CancelOrderResult]) => Exchange.CancelOrder(o.ref, Some(ref))).foreach { result =>
-      if (result.success) {
-        log.info(s"Intended cancel of PioneerOrder $o ${o.request.shortDesc} succeeded")
-      } else {
-        log.error(s"Intended cancel of PioneerOrder ${o.request.shortDesc} failed: " +
-          (if (result.orderUnknown) "(order unknown) " else "") + result.text.getOrElse(""))
-      }
+    exchange.ask((ref: ActorRef[CancelOrderResult]) => Exchange.CancelOrder(o.ref, Some(ref))).onComplete {
+      case Success(result) =>
+        if (result.success) {
+          log.info(s"Intended cancel of PioneerOrder $o ${o.request.shortDesc} succeeded")
+        } else {
+          log.error(s"Intended cancel of PioneerOrder ${o.request.shortDesc} failed: " +
+            (if (result.orderUnknown) "(order unknown) " else "") + result.text.getOrElse(""))
+        }
+
+      case Failure(e) => log.error("CancelOrder failed", e)
     }
   }
 

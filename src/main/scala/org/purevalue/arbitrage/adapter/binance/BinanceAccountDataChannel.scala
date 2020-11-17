@@ -469,10 +469,12 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
     (for {
       wallet <- wf
       ticker <- tf
-    } yield (wallet, ticker)).foreach {
-      case (wallet, ticker) =>
+    } yield (wallet, ticker)).onComplete {
+      case Success((wallet, ticker)) =>
         log.info(s"[${exchangeConfig.name}] Wallet available crypto: ${wallet.availableCryptoValues()}\n" +
           s"liquid crypto: ${wallet.liquidCryptoValues(exchangeConfig.usdEquivalentCoin, ticker)}");
+      case Failure(e) =>
+        log.warn(s"GetWallet/GetTickerSnapshot failed", e)
     }
   }
 

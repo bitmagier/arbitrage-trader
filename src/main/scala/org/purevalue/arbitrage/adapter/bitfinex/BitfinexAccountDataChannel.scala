@@ -526,7 +526,7 @@ private[bitfinex] class BitfinexAccountDataChannel(context: ActorContext[Account
       s"$BaseRestEndpoint/v2/auth/w/order/submit",
       Some(requestBody),
       exchangeConfig.secrets
-    ).map {
+    ) map {
       case Left(response) => response match {
         case r: SubmitOrderResponseJson if r.status == "SUCCESS" && r.orders.length == 1 =>
           if (log.isTraceEnabled) log.trace(s"$r")
@@ -539,6 +539,10 @@ private[bitfinex] class BitfinexAccountDataChannel(context: ActorContext[Account
       }
       case Right(errorResponse) =>
         log.error(s"NewLimitOrder(${o.shortDesc}) failed: $errorResponse")
+        throw new RuntimeException()
+    } recover {
+      case t:Throwable =>
+        log.error(s"NewLimitOrder(${o.shortDesc}) failed", t)
         throw new RuntimeException()
     }
   }

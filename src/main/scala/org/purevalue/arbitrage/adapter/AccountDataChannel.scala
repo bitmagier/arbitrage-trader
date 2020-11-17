@@ -9,6 +9,7 @@ import org.purevalue.arbitrage.{Main, UserRootGuardian}
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.{ExecutionContext, Future}
+import scala.util.{Failure, Success}
 
 
 object AccountDataChannel {
@@ -29,14 +30,18 @@ abstract class AccountDataChannel(context: ActorContext[AccountDataChannel.Comma
   def cancelOrder(ref: OrderRef): Future[Exchange.CancelOrderResult]
 
   def handleCancelOrder(c: CancelOrder): Unit = {
-    cancelOrder(c.ref).foreach { result =>
-      c.replyTo match {
-        case Some(replyTo) => replyTo ! result
-        case None if result.success => log.info(s"order successfully cancelled ${c.ref}")
-        case None => log.info(s"order cancel failed: " +
-          (if (result.orderUnknown) "(order unknown) " else "") + result.text.getOrElse("")
-        )
-      }
+    cancelOrder(c.ref).onComplete {
+      case Success(result) =>
+        c.replyTo match {
+          case Some(replyTo) => replyTo ! result
+          case None if result.success => log.info(s"order successfully cancelled ${c.ref}")
+          case None => log.info(s"order cancel failed: " +
+            (if (result.orderUnknown) "(order unknown) " else "") + result.text.getOrElse("")
+          )
+        }
+      case Failure(e) =>
+        log.error("cancelOrder failed", e)
+        throw new RuntimeException()
     }
   }
 }

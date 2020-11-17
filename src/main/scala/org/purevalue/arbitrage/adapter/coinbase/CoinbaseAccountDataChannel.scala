@@ -28,6 +28,7 @@ import spray.json.{DefaultJsonProtocol, JsObject, JsonParser, RootJsonFormat, en
 
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, Future, Promise}
+import scala.util.{Failure, Success}
 
 
 private[coinbase] case class SubscribeRequestWithAuthJson(`type`: String = "subscribe",
@@ -424,10 +425,14 @@ private[coinbase] class CoinbaseAccountDataChannel(context: ActorContext[Account
       }
     }
 
-    for {
+    (for {
       serverTime <- queryServerTime()
       newOrderAck <- newLimitOrder(o, serverTime)
-    } yield newOrderAck
+    } yield newOrderAck) recover {
+      case e:Throwable =>
+        log.error("query serverTime/newLimitOrder failed", e)
+        throw e;
+    }
   }
 
   def cancelOrder(ref: OrderRef): Future[CancelOrderResult] = {
@@ -477,8 +482,10 @@ private[coinbase] class CoinbaseAccountDataChannel(context: ActorContext[Account
     (for {
       serverTime <- queryServerTime()
       accounts <- queryAccounts(serverTime)
-    } yield accounts)
-      .foreach(exchange ! _)
+    } yield accounts) onComplete {
+      case Success(accounts) => exchange ! accounts
+      case Failure(e) => log.error(s"query serverTime/accounts failed", e)
+    }
   }
 
   def init(): Unit = {

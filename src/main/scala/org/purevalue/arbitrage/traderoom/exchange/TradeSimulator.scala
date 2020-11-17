@@ -12,9 +12,11 @@ import org.purevalue.arbitrage.traderoom.TradeRoom.OrderRef
 import org.purevalue.arbitrage.traderoom.exchange.Exchange.{CancelOrderResult, GetTickerSnapshot}
 import org.purevalue.arbitrage.traderoom.{LocalCryptoValue, Order, OrderRequest, OrderStatus, OrderType, OrderUpdate, TradePair}
 import org.purevalue.arbitrage.{ExchangeConfig, GlobalConfig}
+import org.slf4j.LoggerFactory
 
 import scala.collection.concurrent.TrieMap
 import scala.concurrent.Future
+import scala.util.{Failure, Success}
 
 object TradeSimulator {
   def apply(globalConfig: GlobalConfig,
@@ -28,6 +30,8 @@ class TradeSimulator(context: ActorContext[AccountDataChannel.Command],
                      exchangeConfig: ExchangeConfig,
                      exchange: ActorRef[Exchange.Message])
   extends AccountDataChannel(context) {
+
+  private val log = LoggerFactory.getLogger(getClass)
 
   import AccountDataChannel._
 
@@ -106,8 +110,9 @@ class TradeSimulator(context: ActorContext[AccountDataChannel.Command],
 
     case AccountDataChannel.NewLimitOrder(orderRequest, replyTo) =>
       implicit val timeout: Timeout = globalConfig.internalCommunicationTimeout
-      exchange.ask(ref => GetTickerSnapshot(ref)).foreach { s =>
-        replyTo ! newLimitOrder(orderRequest, s.ticker)
+      exchange.ask(ref => GetTickerSnapshot(ref)).onComplete {
+        case Success(s) => replyTo ! newLimitOrder(orderRequest, s.ticker)
+        case Failure(e) => log.error("GetTickerSnapshot failed", e)
       }
       Behaviors.same
   }
