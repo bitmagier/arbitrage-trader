@@ -64,7 +64,7 @@ object ExchangeConfig {
       secretsConfig(c.getConfig("secrets")),
       if (c.hasPath("ref-code")) Some(c.getString("ref-code")) else None,
       c.getInt("asset-source-weight"),
-      c.getDuration("trade-pair-init-timeout"),
+      c.getDuration("trade-pairs-init-timeout"),
       c.getDouble("trade-pairs-init-min-portion")
     )
   }
