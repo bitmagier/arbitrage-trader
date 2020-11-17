@@ -37,12 +37,15 @@ private[binance] case class AccountStreamSubscribeRequestJson(method: String = "
 private[binance] trait IncomingBinanceAccountJson
 
 private[binance] case class BalanceJson(asset: String, free: String, locked: String) {
+  private val log = LoggerFactory.getLogger(getClass)
+
   def toBalance: Option[Balance] = {
     if (free.toDouble == 0.0 && locked.toDouble == 0.0)
       None
-    else if (!Asset.isKnown(asset))
-      throw new Exception(s"We need to ignore a filled balance here, because it's asset is unknown: $this")
-    else
+    else if (!Asset.isKnown(asset)) {
+      log.warn(s"We need to ignore a filled balance here, because it's asset is unknown: $this")
+      None
+    } else
       Some(Balance(
         Asset(asset),
         free.toDouble,
