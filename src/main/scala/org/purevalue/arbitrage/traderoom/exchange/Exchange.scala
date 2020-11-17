@@ -14,7 +14,8 @@ import org.purevalue.arbitrage.traderoom.TradeRoomInitCoordinator.StreamingStart
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityBalancer.WorkingContext
 import org.purevalue.arbitrage.traderoom.exchange.LiquidityManager.{LiquidityLockClearance, LiquidityLockRequest}
 import org.purevalue.arbitrage.traderoom.{Asset, CryptoValue, ExchangeInitStuff, Order, OrderRequest, OrderUpdate, TradePair, TradeRoom, TradeRoomInitCoordinator, TradeSide, exchange}
-import org.purevalue.arbitrage.util.{Emoji, InitSequence, InitStep, StaleDataException, WaitingFor}
+import org.purevalue.arbitrage.util.Util.formatDecimal
+import org.purevalue.arbitrage.util.{Emoji, InitSequence, InitStep, InitializationException, StaleDataException, WaitingFor}
 import org.purevalue.arbitrage.{Config, ExchangeConfig, Main, UserRootGuardian}
 import org.slf4j.LoggerFactory
 
@@ -154,43 +155,60 @@ class Exchange(context: ActorContext[Exchange.Message],
   var lastPublicDataInitLogged: Instant = Instant.now
 
   /**
-   * Wait a maximum time for init of at least 90% of all data pairs
+   * Waits 60s (config value) for init of at least 90% (config value) of all data pairs.
    * Remaining pairs, that have not been initialized in this time are taken out of "usableTradePairs"
    */
-  def onPublicDataUpdated(): Unit = {
+  def publicDataChannelInitializedCheck(): Unit = {
     if (!publicDataChannelInitialized.isArrived) {
       var waitingList: ListBuffer[String] = ListBuffer()
+
       if (!tickerCompletelyInitialized) {
         tickerCompletelyInitialized = usableTradePairs.subsetOf(publicData.ticker.keySet)
         waitingList += s"tickers: ${usableTradePairs -- publicData.ticker.keySet}"
       }
+
       if (exchangeConfig.deliversOrderBook && !orderBookCompletelyInitialized) {
         orderBookCompletelyInitialized = usableTradePairs.subsetOf(publicData.orderBook.keySet)
         waitingList += s"order books: ${usableTradePairs -- publicData.orderBook.keySet}"
       }
+
       if (exchangeConfig.deliversStats24h && !stats24hCompletelyInitialized) {
         stats24hCompletelyInitialized = usableTradePairs.subsetOf(publicData.stats24h.keySet)
         waitingList += s"stats24: ${usableTradePairs -- publicData.stats24h.keySet}"
       }
+
       if (tickerCompletelyInitialized &&
         (!exchangeConfig.deliversOrderBook || orderBookCompletelyInitialized) &&
         (!exchangeConfig.deliversStats24h || stats24hCompletelyInitialized)) {
         publicDataChannelInitialized.arrived()
-      } else {
+      }
+      else {
         if (Instant.now.isAfter(lastPublicDataInitLogged.plusSeconds(5))) {
           log.info(s"""[$exchangeName] still waiting for ${waitingList.mkString(",")}""")
           lastPublicDataInitLogged = Instant.now
         }
-        if (Instant.now.isAfter(exchangeStarted.plus(exchangeConfig.tradePairInitTimeout))) {
+
+        if (Instant.now.isAfter(exchangeStarted.plus(exchangeConfig.tradePairsInitTimeout))) {
           var pairsToRemove: Set[TradePair] = usableTradePairs -- publicData.ticker.keySet
           if (exchangeConfig.deliversOrderBook) pairsToRemove ++= (usableTradePairs -- publicData.orderBook.keySet)
           if (exchangeConfig.deliversStats24h) pairsToRemove ++= (usableTradePairs -- publicData.stats24h.keySet)
-          log.warn(s"[$exchangeName] removing pairs from usable trade pairs due to init timeout: $pairsToRemove")
-          usableTradePairs --= pairsToRemove
-          publicDataChannelInitialized.arrived()
+
+          val tradePairsInitPortion = (usableTradePairs.size - pairsToRemove.size) / usableTradePairs.size
+          if (tradePairsInitPortion < exchangeConfig.tradePairsInitMinPortion) {
+            throw new InitializationException(s"Only ${formatDecimal(tradePairsInitPortion*100.0, 0, 0)}% " +
+              s"of all usable trade pairs were initialized in ${exchangeConfig.tradePairsInitTimeout.toSeconds}s. This is insufficient!")
+          } else {
+            log.warn(s"[$exchangeName] removing pairs from usable trade pairs due to init timeout: $pairsToRemove")
+            usableTradePairs --= pairsToRemove
+            publicDataChannelInitialized.arrived()
+          }
         }
       }
     }
+  }
+
+  def onPublicDataUpdated(): Unit = {
+    publicDataChannelInitializedCheck()
   }
 
   def checkIfBalanceIsSufficientForTrading(): Unit = {

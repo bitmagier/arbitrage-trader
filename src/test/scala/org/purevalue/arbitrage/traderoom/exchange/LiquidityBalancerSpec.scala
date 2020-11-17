@@ -33,7 +33,9 @@ class LiquidityBalancerSpec extends AnyWordSpecLike
   val Cfg: Config = org.purevalue.arbitrage.Config(
     GlobalConfig(1.second, 1.second, 1.second),
     TradeRoomConfig(tradeSimulation = true, ExchangeName, null, null, 50.0, null, null, null, List(ExchangeName)),
-    Map(ExchangeName -> ExchangeConfig(ExchangeName, deliversOrderBook = true, deliversStats24h = false, List(USDT, BTC, ETH), Set(), USDT, 0.0, Set(), tickerIsRealtime = true, null, None, 1, Duration.ZERO)),
+    Map(ExchangeName -> ExchangeConfig(ExchangeName, deliversOrderBook = true, deliversStats24h = false, List(USDT, BTC, ETH), Set(), USDT,
+      0.0, Set(), tickerIsRealtime = true, null, None, 1, Duration.ZERO, 1.0)),
+
     LiquidityManagerConfig(null, null, 0.0002, 55.0, 1.0, 0.0001, TxGranularityUSD))
 
   private val BitcoinPriceUSD = 10200.24

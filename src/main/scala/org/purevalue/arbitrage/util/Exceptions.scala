@@ -5,3 +5,4 @@ final class BadCalculationError(message: String) extends RuntimeException(messag
 final class IncomingDataError(message: String) extends RuntimeException(message)
 final class ConnectionClosedException(message: String) extends RuntimeException(message)
 final class StaleDataException(message: String) extends RuntimeException(message)
+final class InitializationException(message: String) extends RuntimeException(message)

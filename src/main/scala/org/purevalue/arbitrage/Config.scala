@@ -26,7 +26,9 @@ case class ExchangeConfig(name: String,
                           secrets: SecretsConfig,
                           refCode: Option[String],
                           assetSourceWeight: Int,
-                          tradePairInitTimeout: Duration) {
+                          tradePairsInitTimeout: Duration,
+                          tradePairsInitMinPortion: Double // // portion of all (usable) trade pairs, which must be initialized before the timeout, otherwise we get a failure
+                         ) {
   def primaryReserveAsset: Asset = reserveAssets.head
 }
 
@@ -62,7 +64,8 @@ object ExchangeConfig {
       secretsConfig(c.getConfig("secrets")),
       if (c.hasPath("ref-code")) Some(c.getString("ref-code")) else None,
       c.getInt("asset-source-weight"),
-      c.getDuration("trade-pair-init-timeout")
+      c.getDuration("trade-pair-init-timeout"),
+      c.getDouble("trade-pairs-init-min-portion")
     )
   }
 
