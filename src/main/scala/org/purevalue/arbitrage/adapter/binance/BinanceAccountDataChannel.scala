@@ -325,6 +325,10 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
 
   private val log = LoggerFactory.getLogger(getClass)
 
+  // outboundAccountPosition is sent any time an account balance has changed and contains the assets
+  // that were possibly changed by the event that generated the balance change
+  val OutboundAccountPositionStreamName = "outboundAccountPosition"
+  val IdOutboundAccountPositionStream: Int = 1
   // Balance Update occurs during the following:
   // - Deposits or withdrawals from the account
   // - Transfer of funds between accounts (e.g. Spot to Margin)
@@ -334,7 +338,8 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
   val OrderExecutionReportStreamName = "executionReport"
   val IdOrderExecutionResportStream: Int = 3
 
-  var outstandingStreamSubscribeResponses: Set[Int] = Set(IdBalanceUpdateStream, IdOrderExecutionResportStream)
+  @volatile var outstandingStreamSubscribeResponses: Set[Int] =
+    Set(IdOutboundAccountPositionStream, IdBalanceUpdateStream, IdOrderExecutionResportStream)
 
   @volatile var listenKey: String = _
 
@@ -344,7 +349,6 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
   lazy val WebSocketEndpoint: Uri = Uri(s"wss://stream.binance.com:9443/ws/$listenKey")
   var ws: (Future[WebSocketUpgradeResponse], Promise[Option[Message]]) = _
   var connected: Future[Done.type] = _
-
 
   import BinanceAccountDataJsonProtocoll._
 
@@ -365,12 +369,11 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
     if (log.isTraceEnabled) log.trace(s"received $j")
 
     val channelId = j.fields("id").convertTo[Int]
-    val initialized: Boolean = synchronized {
+    synchronized {
       outstandingStreamSubscribeResponses = outstandingStreamSubscribeResponses - channelId
-      outstandingStreamSubscribeResponses.isEmpty
     }
 
-    if (initialized) {
+    if (outstandingStreamSubscribeResponses.isEmpty) {
       log.debug("all streams running")
       context.self ! OnStreamsRunning()
     }
@@ -388,6 +391,9 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
               Nil
             case j: JsObject if j.fields.contains("e") =>
               j.fields("e").convertTo[String] match {
+                case OutboundAccountPositionStreamName =>
+                  if (log.isTraceEnabled) log.trace(s"received $j")
+                  List(j.convertTo[OutboundAccountPositionJson])
                 case BalanceUpdateStreamName =>
                   if (log.isTraceEnabled) log.trace(s"received $j")
                   List(j.convertTo[BalanceUpdateJson])
@@ -572,6 +578,7 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
   }
 
   val SubscribeMessages: List[AccountStreamSubscribeRequestJson] = List(
+    AccountStreamSubscribeRequestJson(params = Seq(OutboundAccountPositionStreamName), id = IdOutboundAccountPositionStream),
     AccountStreamSubscribeRequestJson(params = Seq(BalanceUpdateStreamName), id = IdBalanceUpdateStream),
     AccountStreamSubscribeRequestJson(params = Seq(OrderExecutionReportStreamName), id = IdOrderExecutionResportStream)
   )

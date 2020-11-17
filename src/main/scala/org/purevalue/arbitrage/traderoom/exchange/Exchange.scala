@@ -199,7 +199,7 @@ class Exchange(context: ActorContext[Exchange.Message],
             throw new InitializationException(s"Only ${formatDecimal(tradePairsInitPortion * 100.0, 0, 0)}% " +
               s"of all usable trade pairs were initialized in ${exchangeConfig.tradePairsInitTimeout.toSeconds}s. This is insufficient!")
           } else {
-            log.warn(s"[$exchangeName] removing pairs from usable trade pairs due to init timeout: $pairsToRemove")
+            log.warn(s"[$exchangeName] removing pairs from usable trade pairs due to limited init time: $pairsToRemove")
             usableTradePairs --= pairsToRemove
             publicDataChannelInitialized.arrived()
           }
