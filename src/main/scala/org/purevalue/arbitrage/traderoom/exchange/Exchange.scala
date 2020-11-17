@@ -174,12 +174,13 @@ class Exchange(context: ActorContext[Exchange.Message],
 
       if (exchangeConfig.deliversStats24h && !stats24hCompletelyInitialized) {
         stats24hCompletelyInitialized = usableTradePairs.subsetOf(publicData.stats24h.keySet)
-        waitingList += s"stats24: ${usableTradePairs -- publicData.stats24h.keySet}"
+        waitingList += s"24h stats: ${usableTradePairs -- publicData.stats24h.keySet}"
       }
 
       if (tickerCompletelyInitialized &&
         (!exchangeConfig.deliversOrderBook || orderBookCompletelyInitialized) &&
         (!exchangeConfig.deliversStats24h || stats24hCompletelyInitialized)) {
+        log.info(s"[$exchangeName] public data channel initialized")
         publicDataChannelInitialized.arrived()
       }
       else {
