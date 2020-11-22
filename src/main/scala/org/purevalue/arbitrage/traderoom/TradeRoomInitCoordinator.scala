@@ -39,7 +39,6 @@ class TradeRoomInitCoordinator(context: ActorContext[TradeRoomInitCoordinator.Re
 
   // @formatter:off
   var allTradePairs:      Map[String, Set[TradePair]] = Map()
-  var usableTradePairs:   Map[String, Set[TradePair]] = Map()
   var exchanges:          Map[String, ActorRef[Exchange.Message]] = Map()
   // @formatter:on
 
@@ -66,7 +65,7 @@ class TradeRoomInitCoordinator(context: ActorContext[TradeRoomInitCoordinator.Re
   // - [2] that are available on at least two exchanges
   // - [3] plus trade pairs, where one side is a part of [2] and the other side is a local reserve asset
   // - [4] plus all crypto-coin to USD equivalent coin pairs (for liquidity calculations & conversions)
-  def determineUsableTradepairs(): Unit = {
+  def determineUsableTradepairs(): Map[String, Set[TradePair]] = {
     val allGlobalTradePairs = allTradePairs.values.flatten.toSet
     val globalArbitragePairs = allGlobalTradePairs
       .filterNot(e => e.involvedAssets.exists(_.isFiat))
@@ -83,7 +82,7 @@ class TradeRoomInitCoordinator(context: ActorContext[TradeRoomInitCoordinator.Re
       !pair.baseAsset.isFiat && pair.quoteAsset == config.exchanges(exchange).usdEquivalentCoin
     }
 
-    usableTradePairs = allTradePairs
+    val usableTradePairs = allTradePairs
       .map(e => e._1 ->
         e._2.filter(x =>
           globalArbitragePairs.contains(x)
@@ -94,6 +93,8 @@ class TradeRoomInitCoordinator(context: ActorContext[TradeRoomInitCoordinator.Re
     for (exchange <- exchanges.keySet) {
       log.info(s"[$exchange] unusable trade pairs: ${(allTradePairs(exchange) -- usableTradePairs(exchange)).toSeq.sortBy(_.toString)}")
     }
+
+    usableTradePairs
   }
 
 
@@ -111,7 +112,7 @@ class TradeRoomInitCoordinator(context: ActorContext[TradeRoomInitCoordinator.Re
 
   def initialized(): Behavior[Reply] = {
     log.debug("TradeRoom initialized")
-    val tradeRoom = context.spawn(TradeRoom(config, exchanges, usableTradePairs), "TradeRoom")
+    val tradeRoom = context.spawn(TradeRoom(config, exchanges), "TradeRoom")
     parent ! UserRootGuardian.TradeRoomInitialized(tradeRoom)
     context.watch(tradeRoom)
     Behaviors.empty
@@ -127,7 +128,7 @@ class TradeRoomInitCoordinator(context: ActorContext[TradeRoomInitCoordinator.Re
     initialized()
   }
 
-  def pushUsableTradePairs(): Behavior[Reply] = {
+  def pushUsableTradePairs(usableTradePairs: Map[String, Set[TradePair]]): Behavior[Reply] = {
     implicit val timeout: Timeout = config.global.internalCommunicationTimeoutDuringInit
     exchanges.foreach {
       case (exchange, actor) => actor.ask(ref => SetUsableTradePairs(usableTradePairs(exchange), ref))
@@ -151,8 +152,10 @@ class TradeRoomInitCoordinator(context: ActorContext[TradeRoomInitCoordinator.Re
           Behaviors.same
         } else {
           log.info("trade pairs received")
-          determineUsableTradepairs()
-          pushUsableTradePairs()
+
+          pushUsableTradePairs(
+            determineUsableTradepairs()
+          )
         }
     }
   }

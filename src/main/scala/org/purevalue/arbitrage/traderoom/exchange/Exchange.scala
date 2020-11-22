@@ -603,6 +603,7 @@ class Exchange(context: ActorContext[Exchange.Message],
   def exchangeDataSnapshot: TradeRoom.FullDataSnapshot =
     TradeRoom.FullDataSnapshot(
       exchangeName,
+      usableTradePairs,
       publicData.ticker,
       publicData.orderBook,
       publicData.stats24h,

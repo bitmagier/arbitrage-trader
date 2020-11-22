@@ -41,11 +41,10 @@ case class TradeContext(tradePairs: Map[String, Set[TradePair]],
 
 object TradeRoom {
   def apply(config: Config,
-            exchanges: Map[String, ActorRef[Exchange.Message]],
-            usableTradePairs: Map[String, Set[TradePair]]):
+            exchanges: Map[String, ActorRef[Exchange.Message]]):
   Behavior[Message] = {
     Behaviors.withTimers(timers =>
-      Behaviors.setup(context => new TradeRoom(context, timers, config, exchanges, usableTradePairs)))
+      Behaviors.setup(context => new TradeRoom(context, timers, config, exchanges)))
   }
 
   sealed trait Message
@@ -71,6 +70,7 @@ object TradeRoom {
                                        bill: OrderBill)
 
   case class FullDataSnapshot(exchange: String,
+                              usableTradePairs: Set[TradePair],
                               ticker: Map[TradePair, Ticker],
                               orderBook: Map[TradePair, OrderBook],
                               stats24h: Map[TradePair, Stats24h],
@@ -98,8 +98,7 @@ object TradeRoom {
 class TradeRoom(context: ActorContext[TradeRoom.Message],
                 timers: TimerScheduler[TradeRoom.Message],
                 config: Config,
-                exchanges: Map[String, ActorRef[Exchange.Message]],
-                usableTradePairs: Map[String, Set[TradePair]])
+                exchanges: Map[String, ActorRef[Exchange.Message]])
   extends AbstractBehavior[TradeRoom.Message](context) {
 
   private val log = LoggerFactory.getLogger(getClass)
@@ -127,19 +126,17 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
   @volatile private var finishedOrderBundles: List[FinishedOrderBundle] = List()
   private val finishedLiquidityTxs: collection.concurrent.Map[OrderRef, FinishedLiquidityTx] = TrieMap()
 
-  private var shutdownInitiated: Boolean = false
-
-
   def collectTradeContext(): Future[TradeContext] = {
     implicit val timeout: Timeout = config.global.internalCommunicationTimeout
     implicit val system: ActorSystem[UserRootGuardian.Reply] = Main.actorSystem
+
     val publicData: Iterable[Future[FullDataSnapshot]] = {
       exchanges.values.map(_.ask(ref => GetFullDataSnapshot(ref)))
     }
 
     Future.sequence(publicData).map(d =>
       TradeContext(
-        usableTradePairs,
+        d.map(e => e.exchange -> e.usableTradePairs).toMap,
         d.map(e => e.exchange -> e.ticker).toMap,
         d.map(e => e.exchange -> e.orderBook).toMap,
         d.map(e => e.exchange -> e.stats24h).toMap,
@@ -197,7 +194,6 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
   }
 
   def tryToPlaceLiquidityTransformationOrder(request: OrderRequest): Future[Option[OrderRef]] = {
-    if (shutdownInitiated) return Future.successful(None)
     if (doNotTouchAssets(request.exchange).intersect(request.pair.involvedAssets).nonEmpty) return Future.failed(new IllegalArgumentException)
 
     // this should not occur - but here is a last guard
@@ -248,8 +244,6 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
   }
 
   def tryToPlaceOrderBundle(bundle: OrderRequestBundle): Unit = {
-    if (shutdownInitiated) return
-
     if (bundle.orderRequests.exists(e =>
       doNotTouchAssets(e.exchange).intersect(e.pair.involvedAssets).nonEmpty)) {
       log.warn(s"ignoring $bundle containing a DO-NOT-TOUCH asset")
@@ -284,7 +278,6 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
   // TODO probably we will need a merged reference-ticker which comes from binance + assets from other exchanges, which binance does not have
 
   def logStats(): Unit = {
-    if (shutdownInitiated) return
     val now = Instant.now
 
     def logWalletOverview(wallets: Map[String, Wallet], tickers: Map[String, Map[TradePair, Ticker]]): Unit = {
