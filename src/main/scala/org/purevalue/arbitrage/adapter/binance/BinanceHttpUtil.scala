@@ -1,18 +1,17 @@
 package org.purevalue.arbitrage.adapter.binance
 
-import java.time.Instant
-
 import akka.actor.typed.ActorSystem
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model._
 import akka.http.scaladsl.model.headers.RawHeader
 import akka.stream.Materializer
-import org.purevalue.arbitrage.util.HttpUtil.hmacSha256Signature
+import org.purevalue.arbitrage.util.CryptoUtil.hmacSha256Signature
 import org.purevalue.arbitrage.util.Util.convertBytesToLowerCaseHex
 import org.purevalue.arbitrage.{GlobalConfig, Main, SecretsConfig}
 import org.slf4j.LoggerFactory
 import spray.json.{JsValue, JsonParser, JsonReader}
 
+import java.time.Instant
 import scala.concurrent.{ExecutionContext, Future}
 
 private[binance] object BinanceHttpUtil {

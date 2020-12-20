@@ -1,8 +1,5 @@
 package org.purevalue.arbitrage.adapter.binance
 
-import java.time.Instant
-import java.util.UUID
-
 import akka.Done
 import akka.actor.typed.scaladsl.AskPattern.{Askable, schedulerFromActorSystem}
 import akka.actor.typed.scaladsl.{ActorContext, Behaviors, TimerScheduler}
@@ -26,6 +23,8 @@ import org.purevalue.arbitrage.util.{BadCalculationError, ConnectionClosedExcept
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
+import java.time.Instant
+import java.util.UUID
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, Future, Promise}
 import scala.util.{Failure, Success}
@@ -630,7 +629,7 @@ private[binance] class BinanceAccountDataChannel(context: ActorContext[AccountDa
   }
 
   def init(): Unit = {
-    log.info("initializing binance account data channel")
+    log.info("initializing Binance account data channel")
     try {
       createListenKey()
       pullBinanceTradePairs()

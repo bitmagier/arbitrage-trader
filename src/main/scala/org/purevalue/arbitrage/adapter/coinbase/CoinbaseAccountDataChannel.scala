@@ -1,8 +1,5 @@
 package org.purevalue.arbitrage.adapter.coinbase
 
-import java.time.Instant
-import java.util.UUID
-
 import akka.Done
 import akka.actor.typed.scaladsl.AskPattern.{Askable, schedulerFromActorSystem}
 import akka.actor.typed.scaladsl.{ActorContext, Behaviors, TimerScheduler}
@@ -26,6 +23,8 @@ import org.purevalue.arbitrage.{Config, ExchangeConfig}
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsonParser, RootJsonFormat, enrichAny}
 
+import java.time.Instant
+import java.util.UUID
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, Future, Promise}
 import scala.util.{Failure, Success}
@@ -498,7 +497,7 @@ private[coinbase] class CoinbaseAccountDataChannel(context: ActorContext[Account
   }
 
   def init(): Unit = {
-    log.info("initializing coinbase account data channel")
+    log.info("initializing Coinbase account data channel")
     try {
       pullCoinbaseTradePairs()
       connect()

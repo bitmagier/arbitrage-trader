@@ -2,5 +2,6 @@
 /target
 *.iml
 /project
+/.bsp
 sampledata
 /src/main/resources/custom.conf

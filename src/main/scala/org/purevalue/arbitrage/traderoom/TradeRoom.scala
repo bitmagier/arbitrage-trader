@@ -1,10 +1,5 @@
 package org.purevalue.arbitrage.traderoom
 
-import java.time.temporal.ChronoUnit
-import java.time.{Duration, Instant}
-import java.util.UUID
-import java.util.concurrent.TimeUnit
-
 import akka.actor.typed.scaladsl.AskPattern.{Askable, schedulerFromActorSystem}
 import akka.actor.typed.scaladsl.{AbstractBehavior, ActorContext, Behaviors, TimerScheduler}
 import akka.actor.typed.{ActorRef, ActorSystem, Behavior, PostStop, Signal}
@@ -20,6 +15,10 @@ import org.purevalue.arbitrage.util.Emoji
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.slf4j.LoggerFactory
 
+import java.time.temporal.ChronoUnit
+import java.time.{Duration, Instant}
+import java.util.UUID
+import java.util.concurrent.TimeUnit
 import scala.collection.concurrent.TrieMap
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.concurrent.{ExecutionContextExecutor, Future}
@@ -162,7 +161,7 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
       coins
         .groupBy(_.exchange)
         .map { x =>
-          exchanges(x._1).ask(ref =>
+          exchanges(x._1).ask((ref: ActorRef[Option[LiquidityLock]]) =>
             LiquidityLockRequest(
               UUID.randomUUID(),
               Instant.now(),
@@ -189,7 +188,8 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
   def placeOrders(orderRequests: Seq[OrderRequest]): Future[Seq[OrderRef]] = {
     implicit val timeout: Timeout = config.global.httpTimeout.mul(2) // covers parallel order request + possible order cancel operations
 
-    context.spawn(OrderSetPlacer(config.global, exchanges), s"OrderSetPlacer-${UUID.randomUUID()}").ask(ref => NewOrderSet(orderRequests, ref))
+    context.spawn(OrderSetPlacer(config.global, exchanges), s"OrderSetPlacer-${UUID.randomUUID()}")
+      .ask((ref: ActorRef[Seq[NewOrderAck]]) => NewOrderSet(orderRequests, ref))
       .map(_.map(_.toOrderRef))
   }
 
@@ -204,7 +204,7 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
 
     implicit val timeout: Timeout = config.global.httpTimeout.plus(config.global.internalCommunicationTimeout.duration)
     val tradePattern = s"${request.exchange}-liquidityTx"
-    exchanges(request.exchange).ask(ref =>
+    exchanges(request.exchange).ask((ref: ActorRef[Option[LiquidityLock]]) =>
       LiquidityManager.LiquidityLockRequest(
         UUID.randomUUID(),
         Instant.now,
@@ -217,7 +217,9 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
         ref
       )).flatMap {
       case Some(lock) =>
-        exchanges(request.exchange).ask(ref => NewLimitOrder(request, ref)).map { newOrderAck =>
+        exchanges(request.exchange)
+          .ask((ref: ActorRef[NewOrderAck]) => NewLimitOrder(request, ref))
+          .map { newOrderAck =>
           val ref: OrderRef = newOrderAck.toOrderRef
           activeLiquidityTx.update(ref, LiquidityTx(request, ref, lock, Instant.now))
           log.debug(s"successfully placed liquidity tx order $newOrderAck")
@@ -600,16 +602,6 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
     }
   }
 
-
-  def onCancelOrderResult(c: CancelOrderResult): Unit = {
-    if (c.success) {
-      log.info(s"Cancel order succeeded: $c")
-    } else {
-      log.error(s"Cancel order failed: $c")
-      // TODO error handling for failed cancels
-    }
-  }
-
   def pullReferenceTicker: Future[TickerSnapshot] = {
     implicit val timeout: Timeout = config.global.internalCommunicationTimeout
     exchanges(config.tradeRoom.referenceTickerExchange)
@@ -638,7 +630,6 @@ class TradeRoom(context: ActorContext[TradeRoom.Message],
       case PlaceLiquidityTransformationOrder(orderRequest, replyTo) => tryToPlaceLiquidityTransformationOrder(orderRequest).foreach(r => replyTo ! r)
 
       case t: OrderUpdateTrigger                                    => onOrderUpdate(t)
-      case c: CancelOrderResult                                     => onCancelOrderResult(c)
 
       case GetReferenceTicker(replyTo)                              => pullReferenceTicker.foreach(replyTo ! _)
       case GetFinishedLiquidityTxs(replyTo)                         => replyTo ! finishedLiquidityTxs.keySet.toSet

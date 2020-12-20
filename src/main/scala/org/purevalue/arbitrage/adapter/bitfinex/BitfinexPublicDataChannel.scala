@@ -1,7 +1,5 @@
 package org.purevalue.arbitrage.adapter.bitfinex
 
-import java.time.Instant
-
 import akka.Done
 import akka.actor.typed.scaladsl.AskPattern.{Askable, schedulerFromActorSystem}
 import akka.actor.typed.scaladsl.{ActorContext, Behaviors, TimerScheduler}
@@ -22,8 +20,8 @@ import org.purevalue.arbitrage.util.Emoji
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsObject, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
+import java.time.Instant
 import scala.collection.concurrent.TrieMap
-import scala.collection.{Seq, Set}
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, Future, Promise}
 

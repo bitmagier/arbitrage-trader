@@ -1,7 +1,5 @@
 package org.purevalue.arbitrage.adapter.bitfinex
 
-import java.time.Instant
-
 import akka.Done
 import akka.actor.typed.scaladsl.AskPattern.{Askable, schedulerFromActorSystem}
 import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
@@ -20,13 +18,13 @@ import org.purevalue.arbitrage.traderoom.TradeRoom.OrderRef
 import org.purevalue.arbitrage.traderoom._
 import org.purevalue.arbitrage.traderoom.exchange.Exchange._
 import org.purevalue.arbitrage.traderoom.exchange.{Balance, Exchange, ExchangeAccountStreamData, WalletAssetUpdate}
-import org.purevalue.arbitrage.util.HttpUtil.hmacSha384Signature
+import org.purevalue.arbitrage.util.CryptoUtil.hmacSha384Signature
 import org.purevalue.arbitrage.util.Util.{convertBytesToLowerCaseHex, formatDecimal}
 import org.purevalue.arbitrage.util.WrongAssumption
 import org.slf4j.LoggerFactory
 import spray.json.{DefaultJsonProtocol, JsNumber, JsObject, JsString, JsValue, JsonParser, RootJsonFormat, enrichAny}
 
-import scala.collection.Seq
+import java.time.Instant
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, Future, Promise}
 
@@ -577,7 +575,7 @@ private[bitfinex] class BitfinexAccountDataChannel(context: ActorContext[Account
   }
 
   def init(): Unit = {
-    log.info("init bitfinex account data channel")
+    log.info("initializing Bitfinex account data channel")
     try {
       pullBitfinexTradePairs()
       pullBitfinexAssets()

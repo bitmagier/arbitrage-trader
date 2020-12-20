@@ -1,7 +1,5 @@
 package org.purevalue.arbitrage.trader
 
-import java.time.{Duration, Instant}
-
 import akka.actor.typed.Behavior
 import akka.actor.typed.scaladsl.{AbstractBehavior, ActorContext, Behaviors, TimerScheduler}
 import org.purevalue.arbitrage.ExchangeConfig
@@ -10,6 +8,7 @@ import org.purevalue.arbitrage.traderoom.{CryptoValue, TradeContext, TradePair}
 import org.purevalue.arbitrage.util.Util.formatDecimal
 import org.slf4j.LoggerFactory
 
+import java.time.{Duration, Instant}
 import scala.concurrent.duration.DurationInt
 
 object TemporaryLowDetector {
@@ -95,6 +94,7 @@ class TemporaryLowDetector(context: ActorContext[TemporaryLowDetector.Command],
         tc.stats24h(exchange)(pair).volumeBaseAsset
       ).convertTo(exchangesConfig(exchange).usdEquivalentCoin, tc.tickers(exchange)).amount > 150000
     }
+
     /**
      * Tests if order book is filled enough for smooth trading.
      * Algorithm: checks order book depth between current price +3% is greater than 10.000 USD
@@ -105,10 +105,8 @@ class TemporaryLowDetector(context: ActorContext[TemporaryLowDetector.Command],
       val bidDepth: CryptoValue = book.bidDepthAround(0.03)
       val askDepth: CryptoValue = book.askDepthAround(0.03)
 
-      try {
-        bidDepth.convertTo(exchangesConfig(exchange).usdEquivalentCoin, tc.tickers(exchange)).amount >= 10000 &&
-          askDepth.convertTo(exchangesConfig(exchange).usdEquivalentCoin, tc.tickers(exchange)).amount >= 10000
-      }
+      bidDepth.convertTo(exchangesConfig(exchange).usdEquivalentCoin, tc.tickers(exchange)).amount >= 10000 &&
+        askDepth.convertTo(exchangesConfig(exchange).usdEquivalentCoin, tc.tickers(exchange)).amount >= 10000
     }
 
     def determineUsablePairs: Map[String, Set[TradePair]] = {
@@ -130,7 +128,7 @@ class TemporaryLowDetector(context: ActorContext[TemporaryLowDetector.Command],
         .map(e => (e._1, e._2.intersect(usablePairs)))
     }
 
-    def price(exchange:String, pair:TradePair): Double = {
+    def price(exchange: String, pair: TradePair): Double = {
       if (exchangesConfig(exchange).tickerIsRealtime)
         tc.tickers(exchange)(pair).priceEstimate
       else
