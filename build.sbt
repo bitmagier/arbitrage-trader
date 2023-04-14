@@ -2,7 +2,7 @@ name := "arbitrage-trader"
 
 version := "0.9.4-SNAPSHOT"
 
-scalaVersion := "2.13.4"
+scalaVersion := "2.12.17"
 
 val AkkaVersion = "2.6.+"
 val AkkaHttpVersion = "10.2.+"
